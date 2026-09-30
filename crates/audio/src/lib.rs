@@ -6,8 +6,11 @@
 compile_error!("ChannelBridge requires native 64-bit atomics (arm64 or x86_64 macOS).");
 
 pub mod clock;
+pub mod drift;
 pub mod fifo;
 pub mod frame;
+pub mod output;
+pub mod resample;
 pub mod ring;
 
 pub use frame::{FramePosition, StereoFrame};

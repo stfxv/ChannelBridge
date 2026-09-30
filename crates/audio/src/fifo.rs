@@ -69,6 +69,10 @@ impl Producer {
     }
 }
 impl Consumer {
+    pub fn capacity(&self) -> usize {
+        self.shared.frames.len()
+    }
+
     pub fn available(&self) -> usize {
         let read = self.shared.read.load(Ordering::Relaxed);
         let write = self.shared.write.load(Ordering::Acquire);
