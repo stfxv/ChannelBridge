@@ -28,6 +28,19 @@ int main(void) {
     CBBuffer cancel[]={{pos,1,1},{neg,1,1}}, mono[]={{mixed,2,1}};
     assert(cb_mix(cancel,2,mono,1,0,1,2,0,&l,&r));
     assert(mixed[0]==0 && mixed[1]==0 && l==.8f && r==.8f);
+    // Input-only preview reads all frames independently of any output buffer.
+    assert(cb_input_peaks(in,1,8,15,&l,&r));
+    assert(l==.25f && r==.5f);
+    assert(cb_input_peaks(planar,2,0,1,&l,&r));
+    assert(l==2 && r==.4f);
+    assert(cb_input_peaks(cancel,2,0,1,&l,&r));
+    assert(l==.8f && r==.8f);
+    assert(cb_input_peaks(planar,2,1,1,&l,&r));
+    assert(l==.4f && r==.4f);
+    assert(!cb_input_peaks(planar,2,2,0,&l,&r));
+    CBBuffer missing[]={{NULL,1,2}}, empty[]={{x,1,0}};
+    assert(!cb_input_peaks(missing,1,0,0,&l,&r));
+    assert(!cb_input_peaks(empty,1,0,0,&l,&r));
     // The UI polls less often than audio callbacks: keep a transient until read.
     _Atomic uint32_t meter=0;
     cb_hold_peak(&meter,.7f); cb_hold_peak(&meter,.01f); cb_hold_peak(&meter,0);

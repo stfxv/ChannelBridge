@@ -9,10 +9,10 @@
 #define MAX_BUFFERS 512
 
 typedef struct {
-    AudioDeviceID aggregate, source, sink;
+    AudioDeviceID aggregate, ioDevice, source, sink;
     AudioDeviceIOProcID proc;
     uint32_t left, right;
-    int mode, muted;
+    int mode, muted, preview;
     Float64 sourceRate;
     uint32_t inputChannels;
     _Atomic int invalidated;
@@ -117,10 +117,10 @@ static OSStatus render(AudioObjectID device, const AudioTimeStamp *now,
                        AudioBufferList *output, const AudioTimeStamp *outputTime, void *context) {
     Engine *e = context;
     // Clear every output, including unused hardware outputs, before any early exit.
-    for (UInt32 i = 0; i < output->mNumberBuffers; i++)
+    for (UInt32 i = 0; output && i < output->mNumberBuffers; i++)
         if (output->mBuffers[i].mData) memset(output->mBuffers[i].mData, 0, output->mBuffers[i].mDataByteSize);
     if (atomic_load_explicit(&e->invalidated, memory_order_relaxed)) return noErr;
-    if (!input || input->mNumberBuffers > MAX_BUFFERS || output->mNumberBuffers > MAX_BUFFERS) {
+    if (!input || input->mNumberBuffers > MAX_BUFFERS || (output && output->mNumberBuffers > MAX_BUFFERS)) {
         atomic_fetch_add_explicit(&e->faults, 1, memory_order_relaxed); return noErr;
     }
     CBBuffer in[MAX_BUFFERS], out[MAX_BUFFERS];
@@ -128,13 +128,16 @@ static OSStatus render(AudioObjectID device, const AudioTimeStamp *now,
         AudioBuffer b = input->mBuffers[i];
         in[i] = (CBBuffer){b.mData, b.mNumberChannels, b.mNumberChannels ? b.mDataByteSize / (4 * b.mNumberChannels) : 0};
     }
-    for (UInt32 i = 0; i < output->mNumberBuffers; i++) {
+    for (UInt32 i = 0; output && i < output->mNumberBuffers; i++) {
         AudioBuffer b = output->mBuffers[i];
         out[i] = (CBBuffer){b.mData, b.mNumberChannels, b.mNumberChannels ? b.mDataByteSize / (4 * b.mNumberChannels) : 0};
     }
     float l, r;
-    if (!cb_mix(in, input->mNumberBuffers, out, output->mNumberBuffers,
-                e->left, e->right, e->mode, e->muted, &l, &r))
+    int valid = e->preview
+        ? cb_input_peaks(in, input->mNumberBuffers, e->left, e->right, &l, &r)
+        : cb_mix(in, input->mNumberBuffers, out, output ? output->mNumberBuffers : 0,
+                 e->left, e->right, e->mode, e->muted, &l, &r);
+    if (!valid)
         atomic_fetch_add_explicit(&e->faults, 1, memory_order_relaxed);
     // Keep the loudest input sample until the next UI poll, including short transients.
     cb_hold_peak(&e->peakL, l);
@@ -179,7 +182,7 @@ static OSStatus watchChanges(void) {
     watches[3] = (Watch){engine.sink, address(kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)};
     watches[4] = (Watch){engine.aggregate, address(kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput)};
     watches[5] = (Watch){engine.aggregate, address(kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeOutput)};
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < (engine.preview ? 3 : 6); i++) {
         OSStatus status = AudioObjectAddPropertyListener(watches[i].object, &watches[i].property, changed, &engine);
         if (status) return status;
         engine.listenerCount++;
@@ -192,12 +195,12 @@ void cb_stop(void) {
         AudioObjectRemovePropertyListener(watches[i].object, &watches[i].property, changed, &engine);
     engine.listenerCount = 0;
     if (engine.proc) {
-        AudioDeviceStop(engine.aggregate, engine.proc);
-        AudioDeviceDestroyIOProcID(engine.aggregate, engine.proc);
+        AudioDeviceStop(engine.ioDevice, engine.proc);
+        AudioDeviceDestroyIOProcID(engine.ioDevice, engine.proc);
         engine.proc = NULL;
     }
     if (engine.aggregate) AudioHardwareDestroyAggregateDevice(engine.aggregate);
-    engine.aggregate = 0;
+    engine.aggregate = engine.ioDevice = 0;
 }
 // Aggregate channel ordering is part of our routing contract. Check the
 // published order and first stream shape before any I/O is enabled.
@@ -221,30 +224,66 @@ static BOOL orderedLayout(NSString *sourceUID) {
     }
     return YES;
 }
-// Disable the virtual device's input (avoid feedback) and every physical output.
-// We only capture hardware input and write the first, virtual, output stream.
+// Preview enables physical inputs only. Sending disables virtual input to avoid
+// feedback, enables only the virtual output, and disables physical outputs.
 static OSStatus setStreamUsage(AudioObjectPropertyScope scope) {
     AudioObjectPropertyAddress a = address(kAudioDevicePropertyStreams, scope);
     UInt32 bytes = 0;
-    OSStatus status = AudioObjectGetPropertyDataSize(engine.aggregate, &a, 0, NULL, &bytes);
-    if (status || bytes < sizeof(AudioStreamID)) return status ?: -4;
+    OSStatus status = AudioObjectGetPropertyDataSize(engine.ioDevice, &a, 0, NULL, &bytes);
+    if (status) return status;
+    if (!bytes && engine.preview && scope == kAudioObjectPropertyScopeOutput) return noErr;
+    if (bytes < sizeof(AudioStreamID)) return -4;
     UInt32 count = bytes / sizeof(AudioStreamID);
     UInt32 size = (UInt32)(offsetof(AudioHardwareIOProcStreamUsage, mStreamIsOn) + count * sizeof(UInt32));
     AudioHardwareIOProcStreamUsage *usage = calloc(1, size);
     if (!usage) return memFullErr;
     usage->mIOProc = (void *)engine.proc; usage->mNumberStreams = count;
-    for (UInt32 i = 0; i < count; i++) usage->mStreamIsOn[i] = scope == kAudioObjectPropertyScopeOutput ? i == 0 : i != 0;
+    for (UInt32 i = 0; i < count; i++) {
+        if (engine.preview) usage->mStreamIsOn[i] = scope == kAudioObjectPropertyScopeInput;
+        else usage->mStreamIsOn[i] = scope == kAudioObjectPropertyScopeOutput ? i == 0 : i != 0;
+    }
     a = address(kAudioDevicePropertyIOProcStreamUsage, scope);
-    status = AudioObjectSetPropertyData(engine.aggregate, &a, 0, NULL, size, usage);
+    status = AudioObjectSetPropertyData(engine.ioDevice, &a, 0, NULL, size, usage);
     free(usage); return status;
 }
 static char *failure(NSString *message, OSStatus status) {
     cb_stop();
     return strdup([NSString stringWithFormat:@"%@ (Core Audio: %d)", message, (int)status].UTF8String);
 }
+// Capture directly from the physical device while send is stopped. No virtual
+// device, aggregate, rate changes, or enabled physical outputs are needed.
+char *cb_preview(const char *uid, int left, int right) {
+    @autoreleasepool {
+        cb_stop();
+        NSString *sourceUID = [NSString stringWithUTF8String:uid];
+        engine.source = engine.ioDevice = deviceForUID((__bridge CFStringRef)sourceUID);
+        engine.preview = 1;
+        uint32_t count = channels(engine.source, kAudioObjectPropertyScopeInput);
+        if (!engine.source || left < 0 || (uint32_t)left >= count || right < 0 || (uint32_t)right >= count)
+            return failure(@"入力チャンネルを確認してください", -1);
+        if (!floatStreams(engine.source, kAudioObjectPropertyScopeInput))
+            return failure(@"未対応の入力形式です", -3);
+        engine.sourceRate = sampleRate(engine.source); engine.inputChannels = count;
+        engine.left = left; engine.right = right;
+        atomic_store(&engine.peakL, 0); atomic_store(&engine.peakR, 0);
+        atomic_store(&engine.callbacks, 0); atomic_store(&engine.faults, 0);
+        OSStatus status = AudioDeviceCreateIOProcID(engine.ioDevice, render, &engine, &engine.proc);
+        if (status) return failure(@"入力メーターを準備できません", status);
+        status = setStreamUsage(kAudioObjectPropertyScopeInput);
+        if (!status) status = setStreamUsage(kAudioObjectPropertyScopeOutput);
+        if (status) return failure(@"入力メーターのストリームを設定できません", status);
+        atomic_store(&engine.invalidated, 0);
+        status = watchChanges();
+        if (status) return failure(@"入力の変更監視を開始できません", status);
+        status = AudioDeviceStart(engine.ioDevice, engine.proc);
+        if (status) return failure(@"入力メーターを開始できません。マイク権限を確認してください", status);
+        return NULL;
+    }
+}
 char *cb_start(const char *uid, int left, int right, int mode, int muted) {
     @autoreleasepool {
         cb_stop();
+        engine.preview = 0;
         NSString *sourceUID = [NSString stringWithUTF8String:uid];
         AudioDeviceID source = deviceForUID((__bridge CFStringRef)sourceUID);
         AudioDeviceID sink = deviceForUID(SEND_UID);
@@ -284,6 +323,7 @@ char *cb_start(const char *uid, int left, int right, int mode, int muted) {
             !orderedLayout(sourceUID) ||
             !floatStreams(engine.aggregate, kAudioObjectPropertyScopeInput) || !floatStreams(engine.aggregate, kAudioObjectPropertyScopeOutput))
             return failure(@"未対応のオーディオ形式、またはチャンネル構成です", -3);
+        engine.ioDevice = engine.aggregate;
         engine.left = left + 2; engine.right = right + 2; engine.mode = mode; engine.muted = muted;
         atomic_store(&engine.peakL, 0); atomic_store(&engine.peakR, 0);
         atomic_store(&engine.callbacks, 0); atomic_store(&engine.faults, 0);
@@ -305,9 +345,9 @@ void cb_levels(float *left, float *right, uint64_t *callbacks, uint64_t *faults)
     *callbacks = atomic_load(&engine.callbacks); *faults = atomic_load(&engine.faults);
 }
 int cb_healthy(void) {
-    if (!engine.aggregate || atomic_load(&engine.invalidated)) return 0;
+    if (!engine.ioDevice || atomic_load(&engine.invalidated)) return 0;
     UInt32 alive = 0, size = sizeof(alive);
     if (get(engine.source, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal, &size, &alive) || !alive) return 0;
-    return sampleRate(engine.source) == engine.sourceRate && sampleRate(engine.sink) == engine.sourceRate
+    return sampleRate(engine.source) == engine.sourceRate && (engine.preview || sampleRate(engine.sink) == engine.sourceRate)
         && channels(engine.source, kAudioObjectPropertyScopeInput) == engine.inputChannels;
 }

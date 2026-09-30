@@ -12,7 +12,10 @@ import (
 type fakeAudio struct {
 	device                   native.Device
 	connected, healthy, fail bool
-	starts, stops            int
+	starts, stops, previews  int
+	driverMissing            bool
+	active                   string
+	left, right              int
 	callbacks                uint64
 	rates                    []float64
 }
@@ -23,7 +26,7 @@ func (a *fakeAudio) Devices() ([]native.Device, error) {
 	}
 	return []native.Device{a.device}, nil
 }
-func (a *fakeAudio) DriverAvailable() bool { return true }
+func (a *fakeAudio) DriverAvailable() bool { return !a.driverMissing }
 func (a *fakeAudio) Start(string, int, int, int, bool) error {
 	a.starts++
 	a.rates = append(a.rates, a.device.Rate)
@@ -31,9 +34,20 @@ func (a *fakeAudio) Start(string, int, int, int, bool) error {
 		return errors.New("device busy")
 	}
 	a.healthy = true
+	a.active = "send"
 	return nil
 }
-func (a *fakeAudio) Stop()         { a.stops++ }
+func (a *fakeAudio) Preview(_ string, left, right int) error {
+	a.previews++
+	a.left, a.right = left, right
+	if a.fail {
+		return errors.New("device busy")
+	}
+	a.healthy = true
+	a.active = "preview"
+	return nil
+}
+func (a *fakeAudio) Stop()         { a.stops++; a.active = "" }
 func (a *fakeAudio) Healthy() bool { return a.connected && a.healthy }
 func (a *fakeAudio) Levels() (float32, float32, uint64, uint64) {
 	a.callbacks++
@@ -46,7 +60,7 @@ func fixture(t *testing.T) (*controller, *fakeAudio, func(int)) {
 	config := settings.Default()
 	config.DeviceUID = a.device.UID
 	config.Left = 9
-	c := &controller{audio: a, now: func() time.Time { return now }, retryDelay: time.Second, view: model{Config: config}}
+	c := &controller{audio: a, now: func() time.Time { return now }, retryDelay: time.Second, permissionAllowed: true, view: model{Config: config}}
 	c.refresh()
 	c.view.Wanted = true
 	c.start()
@@ -139,5 +153,117 @@ func TestRemovedChannelRequiresNewSelection(t *testing.T) {
 	}
 	if c.view.Config.Left != 9 {
 		t.Fatal("must retain original selection")
+	}
+}
+
+// Preview never needs the virtual driver, and Start/Stop switch between a
+// single input-only IOProc and a send route without leaving stale meters.
+func TestPreviewBeforeStartAndAfterStop(t *testing.T) {
+	c, a, advance := fixture(t)
+	c.action("stop", "{}")
+	a.driverMissing = true
+	c.refresh()
+	if !c.view.Monitoring || c.view.Running || c.view.Wanted || a.active != "preview" {
+		t.Fatalf("stop must leave only input metering active: %+v", c.view)
+	}
+	sends := a.starts
+	advance(4)
+	if c.view.Left >= 0 || c.view.Left <= -20 || a.starts != sends {
+		t.Fatal("preview must update dBFS without sending")
+	}
+	a.driverMissing = false
+	c.action("start", "{}")
+	if !c.view.Running || c.view.Monitoring || a.active != "send" {
+		t.Fatal("start must replace preview with send")
+	}
+	c.action("stop", "{}")
+	if !c.view.Monitoring || c.view.Running || a.active != "preview" {
+		t.Fatal("stopping send must resume preview")
+	}
+	c.action("quit", "{}")
+	if c.view.Monitoring || c.view.Running || a.active != "" {
+		t.Fatal("quit must release all input capture")
+	}
+}
+func TestPreviewPermissionAndDriverIndependentStartup(t *testing.T) {
+	c, a, advance := fixture(t)
+	c.stop()
+	c.view.Wanted = false
+	c.permissionAllowed = false
+	a.driverMissing = true
+	previews, sends := a.previews, a.starts
+	advance(12)
+	if a.previews != previews {
+		t.Fatal("must not capture without microphone permission")
+	}
+	c.action("permission_granted", "{}")
+	if !c.view.Monitoring || a.starts != sends || a.active != "preview" {
+		t.Fatal("permission must start preview before Start, without a driver")
+	}
+	c.action("permission_denied", "{}")
+	advance(12)
+	if c.view.Monitoring || c.view.Running || a.previews != previews+1 {
+		t.Fatal("revoked permission must stop capture and retries")
+	}
+}
+func TestPreviewSelectionAndRecovery(t *testing.T) {
+	c, a, advance := fixture(t)
+	c.path = t.TempDir() + "/settings.json"
+	c.action("stop", "{}")
+	c.action("config", `{"device_uid":"rme-stable","left":16,"right":9,"mode":"stereo","muted":true}`)
+	if a.left != 15 || a.right != 8 || !c.view.Monitoring {
+		t.Fatal("preview must follow both selected channels")
+	}
+	sends := a.starts
+	a.healthy = false
+	a.device.Rate = 96000
+	advance(1)
+	if c.view.Monitoring {
+		t.Fatal("must close stale preview on rate change")
+	}
+	advance(12)
+	if !c.view.Monitoring || a.starts != sends {
+		t.Fatal("rate change must recover preview without sending")
+	}
+	a.connected = false
+	advance(12)
+	if c.view.Monitoring {
+		t.Fatal("unplugged input cannot be monitored")
+	}
+	a.connected = true
+	advance(12)
+	if !c.view.Monitoring || c.view.Wanted || a.starts != sends {
+		t.Fatal("reconnect must resume preview only")
+	}
+	a.device.Channels = 8
+	a.healthy = false
+	advance(12)
+	if c.view.Monitoring || c.view.Config.Left != 16 {
+		t.Fatal("missing channel must not silently monitor another channel")
+	}
+}
+func TestPreviewBusyHardwareRetriesWithBackoff(t *testing.T) {
+	c, a, advance := fixture(t)
+	c.action("stop", "{}")
+	a.healthy, a.fail = false, true
+	sends := a.starts
+	advance(120)
+	if a.previews > 8 || a.starts != sends {
+		t.Fatal("preview retry storm or unexpected send")
+	}
+	a.fail = false
+	advance(40)
+	if !c.view.Monitoring || c.view.Running {
+		t.Fatal("must recover input-only metering")
+	}
+}
+
+func TestFailedStartReleasesPreview(t *testing.T) {
+	c, a, _ := fixture(t)
+	c.action("stop", "{}")
+	a.driverMissing = true
+	c.action("start", "{}")
+	if c.view.Monitoring || c.view.Running || a.active != "" {
+		t.Fatal("failed send must not leave a stale preview blocking send recovery")
 	}
 }

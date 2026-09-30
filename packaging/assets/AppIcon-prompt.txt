@@ -1,0 +1,7 @@
+Generated with the built-in image_gen tool on 2026-09-30.
+Selected candidate: C, light monochrome microphone.
+
+Use case: logo-brand. Asset type: candidate C for a macOS audio application icon.
+Create a rigorously simple monochrome application icon: a perfectly centered near-black microphone pictogram (capsule, U support, short stem, small base) on a light neutral medium-gray rounded-square tile. This variant should have a clean almost-flat graphic finish, with no metallic texture and no dramatic 3D depth.
+The tile is solid light gray (#B8B8B8) and clearly darker than white at all edges. The microphone is solid dark charcoal (#222222), bold, clean and readable at tiny Dock sizes. No input wires, no channel lines, no waves, no text.
+Square 1024 x 1024 canvas. Tile occupies 84% with symmetric generous outer margins. Smooth geometrically precise rounded-square perimeter. Genuine alpha transparency outside the tile: all outer-margin pixels must be entirely clear; no flecks, no splashes, no particles, no mist, no white halo, no cast shadow, no glossy edge highlight. No blue or any colored tint anywhere. Front view, optically balanced. Only the single finished icon.

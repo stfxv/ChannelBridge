@@ -41,6 +41,19 @@ static inline float cb_take_peak(_Atomic uint32_t *meter) {
     float peak; memcpy(&peak, &bits, sizeof(peak)); return peak;
 }
 
+// Input-only metering has no output buffers and never routes audio.
+static inline int cb_input_peaks(const CBBuffer *input, uint32_t inputs,
+                                 uint32_t left, uint32_t right, float *peakL, float *peakR) {
+    CBChannel selected[] = {cb_channel(input, inputs, left), cb_channel(input, inputs, right)};
+    *peakL = *peakR = 0;
+    if (!selected[0].data || !selected[1].data || !selected[0].frames || !selected[1].frames) return 0;
+    float *peaks[] = {peakL, peakR};
+    for (int ch = 0; ch < 2; ch++)
+        for (uint32_t f = 0; f < selected[ch].frames; f++)
+            *peaks[ch] = fmaxf(*peaks[ch], fabsf(cb_sample(selected[ch].data[f * selected[ch].stride])));
+    return 1;
+}
+
 // Peaks describe each selected hardware input BEFORE mix, mute, and clipping.
 // mono duplicates one input; stereo preserves L/R; mix averages two inputs.
 // No allocations, locks, logging, Objective-C, or Go calls on the audio thread.

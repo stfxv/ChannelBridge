@@ -12,7 +12,8 @@
 @property NSLevelIndicator *meterL, *meterR;
 @property NSDictionary *model;
 @property NSString *deviceSignature;
-@property BOOL updating;
+@property BOOL updating, permissionRequested;
+@property NSInteger lastAuthorization;
 @end
 static CBApp *delegate;
 
@@ -35,6 +36,7 @@ static void action(NSString *name, NSDictionary *payload) {
 }
 @implementation CBApp
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    self.lastAuthorization = -1;
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 470)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
         backing:NSBackingStoreBuffered defer:NO];
@@ -69,7 +71,7 @@ static void action(NSString *name, NSDictionary *payload) {
         m.minValue = -60; m.maxValue = 0; m.warningValue = -6; m.criticalValue = -1;
         m.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity; [v addSubview:m];
     }
-    [v addSubview:label(@"入力ピーク: −60〜0 dBFS · 開始中に表示", NSMakeRect(30, 132, 462, 18), 11, NSColor.secondaryLabelColor)];
+    [v addSubview:label(@"入力ピーク: −60〜0 dBFS · 開始前・停止中も表示", NSMakeRect(30, 132, 462, 18), 11, NSColor.secondaryLabelColor)];
     self.mute = [NSButton checkboxWithTitle:@"送出をミュート" target:self action:@selector(changed:)];
     self.mute.frame = NSMakeRect(28, 101, 220, 26); [v addSubview:self.mute];
     self.status = label(@"", NSMakeRect(30, 56, 462, 38), 12, NSColor.secondaryLabelColor);
@@ -86,6 +88,7 @@ static void action(NSString *name, NSDictionary *payload) {
     NSMenu *main = [[NSMenu alloc] init]; NSMenuItem *appMenu = [[NSMenuItem alloc] init]; [main addItem:appMenu];
     NSMenu *submenu = [[NSMenu alloc] init]; [submenu addItemWithTitle:@"ChannelBridge を終了" action:@selector(terminate:) keyEquivalent:@"q"]; appMenu.submenu = submenu; NSApp.mainMenu = main;
     [self update:self.model]; [self.window center]; [self show:nil];
+    [self checkPermission];
     [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
 }
 - (void)show:(id)sender { [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; }
@@ -93,7 +96,23 @@ static void action(NSString *name, NSDictionary *payload) {
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return NO; }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender { action(@"quit", nil); return NSTerminateNow; }
 - (void)refresh:(id)sender { action(@"refresh", nil); }
-- (void)tick:(id)sender { action(@"tick", nil); }
+// Metering requires microphone authorization even while sending is stopped.
+- (void)checkPermission {
+    if (![self.model[@"config"][@"device_uid"] length]) return;
+    AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+    if (status == AVAuthorizationStatusNotDetermined) {
+        if (self.permissionRequested) return;
+        self.permissionRequested = YES;
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
+            dispatch_async(dispatch_get_main_queue(), ^{ self.permissionRequested = NO; [self checkPermission]; });
+        }];
+        return;
+    }
+    if (self.lastAuthorization == status) return;
+    self.lastAuthorization = status;
+    action(status == AVAuthorizationStatusAuthorized ? @"permission_granted" : @"permission_denied", nil);
+}
+- (void)tick:(id)sender { [self checkPermission]; action(@"tick", nil); }
 - (void)stop:(id)sender { action(@"stop", nil); }
 - (void)toggle:(id)sender {
     if ([self.model[@"wanted"] boolValue]) { action(@"stop", nil); return; }
@@ -122,12 +141,13 @@ static void action(NSString *name, NSDictionary *payload) {
     config[@"mode"] = @[@"mono", @"stereo", @"mix"][self.mode.indexOfSelectedItem];
     config[@"muted"] = self.mute.state == NSControlStateValueOn ? @YES : @NO;
     action(@"config", config);
+    [self checkPermission];
 }
-- (void)updateLevel:(NSTextField *)text meter:(NSLevelIndicator *)meter channel:(NSInteger)channel db:(double)db running:(BOOL)running {
-    NSString *value = !running ? @"—" : (db <= -120 ? @"−∞ dBFS" : [NSString stringWithFormat:@"%.1f dBFS", db]);
+- (void)updateLevel:(NSTextField *)text meter:(NSLevelIndicator *)meter channel:(NSInteger)channel db:(double)db active:(BOOL)active {
+    NSString *value = !active ? @"—" : (db <= -120 ? @"−∞ dBFS" : [NSString stringWithFormat:@"%.1f dBFS", db]);
     text.stringValue = [NSString stringWithFormat:@"Ch %ld · %@", (long)channel, value];
-    text.textColor = running && db >= 0 ? NSColor.systemRedColor : NSColor.labelColor;
-    meter.doubleValue = running ? fmax(-60, fmin(0, db)) : -60;
+    text.textColor = active && db >= 0 ? NSColor.systemRedColor : NSColor.labelColor;
+    meter.doubleValue = active ? fmax(-60, fmin(0, db)) : -60;
 }
 - (void)update:(NSDictionary *)model {
     self.model = model; if (!self.window) return;
@@ -158,10 +178,10 @@ static void action(NSString *name, NSDictionary *payload) {
     self.mute.state = [config[@"muted"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
     self.status.stringValue = model[@"status"] ?: @"";
     self.format.stringValue = model[@"input_format"] ?: @"入力フォーマット: 未接続";
-    BOOL running = [model[@"running"] boolValue];
+    BOOL active = [model[@"running"] boolValue] || [model[@"monitoring"] boolValue];
     double dbL = [model[@"level_left"] doubleValue], dbR = [model[@"level_right"] doubleValue];
-    [self updateLevel:self.levelL meter:self.meterL channel:[config[@"left"] integerValue] db:dbL running:running];
-    [self updateLevel:self.levelR meter:self.meterR channel:[config[@"right"] integerValue] db:dbR running:running];
+    [self updateLevel:self.levelL meter:self.meterL channel:[config[@"left"] integerValue] db:dbL active:active];
+    [self updateLevel:self.levelR meter:self.meterR channel:[config[@"right"] integerValue] db:dbR active:active];
     self.levelR.hidden = mode == 0; self.meterR.hidden = mode == 0;
     NSString *startTitle = [model[@"wanted"] boolValue] ? @"停止" : @"開始";
     if (![self.start.title isEqualToString:startTitle]) self.start.title = startTitle;

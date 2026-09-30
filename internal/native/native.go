@@ -56,6 +56,18 @@ func Start(uid string, left, right, mode int, muted bool) error {
 	defer C.free(unsafe.Pointer(e))
 	return fmt.Errorf("%s", C.GoString(e))
 }
+
+// Preview captures input levels without connecting the virtual mic.
+func Preview(uid string, left, right int) error {
+	p := C.CString(uid)
+	defer C.free(unsafe.Pointer(p))
+	e := C.cb_preview(p, C.int(left), C.int(right))
+	if e == nil {
+		return nil
+	}
+	defer C.free(unsafe.Pointer(e))
+	return fmt.Errorf("%s", C.GoString(e))
+}
 func Stop()         { C.cb_stop() }
 func Healthy() bool { return C.cb_healthy() != 0 }
 func Levels() (float32, float32, uint64, uint64) {
