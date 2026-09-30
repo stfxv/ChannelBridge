@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/audio", "crates/contract", "crates/hal-abi", "crates/driver"]
+members = ["crates/core", "crates/audio", "crates/contract", "crates/hal-abi", "crates/driver", "crates/macos"]
 
 [workspace.package]
 version = "0.5.0-alpha.1"

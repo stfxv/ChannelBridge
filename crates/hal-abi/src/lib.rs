@@ -37,6 +37,20 @@ pub type ObjectId = u32;
 pub type DriverRef = *mut *mut c_void;
 
 #[repr(C)]
+pub struct AudioBuffer {
+    pub channels: u32,
+    pub byte_size: u32,
+    pub data: *mut c_void,
+}
+
+/// C's variable-length list header. Additional buffers follow the first.
+#[repr(C)]
+pub struct AudioBufferList {
+    pub count: u32,
+    pub buffers: [AudioBuffer; 1],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PropertyAddress {
     pub selector: u32,

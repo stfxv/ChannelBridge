@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 enum { Plugin = 1, Device = 2, Input = 3, Output = 4 };
@@ -61,14 +62,25 @@ static void rate_change(double rate) {
     }
 }
 int main(int argc, char **argv) {
-    assert(argc==2);
-    void *library=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
-    if(!library) { fprintf(stderr,"dlopen: %s\n",dlerror()); return 1; }
-    void *(*factory)(CFAllocatorRef,CFUUIDRef)=dlsym(library,"ChannelBridge_Create");
-    assert(factory);
-    assert(factory(NULL,NULL)==NULL);
-    assert(factory(NULL,kAudioServerPlugInDriverInterfaceUUID)==NULL);
-    driver=factory(NULL,kAudioServerPlugInTypeUUID); assert(driver);
+    assert(argc==2 || (argc==3 && strcmp(argv[2],"--bundle")==0));
+    void *library=NULL; CFPlugInRef plugin=NULL;
+    if(argc==3) {
+        CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8 *)argv[1],strlen(argv[1]),true);
+        assert(url); plugin=CFPlugInCreate(NULL,url); CFRelease(url); assert(plugin);
+        CFArrayRef factories=CFPlugInFindFactoriesForPlugInTypeInPlugIn(kAudioServerPlugInTypeUUID,plugin);
+        assert(factories && CFArrayGetCount(factories)==1);
+        driver=CFPlugInInstanceCreate(NULL,(CFUUIDRef)CFArrayGetValueAtIndex(factories,0),kAudioServerPlugInTypeUUID);
+        CFRelease(factories);
+    } else {
+        library=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
+        if(!library) { fprintf(stderr,"dlopen: %s\n",dlerror()); return 1; }
+        void *(*factory)(CFAllocatorRef,CFUUIDRef)=dlsym(library,"ChannelBridge_Create");
+        assert(factory);
+        assert(factory(NULL,NULL)==NULL);
+        assert(factory(NULL,kAudioServerPlugInDriverInterfaceUUID)==NULL);
+        driver=factory(NULL,kAudioServerPlugInTypeUUID);
+    }
+    assert(driver);
     void *queried=NULL;
     assert((*driver)->QueryInterface(driver,CFUUIDGetUUIDBytes(kAudioServerPlugInDriverInterfaceUUID),&queried)==0 && queried==driver);
     assert((*driver)->Release(driver)==1);
@@ -137,7 +149,8 @@ int main(int argc, char **argv) {
     client.mClientID=1; assert((*driver)->RemoveDeviceClient(driver,Device,&client)==0);
     client.mClientID=2; assert((*driver)->RemoveDeviceClient(driver,Device,&client)==0);
     assert((*driver)->Release(driver)==0);
-    assert(dlclose(library)==0);
+    if(library) assert(dlclose(library)==0);
+    if(plugin) CFRelease(plugin);
     puts("Rust driver: real C factory/interface, properties, clients, partial audio, wrap, seven async rates and epochs passed (fake HAL)");
     return 0;
 }

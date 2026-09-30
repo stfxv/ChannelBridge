@@ -23,4 +23,10 @@ fn main() {
     );
     println!("StreamFormat {}", size_of::<StreamFormat>());
     println!("RangedFormat {}", size_of::<RangedFormat>());
+    println!("AudioBuffer {}", size_of::<AudioBuffer>());
+    println!("AudioBufferList {}", size_of::<AudioBufferList>());
+    println!(
+        "AudioBufferList.buffers {}",
+        offset_of!(AudioBufferList, buffers)
+    );
 }

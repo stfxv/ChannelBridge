@@ -15,5 +15,8 @@ int main(void) {
     printf("DriverInterface.do_io %zu\n", offsetof(AudioServerPlugInDriverInterface, DoIOOperation));
     printf("StreamFormat %zu\n", sizeof(AudioStreamBasicDescription));
     printf("RangedFormat %zu\n", sizeof(AudioStreamRangedDescription));
+    printf("AudioBuffer %zu\n", sizeof(AudioBuffer));
+    printf("AudioBufferList %zu\n", sizeof(AudioBufferList));
+    printf("AudioBufferList.buffers %zu\n", offsetof(AudioBufferList, mBuffers));
     return 0;
 }
