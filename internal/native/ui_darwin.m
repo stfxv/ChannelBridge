@@ -7,8 +7,7 @@
 @property NSWindow *window;
 @property NSStatusItem *item;
 @property NSPopUpButton *devices, *left, *right, *mode;
-@property NSSlider *gain;
-@property NSTextField *gainLabel, *status, *subtitle;
+@property NSTextField *status, *format, *levelL, *levelR;
 @property NSButton *start, *mute, *install;
 @property NSLevelIndicator *meterL, *meterR;
 @property NSDictionary *model;
@@ -36,37 +35,47 @@ static void action(NSString *name, NSDictionary *payload) {
 }
 @implementation CBApp
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 510)
+    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 470)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"ChannelBridge"; self.window.delegate = self;
     self.window.releasedWhenClosed = NO;
     NSView *v = self.window.contentView;
-    NSTextField *title = label(@"ChannelBridge", NSMakeRect(28, 448, 450, 36), 27, NSColor.labelColor);
-    title.font = [NSFont systemFontOfSize:27 weight:NSFontWeightSemibold]; [v addSubview:title];
-    [v addSubview:label(@"必要な入力だけを、ひとつのマイクへ。", NSMakeRect(30, 421, 460, 24), 13, NSColor.secondaryLabelColor)];
-    [v addSubview:label(@"入力デバイス", NSMakeRect(30, 385, 300, 20), 12, NSColor.secondaryLabelColor)];
-    self.devices = popup(NSMakeRect(26, 348, 380, 32), self); [v addSubview:self.devices];
-    [v addSubview:button(@"更新", NSMakeRect(414, 348, 78, 32), self, @selector(refresh:))];
-    [v addSubview:label(@"出力モード", NSMakeRect(30, 320, 250, 20), 12, NSColor.secondaryLabelColor)];
-    self.mode = popup(NSMakeRect(26, 282, 466, 32), self);
+    [v addSubview:label(@"入力デバイス", NSMakeRect(30, 432, 300, 20), 12, NSColor.secondaryLabelColor)];
+    self.devices = popup(NSMakeRect(26, 394, 380, 32), self); [v addSubview:self.devices];
+    [v addSubview:button(@"更新", NSMakeRect(414, 394, 78, 32), self, @selector(refresh:))];
+    self.format = label(@"", NSMakeRect(30, 354, 462, 38), 12, NSColor.labelColor);
+    self.format.maximumNumberOfLines = 2; self.format.lineBreakMode = NSLineBreakByWordWrapping;
+    self.format.toolTip = @"サンプルレートと、macOSドライバが報告する選択チャンネルの入力形式。AD変換器の実効分解能とは異なる場合があります。";
+    [v addSubview:self.format];
+    [v addSubview:label(@"処理・仮想マイク: 32 bit float", NSMakeRect(30, 332, 462, 18), 11, NSColor.secondaryLabelColor)];
+    [v addSubview:label(@"出力モード", NSMakeRect(30, 304, 250, 20), 12, NSColor.secondaryLabelColor)];
+    self.mode = popup(NSMakeRect(26, 268, 466, 32), self);
     [self.mode addItemsWithTitles:@[@"モノラル — 1入力を左右へ", @"ステレオ — 2入力を左右へ", @"ミックス — 2入力を平均して左右へ"]]; [v addSubview:self.mode];
-    [v addSubview:label(@"入力チャンネル L / モノ", NSMakeRect(30, 256, 225, 20), 12, NSColor.secondaryLabelColor)];
-    [v addSubview:label(@"入力チャンネル R", NSMakeRect(275, 256, 210, 20), 12, NSColor.secondaryLabelColor)];
-    self.left = popup(NSMakeRect(26, 220, 218, 32), self); self.right = popup(NSMakeRect(270, 220, 222, 32), self);
+    [v addSubview:label(@"入力チャンネル L / モノ", NSMakeRect(30, 242, 225, 20), 12, NSColor.secondaryLabelColor)];
+    [v addSubview:label(@"入力チャンネル R", NSMakeRect(275, 242, 210, 20), 12, NSColor.secondaryLabelColor)];
+    self.left = popup(NSMakeRect(26, 208, 218, 32), self); self.right = popup(NSMakeRect(270, 208, 222, 32), self);
     [v addSubview:self.left]; [v addSubview:self.right];
-    self.gain = [NSSlider sliderWithValue:0 minValue:-60 maxValue:12 target:self action:@selector(changed:)];
-    self.gain.frame = NSMakeRect(26, 177, 280, 26); self.gain.continuous = NO; [v addSubview:self.gain];
-    self.gainLabel = label(@"0 dB", NSMakeRect(320, 177, 80, 24), 13, NSColor.labelColor); [v addSubview:self.gainLabel];
-    self.mute = [NSButton checkboxWithTitle:@"ミュート" target:self action:@selector(changed:)];
-    self.mute.frame = NSMakeRect(400, 177, 100, 26); [v addSubview:self.mute];
-    self.meterL = [[NSLevelIndicator alloc] initWithFrame:NSMakeRect(30, 147, 224, 12)];
-    self.meterR = [[NSLevelIndicator alloc] initWithFrame:NSMakeRect(268, 147, 224, 12)];
-    for (NSLevelIndicator *m in @[self.meterL, self.meterR]) { m.minValue = 0; m.maxValue = 1; m.warningValue = 0.8; m.criticalValue = 0.98; m.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity; [v addSubview:m]; }
-    self.status = label(@"", NSMakeRect(30, 83, 462, 54), 12, NSColor.secondaryLabelColor);
-    self.status.maximumNumberOfLines = 3; self.status.lineBreakMode = NSLineBreakByWordWrapping; [v addSubview:self.status];
-    self.install = button(@"仮想マイクをセットアップ", NSMakeRect(24, 28, 246, 34), self, @selector(install:)); [v addSubview:self.install];
-    self.start = button(@"開始", NSMakeRect(376, 28, 120, 34), self, @selector(toggle:)); self.start.keyEquivalent = @"\r"; [v addSubview:self.start];
+    self.levelL = label(@"", NSMakeRect(30, 177, 224, 24), 16, NSColor.labelColor);
+    self.levelR = label(@"", NSMakeRect(268, 177, 224, 24), 16, NSColor.labelColor);
+    for (NSTextField *l in @[self.levelL, self.levelR]) {
+        l.font = [NSFont monospacedDigitSystemFontOfSize:16 weight:NSFontWeightMedium];
+        l.toolTip = @"選択した入力のピーク値（dBFS）。ミックス・ミュート・出力クリップ前に測定します。";
+        [v addSubview:l];
+    }
+    self.meterL = [[NSLevelIndicator alloc] initWithFrame:NSMakeRect(30, 155, 224, 12)];
+    self.meterR = [[NSLevelIndicator alloc] initWithFrame:NSMakeRect(268, 155, 224, 12)];
+    for (NSLevelIndicator *m in @[self.meterL, self.meterR]) {
+        m.minValue = -60; m.maxValue = 0; m.warningValue = -6; m.criticalValue = -1;
+        m.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity; [v addSubview:m];
+    }
+    [v addSubview:label(@"入力ピーク: −60〜0 dBFS · 開始中に表示", NSMakeRect(30, 132, 462, 18), 11, NSColor.secondaryLabelColor)];
+    self.mute = [NSButton checkboxWithTitle:@"送出をミュート" target:self action:@selector(changed:)];
+    self.mute.frame = NSMakeRect(28, 101, 220, 26); [v addSubview:self.mute];
+    self.status = label(@"", NSMakeRect(30, 56, 462, 38), 12, NSColor.secondaryLabelColor);
+    self.status.maximumNumberOfLines = 2; self.status.lineBreakMode = NSLineBreakByWordWrapping; [v addSubview:self.status];
+    self.install = button(@"仮想マイクをセットアップ", NSMakeRect(24, 14, 246, 34), self, @selector(install:)); [v addSubview:self.install];
+    self.start = button(@"開始", NSMakeRect(376, 14, 120, 34), self, @selector(toggle:)); self.start.keyEquivalent = @"\r"; [v addSubview:self.start];
     self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength]; self.item.button.title = @"CB ○";
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"ChannelBridge"];
     NSMenuItem *show = [menu addItemWithTitle:@"ChannelBridge を開く" action:@selector(show:) keyEquivalent:@""]; show.target = self;
@@ -106,13 +115,19 @@ static void action(NSString *name, NSDictionary *payload) {
     NSString *uid = self.devices.selectedItem.representedObject;
     if (!uid) return;
     config[@"device_uid"] = uid;
-    config[@"left"] = @(MAX(1, self.left.selectedItem.tag));
-    config[@"right"] = @(MAX(1, self.right.selectedItem.tag));
+    // An unplugged device has no channel menu; preserve its saved selection.
+    if (self.left.selectedItem) config[@"left"] = @(self.left.selectedItem.tag);
+    if (self.right.selectedItem) config[@"right"] = @(self.right.selectedItem.tag);
     if (sender == self.devices) { config[@"left"] = @1; config[@"right"] = @1; }
     config[@"mode"] = @[@"mono", @"stereo", @"mix"][self.mode.indexOfSelectedItem];
-    config[@"gain_db"] = @(round(self.gain.doubleValue));
     config[@"muted"] = self.mute.state == NSControlStateValueOn ? @YES : @NO;
     action(@"config", config);
+}
+- (void)updateLevel:(NSTextField *)text meter:(NSLevelIndicator *)meter channel:(NSInteger)channel db:(double)db running:(BOOL)running {
+    NSString *value = !running ? @"—" : (db <= -120 ? @"−∞ dBFS" : [NSString stringWithFormat:@"%.1f dBFS", db]);
+    text.stringValue = [NSString stringWithFormat:@"Ch %ld · %@", (long)channel, value];
+    text.textColor = running && db >= 0 ? NSColor.systemRedColor : NSColor.labelColor;
+    meter.doubleValue = running ? fmax(-60, fmin(0, db)) : -60;
 }
 - (void)update:(NSDictionary *)model {
     self.model = model; if (!self.window) return;
@@ -134,16 +149,22 @@ static void action(NSString *name, NSDictionary *payload) {
         [self.left removeAllItems]; [self.right removeAllItems];
         for (int i = 1; i <= count; i++) for (NSPopUpButton *p in @[self.left, self.right]) { [p addItemWithTitle:[NSString stringWithFormat:@"Ch %d", i]]; p.lastItem.tag = i; }
     }
-    [self.left selectItemWithTag:[config[@"left"] integerValue]]; [self.right selectItemWithTag:[config[@"right"] integerValue]];
+    if (self.left.selectedItem.tag != [config[@"left"] integerValue]) [self.left selectItemWithTag:[config[@"left"] integerValue]];
+    if (self.right.selectedItem.tag != [config[@"right"] integerValue]) [self.right selectItemWithTag:[config[@"right"] integerValue]];
     NSUInteger mode = [@[@"mono", @"stereo", @"mix"] indexOfObject:config[@"mode"]];
-    [self.mode selectItemAtIndex:mode == NSNotFound ? 0 : mode]; self.right.enabled = mode != 0;
-    // Avoid moving a slider under the user's pointer while tracking.
-    if (!NSEvent.pressedMouseButtons) self.gain.doubleValue = [config[@"gain_db"] doubleValue];
-    self.gainLabel.stringValue = [NSString stringWithFormat:@"%+.0f dB", [config[@"gain_db"] doubleValue]];
+    if (mode == NSNotFound) mode = 0;
+    if (self.mode.indexOfSelectedItem != mode) [self.mode selectItemAtIndex:mode];
+    self.right.enabled = mode != 0;
     self.mute.state = [config[@"muted"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
     self.status.stringValue = model[@"status"] ?: @"";
-    self.meterL.doubleValue = [model[@"level_left"] doubleValue]; self.meterR.doubleValue = [model[@"level_right"] doubleValue];
-    self.start.title = [model[@"wanted"] boolValue] ? @"停止" : @"開始";
+    self.format.stringValue = model[@"input_format"] ?: @"入力フォーマット: 未接続";
+    BOOL running = [model[@"running"] boolValue];
+    double dbL = [model[@"level_left"] doubleValue], dbR = [model[@"level_right"] doubleValue];
+    [self updateLevel:self.levelL meter:self.meterL channel:[config[@"left"] integerValue] db:dbL running:running];
+    [self updateLevel:self.levelR meter:self.meterR channel:[config[@"right"] integerValue] db:dbR running:running];
+    self.levelR.hidden = mode == 0; self.meterR.hidden = mode == 0;
+    NSString *startTitle = [model[@"wanted"] boolValue] ? @"停止" : @"開始";
+    if (![self.start.title isEqualToString:startTitle]) self.start.title = startTitle;
     self.start.enabled = [model[@"wanted"] boolValue] || ([model[@"driver"] boolValue] && uid.length > 0);
     self.install.hidden = [model[@"driver"] boolValue];
     self.item.button.title = [model[@"running"] boolValue] ? ([config[@"muted"] boolValue] ? @"CB −" : @"CB ●") : @"CB ○";

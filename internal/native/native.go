@@ -19,10 +19,19 @@ import (
 )
 
 type Device struct {
-	UID      string  `json:"uid"`
-	Name     string  `json:"name"`
-	Channels int     `json:"channels"`
-	Rate     float64 `json:"rate"`
+	UID      string         `json:"uid"`
+	Name     string         `json:"name"`
+	Channels int            `json:"channels"`
+	Rate     float64        `json:"rate"`
+	Formats  []StreamFormat `json:"formats"`
+}
+
+// StreamFormat is the input format reported by the HAL driver, not an ADC specification.
+type StreamFormat struct {
+	FirstChannel int  `json:"first_channel"`
+	Channels     int  `json:"channels"`
+	Bits         int  `json:"bits"`
+	Float        bool `json:"float"`
 }
 
 func Devices() ([]Device, error) {
@@ -33,14 +42,14 @@ func Devices() ([]Device, error) {
 	return d, err
 }
 func DriverAvailable() bool { return C.cb_driver_available() != 0 }
-func Start(uid string, left, right, mode int, gain float32, muted bool) error {
+func Start(uid string, left, right, mode int, muted bool) error {
 	p := C.CString(uid)
 	defer C.free(unsafe.Pointer(p))
 	m := 0
 	if muted {
 		m = 1
 	}
-	e := C.cb_start(p, C.int(left), C.int(right), C.int(mode), C.float(gain), C.int(m))
+	e := C.cb_start(p, C.int(left), C.int(right), C.int(mode), C.int(m))
 	if e == nil {
 		return nil
 	}

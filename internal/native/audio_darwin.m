@@ -13,7 +13,6 @@ typedef struct {
     AudioDeviceIOProcID proc;
     uint32_t left, right;
     int mode, muted;
-    float gain;
     Float64 sourceRate;
     uint32_t inputChannels;
     _Atomic int invalidated;
@@ -60,6 +59,29 @@ static Float64 sampleRate(AudioDeviceID device) {
     get(device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, &size, &rate);
     return rate;
 }
+// Read physical PCM metadata from the selected device's input streams.
+// Bit depth refers to the HAL format, which may differ from converter resolution.
+static NSArray *inputFormats(AudioDeviceID device) {
+    AudioObjectPropertyAddress a = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput);
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &a, 0, NULL, &size) || !size) return @[];
+    AudioStreamID *streams = malloc(size);
+    if (!streams) return @[];
+    NSMutableArray *result = [NSMutableArray array];
+    if (!AudioObjectGetPropertyData(device, &a, 0, NULL, &size, streams)) {
+        for (UInt32 i = 0; i < size / sizeof(AudioStreamID); i++) {
+            AudioStreamBasicDescription format = {0}; UInt32 n = sizeof(format);
+            if (get(streams[i], kAudioStreamPropertyPhysicalFormat, kAudioObjectPropertyScopeGlobal, &n, &format)
+                || format.mFormatID != kAudioFormatLinearPCM || !format.mChannelsPerFrame || !format.mBitsPerChannel) continue;
+            UInt32 first = 0; n = sizeof(first);
+            if (get(streams[i], kAudioStreamPropertyStartingChannel, kAudioObjectPropertyScopeGlobal, &n, &first) || !first) continue;
+            [result addObject:@{@"first_channel": @(first), @"channels": @(format.mChannelsPerFrame),
+                                @"bits": @(format.mBitsPerChannel),
+                                @"float": (format.mFormatFlags & kAudioFormatFlagIsFloat) ? @YES : @NO}];
+        }
+    }
+    free(streams); return result;
+}
 char *cb_devices(void) {
     @autoreleasepool {
         AudioObjectPropertyAddress a = address(kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
@@ -74,7 +96,7 @@ char *cb_devices(void) {
                 NSString *uid = stringProperty(ids[i], kAudioDevicePropertyDeviceUID);
                 if (!count || [uid hasPrefix:@"ChannelBridge"] || [uid hasPrefix:@"local.channelbridge."]) continue;
                 [result addObject:@{@"uid": uid, @"name": stringProperty(ids[i], kAudioObjectPropertyName),
-                                    @"channels": @(count), @"rate": @(sampleRate(ids[i]))}];
+                                    @"channels": @(count), @"rate": @(sampleRate(ids[i])), @"formats": inputFormats(ids[i])}];
             }
         }
         free(ids);
@@ -112,11 +134,11 @@ static OSStatus render(AudioObjectID device, const AudioTimeStamp *now,
     }
     float l, r;
     if (!cb_mix(in, input->mNumberBuffers, out, output->mNumberBuffers,
-                e->left, e->right, e->mode, e->gain, e->muted, &l, &r))
+                e->left, e->right, e->mode, e->muted, &l, &r))
         atomic_fetch_add_explicit(&e->faults, 1, memory_order_relaxed);
-    // Integer meters are lock-free on both supported architectures.
-    atomic_store_explicit(&e->peakL, (uint32_t)(l * 10000), memory_order_relaxed);
-    atomic_store_explicit(&e->peakR, (uint32_t)(r * 10000), memory_order_relaxed);
+    // Keep the loudest input sample until the next UI poll, including short transients.
+    cb_hold_peak(&e->peakL, l);
+    cb_hold_peak(&e->peakR, r);
     atomic_fetch_add_explicit(&e->callbacks, 1, memory_order_relaxed);
     return noErr;
 }
@@ -220,7 +242,7 @@ static char *failure(NSString *message, OSStatus status) {
     cb_stop();
     return strdup([NSString stringWithFormat:@"%@ (Core Audio: %d)", message, (int)status].UTF8String);
 }
-char *cb_start(const char *uid, int left, int right, int mode, float gain, int muted) {
+char *cb_start(const char *uid, int left, int right, int mode, int muted) {
     @autoreleasepool {
         cb_stop();
         NSString *sourceUID = [NSString stringWithUTF8String:uid];
@@ -262,7 +284,7 @@ char *cb_start(const char *uid, int left, int right, int mode, float gain, int m
             !orderedLayout(sourceUID) ||
             !floatStreams(engine.aggregate, kAudioObjectPropertyScopeInput) || !floatStreams(engine.aggregate, kAudioObjectPropertyScopeOutput))
             return failure(@"未対応のオーディオ形式、またはチャンネル構成です", -3);
-        engine.left = left + 2; engine.right = right + 2; engine.mode = mode; engine.gain = gain; engine.muted = muted;
+        engine.left = left + 2; engine.right = right + 2; engine.mode = mode; engine.muted = muted;
         atomic_store(&engine.peakL, 0); atomic_store(&engine.peakR, 0);
         atomic_store(&engine.callbacks, 0); atomic_store(&engine.faults, 0);
         status = AudioDeviceCreateIOProcID(engine.aggregate, render, &engine, &engine.proc);
@@ -279,7 +301,7 @@ char *cb_start(const char *uid, int left, int right, int mode, float gain, int m
     }
 }
 void cb_levels(float *left, float *right, uint64_t *callbacks, uint64_t *faults) {
-    *left = atomic_load(&engine.peakL) / 10000.0f; *right = atomic_load(&engine.peakR) / 10000.0f;
+    *left = cb_take_peak(&engine.peakL); *right = cb_take_peak(&engine.peakR);
     *callbacks = atomic_load(&engine.callbacks); *faults = atomic_load(&engine.faults);
 }
 int cb_healthy(void) {

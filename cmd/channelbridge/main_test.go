@@ -24,7 +24,7 @@ func (a *fakeAudio) Devices() ([]native.Device, error) {
 	return []native.Device{a.device}, nil
 }
 func (a *fakeAudio) DriverAvailable() bool { return true }
-func (a *fakeAudio) Start(string, int, int, int, float32, bool) error {
+func (a *fakeAudio) Start(string, int, int, int, bool) error {
 	a.starts++
 	a.rates = append(a.rates, a.device.Rate)
 	if a.fail {

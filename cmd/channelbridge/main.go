@@ -4,7 +4,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"time"
@@ -22,13 +21,14 @@ type model struct {
 	Status  string          `json:"status"`
 	Left    float32         `json:"level_left"`
 	Right   float32         `json:"level_right"`
+	Format  string          `json:"input_format"`
 }
 
 // audioBackend keeps recovery policy testable without recording or installing a driver.
 type audioBackend interface {
 	Devices() ([]native.Device, error)
 	DriverAvailable() bool
-	Start(string, int, int, int, float32, bool) error
+	Start(string, int, int, int, bool) error
 	Stop()
 	Healthy() bool
 	Levels() (float32, float32, uint64, uint64)
@@ -37,8 +37,8 @@ type nativeAudio struct{}
 
 func (nativeAudio) Devices() ([]native.Device, error) { return native.Devices() }
 func (nativeAudio) DriverAvailable() bool             { return native.DriverAvailable() }
-func (nativeAudio) Start(uid string, l, r, mode int, gain float32, muted bool) error {
-	return native.Start(uid, l, r, mode, gain, muted)
+func (nativeAudio) Start(uid string, l, r, mode int, muted bool) error {
+	return native.Start(uid, l, r, mode, muted)
 }
 func (nativeAudio) Stop()                                      { native.Stop() }
 func (nativeAudio) Healthy() bool                              { return native.Healthy() }
@@ -77,6 +77,10 @@ func (c *controller) selected() (native.Device, bool) {
 	return native.Device{}, false
 }
 func (c *controller) publish() {
+	c.view.Format = "入力フォーマット: 未接続"
+	if d, ok := c.selected(); ok {
+		c.view.Format = inputFormat(d, c.view.Config)
+	}
 	b, _ := json.Marshal(c.view)
 	if c.present != nil {
 		c.present(b)
@@ -85,7 +89,7 @@ func (c *controller) publish() {
 func (c *controller) stop() {
 	c.audio.Stop()
 	c.view.Running = false
-	c.view.Left, c.view.Right = 0, 0
+	c.view.Left, c.view.Right = meterFloorDB, meterFloorDB
 }
 func (c *controller) start() {
 	d, ok := c.selected()
@@ -108,7 +112,7 @@ func (c *controller) start() {
 		right = c.view.Config.Left - 1
 	}
 	err := c.audio.Start(d.UID, c.view.Config.Left-1, right, mode,
-		float32(math.Pow(10, c.view.Config.GainDB/20)), c.view.Config.Muted)
+		c.view.Config.Muted)
 	if err != nil {
 		c.view.Status = "再接続を待機: " + err.Error()
 		c.nextAttempt = c.now().Add(c.retryDelay)
@@ -119,6 +123,7 @@ func (c *controller) start() {
 		return
 	}
 	c.view.Running = true
+	c.view.Left, c.view.Right = meterFloorDB, meterFloorDB
 	c.lastCallbacks = 0
 	c.lastAudio = c.now()
 	c.retryDelay = time.Second
@@ -132,7 +137,7 @@ func (c *controller) tick() {
 	c.ticks++
 	if c.view.Running {
 		l, r, callbacks, faults := c.audio.Levels()
-		c.view.Left, c.view.Right = l, r
+		c.view.Left, c.view.Right = peakDBFS(l), peakDBFS(r)
 		if callbacks != c.lastCallbacks {
 			c.lastCallbacks = callbacks
 			c.lastAudio = c.now()
@@ -222,7 +227,7 @@ func main() {
 		os.Exit(1)
 	}
 	config, err := settings.Load(path)
-	c := &controller{audio: nativeAudio{}, now: time.Now, present: native.Present, path: path, retryDelay: time.Second, view: model{Config: config, Status: "入力を選び「開始」を押してください"}}
+	c := &controller{audio: nativeAudio{}, now: time.Now, present: native.Present, path: path, retryDelay: time.Second, view: model{Config: config, Left: meterFloorDB, Right: meterFloorDB, Status: "入力を選び「開始」を押してください"}}
 	if err != nil {
 		c.view.Config = settings.Default()
 		c.view.Status = "保存設定を読み込めませんでした。入力を再設定してください"

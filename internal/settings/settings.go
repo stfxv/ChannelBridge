@@ -4,18 +4,16 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 )
 
 type Config struct {
-	DeviceUID string  `json:"device_uid"`
-	Left      int     `json:"left"` // One-based hardware channel number.
-	Right     int     `json:"right"`
-	Mode      string  `json:"mode"` // mono, stereo, or mix (averaged mono).
-	GainDB    float64 `json:"gain_db"`
-	Muted     bool    `json:"muted"`
+	DeviceUID string `json:"device_uid"`
+	Left      int    `json:"left"` // One-based hardware channel number.
+	Right     int    `json:"right"`
+	Mode      string `json:"mode"` // mono, stereo, or mix (averaged mono).
+	Muted     bool   `json:"muted"`
 }
 
 func Default() Config { return Config{Left: 1, Right: 2, Mode: "mono"} }
@@ -32,9 +30,6 @@ func (c Config) Validate(channels int) error {
 	}
 	if c.Mode != "mono" && (c.Right < 1 || c.Right > channels) {
 		return fmt.Errorf("右チャンネルが範囲外です（1〜%d）", channels)
-	}
-	if math.IsNaN(c.GainDB) || math.IsInf(c.GainDB, 0) || c.GainDB < -60 || c.GainDB > 12 {
-		return fmt.Errorf("音量は −60〜+12 dB に設定してください")
 	}
 	return nil
 }
