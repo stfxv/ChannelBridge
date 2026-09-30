@@ -11,3 +11,6 @@ clang -Wall -Wextra -Werror scripts/test_rust_abi.c -framework CoreAudio -o work
 work/test/rust/abi > work/test/rust/apple-layout.txt
 cargo run --quiet -p channelbridge-hal-abi --example layout > work/test/rust/rust-layout.txt
 diff -u work/test/rust/apple-layout.txt work/test/rust/rust-layout.txt
+cargo build -p channelbridge-driver
+clang -g -fsanitize=address,undefined scripts/test_rust_driver.c -framework CoreAudio -framework CoreFoundation -o work/test/rust/driver
+work/test/rust/driver "$CHANNELBRIDGE_ROOT/target/debug/libchannelbridge_driver.dylib"

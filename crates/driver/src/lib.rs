@@ -1,4 +1,4 @@
-//! New Rust virtual driver. The HAL factory is added after kernel invariants pass.
+//! New Rust virtual driver, independent of BlackHole.
 //! This crate must never call CoreAudio's client HAL APIs.
 use channelbridge_audio::{
     FramePosition, StereoFrame,
@@ -6,6 +6,13 @@ use channelbridge_audio::{
 };
 use channelbridge_contract::DriverCounters;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "macos")]
+mod plugin;
+
+pub(crate) fn kernel() -> Option<DriverAudio> {
+    DriverAudio::new(65_536)
+}
 
 pub struct DriverAudio {
     ring: TimelineRing,

@@ -33,3 +33,6 @@ jobs:
         run: |
           cargo check --workspace --locked --target aarch64-apple-darwin
           cargo check --workspace --locked --target x86_64-apple-darwin
+      - name: Universal test driver bundle and signature
+        if: matrix.rust == '1.98.1'
+        run: bash scripts/build-rust-driver.sh
