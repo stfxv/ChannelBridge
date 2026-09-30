@@ -6,6 +6,7 @@
 @interface CBApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property NSWindow *window;
 @property NSStatusItem *item;
+@property NSArray<NSImage *> *statusIcons;
 @property NSPopUpButton *devices, *left, *right, *mode;
 @property NSTextField *status, *format, *levelL, *levelR;
 @property NSButton *start, *mute, *install;
@@ -37,6 +38,10 @@ static void action(NSString *name, NSDictionary *payload) {
 @implementation CBApp
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.lastAuthorization = -1;
+    // Read from our bundle directly: Dock may still cache an older app icon.
+    NSString *iconPath = [NSBundle.mainBundle pathForResource:@"AppIcon" ofType:@"icns"];
+    NSImage *appIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    if (appIcon) NSApp.applicationIconImage = appIcon;
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 470)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable
         backing:NSBackingStoreBuffered defer:NO];
@@ -78,7 +83,17 @@ static void action(NSString *name, NSDictionary *payload) {
     self.status.maximumNumberOfLines = 2; self.status.lineBreakMode = NSLineBreakByWordWrapping; [v addSubview:self.status];
     self.install = button(@"仮想マイクをセットアップ", NSMakeRect(24, 14, 246, 34), self, @selector(install:)); [v addSubview:self.install];
     self.start = button(@"開始", NSMakeRect(376, 14, 120, 34), self, @selector(toggle:)); self.start.keyEquivalent = @"\r"; [v addSubview:self.start];
-    self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength]; self.item.button.title = @"CB ○";
+    self.item = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+    NSMutableArray<NSImage *> *icons = [NSMutableArray array];
+    for (NSString *symbol in @[@"mic", @"mic.fill", @"mic.slash.fill"]) {
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"ChannelBridge"];
+        image = [image imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:16 weight:NSFontWeightRegular]];
+        image.template = YES; // AppKit supplies the right contrast in light/dark mode.
+        [icons addObject:image];
+    }
+    self.statusIcons = icons;
+    self.item.button.imagePosition = NSImageOnly;
+    [self.item.button setAccessibilityLabel:@"ChannelBridge"];
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"ChannelBridge"];
     NSMenuItem *show = [menu addItemWithTitle:@"ChannelBridge を開く" action:@selector(show:) keyEquivalent:@""]; show.target = self;
     NSMenuItem *stop = [menu addItemWithTitle:@"送出を停止" action:@selector(stop:) keyEquivalent:@""]; stop.target = self;
@@ -187,7 +202,9 @@ static void action(NSString *name, NSDictionary *payload) {
     if (![self.start.title isEqualToString:startTitle]) self.start.title = startTitle;
     self.start.enabled = [model[@"wanted"] boolValue] || ([model[@"driver"] boolValue] && uid.length > 0);
     self.install.hidden = [model[@"driver"] boolValue];
-    self.item.button.title = [model[@"running"] boolValue] ? ([config[@"muted"] boolValue] ? @"CB −" : @"CB ●") : @"CB ○";
+    BOOL running = [model[@"running"] boolValue], muted = [config[@"muted"] boolValue];
+    self.item.button.image = self.statusIcons[running ? (muted ? 2 : 1) : 0];
+    self.item.button.toolTip = [@"ChannelBridge · " stringByAppendingString:running ? (muted ? @"送出ミュート中" : @"送出中") : @"送出停止中"];
     self.updating = NO;
 }
 @end
