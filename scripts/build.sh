@@ -34,7 +34,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 cp THIRD_PARTY.md "$APP/Contents/Resources/THIRD_PARTY.md"
 # Include the complete corresponding source, without build products.
-tar -czf "$APP/Contents/Resources/ChannelBridge-source.tar.gz" go.mod cmd internal scripts driver packaging vendor LICENSE README.md THIRD_PARTY.md VERIFICATION.md
+tar -czf "$APP/Contents/Resources/ChannelBridge-source.tar.gz" go.mod cmd internal scripts driver packaging vendor .github LICENSE README.md ARCHITECTURE.md THIRD_PARTY.md VERIFICATION.md
 codesign --force --sign - "$APP"
 codesign --verify --strict "$APP"
 echo "Built: $APP"

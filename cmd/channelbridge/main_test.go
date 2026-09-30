@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -18,18 +19,35 @@ type fakeAudio struct {
 	left, right              int
 	callbacks                uint64
 	rates                    []float64
+	muted                    bool
+	muteChanges, deviceReads int
+	permanent                bool
 }
 
 func (a *fakeAudio) Devices() ([]native.Device, error) {
+	a.deviceReads++
 	if !a.connected {
 		return nil, nil
 	}
 	return []native.Device{a.device}, nil
 }
 func (a *fakeAudio) DriverAvailable() bool { return !a.driverMissing }
+func (a *fakeAudio) DeviceRevision() uint64 {
+	revision := math.Float64bits(a.device.Rate) ^ uint64(a.device.Channels)
+	if a.connected {
+		revision ^= 1 << 63
+	}
+	return revision
+}
+func (a *fakeAudio) SetMuted(v bool)      { a.muted = v; a.muteChanges++ }
+func (a *fakeAudio) SetOverview(bool)     {}
+func (a *fakeAudio) AllLevels() []float32 { return []float32{.1, .5} }
 func (a *fakeAudio) Start(string, int, int, int, bool) error {
 	a.starts++
 	a.rates = append(a.rates, a.device.Rate)
+	if a.permanent {
+		return &native.AudioError{Message: "unsupported", Code: -3, Retryable: false}
+	}
 	if a.fail {
 		return errors.New("device busy")
 	}
@@ -40,6 +58,9 @@ func (a *fakeAudio) Start(string, int, int, int, bool) error {
 func (a *fakeAudio) Preview(_ string, left, right int) error {
 	a.previews++
 	a.left, a.right = left, right
+	if a.permanent {
+		return &native.AudioError{Message: "unsupported", Code: -3, Retryable: false}
+	}
 	if a.fail {
 		return errors.New("device busy")
 	}

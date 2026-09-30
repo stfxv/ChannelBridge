@@ -6,6 +6,8 @@ CGO_CFLAGS='-O2 -fobjc-arc' go test -race ./...
 CGO_CFLAGS='-O2 -fobjc-arc' go vet ./...
 clang -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined scripts/test_mixer.c -o work/test/mixer
 work/test/mixer
+clang -fobjc-arc scripts/test_ui.m -framework Cocoa -framework AVFoundation -o work/test/ui
+work/test/ui
 cp vendor/blackhole/BlackHole.c work/test/ChannelBridge.c
 patch -s work/test/ChannelBridge.c driver/compatibility.patch
 clang -O1 -g -fblocks -fsanitize=address,undefined -Iwork/test -include driver/Config.h \

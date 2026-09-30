@@ -14,7 +14,7 @@ import "C"
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"unsafe"
 )
 
@@ -35,11 +35,35 @@ type StreamFormat struct {
 }
 
 func Devices() ([]Device, error) {
-	p := C.cb_devices()
+	var message *C.char
+	p := C.cb_devices(&message)
+	if message != nil {
+		defer C.free(unsafe.Pointer(message))
+		return nil, errors.New(C.GoString(message))
+	}
 	defer C.free(unsafe.Pointer(p))
 	var d []Device
 	err := json.Unmarshal([]byte(C.GoString(p)), &d)
 	return d, err
+}
+func DeviceRevision() uint64 { return uint64(C.cb_device_revision()) }
+
+// AudioError distinguishes recoverable HAL failures from an unsupported format
+// or invalid selection. Native error strings are structured, not text-matched.
+type AudioError struct {
+	Message   string `json:"message"`
+	Code      int    `json:"code"`
+	Retryable bool   `json:"retryable"`
+}
+
+func (e *AudioError) Error() string { return e.Message }
+func audioError(message *C.char) error {
+	defer C.free(unsafe.Pointer(message))
+	var result AudioError
+	if err := json.Unmarshal([]byte(C.GoString(message)), &result); err != nil {
+		return errors.New("音声処理のエラー情報を読み取れません")
+	}
+	return &result
 }
 func DriverAvailable() bool { return C.cb_driver_available() != 0 }
 func Start(uid string, left, right, mode int, muted bool) error {
@@ -53,8 +77,7 @@ func Start(uid string, left, right, mode int, muted bool) error {
 	if e == nil {
 		return nil
 	}
-	defer C.free(unsafe.Pointer(e))
-	return fmt.Errorf("%s", C.GoString(e))
+	return audioError(e)
 }
 
 // Preview captures input levels without connecting the virtual mic.
@@ -65,8 +88,30 @@ func Preview(uid string, left, right int) error {
 	if e == nil {
 		return nil
 	}
-	defer C.free(unsafe.Pointer(e))
-	return fmt.Errorf("%s", C.GoString(e))
+	return audioError(e)
+}
+func SetMuted(muted bool) {
+	value := 0
+	if muted {
+		value = 1
+	}
+	C.cb_set_muted(C.int(value))
+}
+func SetOverview(enabled bool) {
+	value := 0
+	if enabled {
+		value = 1
+	}
+	C.cb_set_overview(C.int(value))
+}
+func AllLevels() []float32 {
+	var values [512]C.float
+	n := C.cb_all_levels(&values[0], C.uint32_t(len(values)))
+	result := make([]float32, int(n))
+	for i := range result {
+		result[i] = float32(values[i])
+	}
+	return result
 }
 func Stop()         { C.cb_stop() }
 func Healthy() bool { return C.cb_healthy() != 0 }

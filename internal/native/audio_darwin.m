@@ -7,17 +7,19 @@
 
 #define SEND_UID CFSTR("ChannelBridge_UID")
 #define MAX_BUFFERS 512
+#define MAX_METER_CHANNELS 512
 
 typedef struct {
     AudioDeviceID aggregate, ioDevice, source, sink;
     AudioDeviceIOProcID proc;
     uint32_t left, right;
-    int mode, muted, preview;
+    int mode, preview;
+    _Atomic int muted, overview;
     Float64 sourceRate;
     uint32_t inputChannels;
     _Atomic int invalidated;
     int listenerCount;
-    _Atomic uint32_t peakL, peakR;
+    _Atomic uint32_t peakL, peakR, channelPeaks[MAX_METER_CHANNELS];
     _Atomic uint64_t callbacks, faults;
 } Engine;
 static Engine engine;
@@ -82,24 +84,97 @@ static NSArray *inputFormats(AudioDeviceID device) {
     }
     free(streams); return result;
 }
-char *cb_devices(void) {
+// Property callbacks only mark inventory dirty; enumeration stays on the worker.
+typedef struct { AudioObjectID object; AudioObjectPropertyAddress property; BOOL seen; } InventoryWatch;
+static InventoryWatch *inventoryWatches;
+static size_t inventoryCount;
+static _Atomic uint64_t inventoryRevision = 1;
+static BOOL inventoryInstalled;
+static OSStatus inventoryChanged(AudioObjectID object, UInt32 count,
+    const AudioObjectPropertyAddress *properties, void *context) {
+    atomic_fetch_add_explicit(&inventoryRevision, 1, memory_order_relaxed);
+    return noErr;
+}
+uint64_t cb_device_revision(void) {
+    if (!inventoryInstalled) {
+        AudioObjectPropertyAddress a = address(kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
+        inventoryInstalled = AudioObjectAddPropertyListener(kAudioObjectSystemObject, &a, inventoryChanged, NULL) == noErr;
+    }
+    return atomic_load_explicit(&inventoryRevision, memory_order_relaxed);
+}
+static void clearInventoryWatches(void) {
+    for (size_t i = 0; i < inventoryCount; i++)
+        AudioObjectRemovePropertyListener(inventoryWatches[i].object, &inventoryWatches[i].property, inventoryChanged, NULL);
+    free(inventoryWatches); inventoryWatches = NULL; inventoryCount = 0;
+}
+static void inventoryWatch(AudioObjectID object, AudioObjectPropertySelector selector, AudioObjectPropertyScope scope) {
+    for (size_t i = 0; i < inventoryCount; i++) {
+        InventoryWatch *existing = &inventoryWatches[i];
+        if (existing->object == object && existing->property.mSelector == selector && existing->property.mScope == scope) {
+            existing->seen = YES;
+            return;
+        }
+    }
+    InventoryWatch watch = {object, address(selector, scope), YES};
+    InventoryWatch *list = realloc(inventoryWatches, (inventoryCount + 1) * sizeof(*list));
+    if (!list) return; // Five-second fallback refresh still detects changes.
+    inventoryWatches = list;
+    if (!AudioObjectAddPropertyListener(object, &watch.property, inventoryChanged, NULL))
+        inventoryWatches[inventoryCount++] = watch;
+}
+static void pruneInventoryWatches(void) {
+    size_t retained = 0;
+    for (size_t i = 0; i < inventoryCount; i++) {
+        InventoryWatch watch = inventoryWatches[i];
+        if (watch.seen) inventoryWatches[retained++] = watch;
+        else AudioObjectRemovePropertyListener(watch.object, &watch.property, inventoryChanged, NULL);
+    }
+    inventoryCount = retained;
+}
+static void watchInputMetadata(AudioDeviceID device) {
+    inventoryWatch(device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal);
+    inventoryWatch(device, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal);
+    inventoryWatch(device, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput);
+    inventoryWatch(device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput);
+    AudioObjectPropertyAddress a = address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput);
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &a, 0, NULL, &size) || !size) return;
+    AudioStreamID *streams = malloc(size);
+    if (!streams) return;
+    if (!AudioObjectGetPropertyData(device, &a, 0, NULL, &size, streams))
+        for (UInt32 i = 0; i < size / sizeof(*streams); i++) {
+            inventoryWatch(streams[i], kAudioStreamPropertyPhysicalFormat, kAudioObjectPropertyScopeGlobal);
+            inventoryWatch(streams[i], kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal);
+        }
+    free(streams);
+}
+char *cb_devices(char **error) {
     @autoreleasepool {
+        *error = NULL;
+        cb_device_revision();
         AudioObjectPropertyAddress a = address(kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
         UInt32 size = 0;
-        if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &a, 0, NULL, &size)) return strdup("[]");
+        OSStatus status = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &a, 0, NULL, &size);
+        if (status) { *error = strdup("Core Audioからデバイス一覧を取得できません"); return NULL; }
+        if (!size) { clearInventoryWatches(); return strdup("[]"); }
         AudioDeviceID *ids = malloc(size);
-        if (!ids) return strdup("[]");
+        if (!ids) { *error = strdup("デバイス一覧のメモリを確保できません"); return NULL; }
         NSMutableArray *result = [NSMutableArray array];
-        if (!AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, &size, ids)) {
+        status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, &size, ids);
+        if (status) { free(ids); *error = strdup("Core Audioのデバイス一覧を読み取れません"); return NULL; }
+        for (size_t i = 0; i < inventoryCount; i++) inventoryWatches[i].seen = NO;
+        {
             for (UInt32 i = 0; i < size / sizeof(AudioDeviceID); i++) {
                 uint32_t count = channels(ids[i], kAudioObjectPropertyScopeInput);
                 NSString *uid = stringProperty(ids[i], kAudioDevicePropertyDeviceUID);
                 if (!count || [uid hasPrefix:@"ChannelBridge"] || [uid hasPrefix:@"local.channelbridge."]) continue;
+                watchInputMetadata(ids[i]);
                 [result addObject:@{@"uid": uid, @"name": stringProperty(ids[i], kAudioObjectPropertyName),
                                     @"channels": @(count), @"rate": @(sampleRate(ids[i])), @"formats": inputFormats(ids[i])}];
             }
         }
         free(ids);
+        pruneInventoryWatches();
         NSData *json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
         return strdup([[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding].UTF8String);
     }
@@ -136,7 +211,10 @@ static OSStatus render(AudioObjectID device, const AudioTimeStamp *now,
     int valid = e->preview
         ? cb_input_peaks(in, input->mNumberBuffers, e->left, e->right, &l, &r)
         : cb_mix(in, input->mNumberBuffers, out, output ? output->mNumberBuffers : 0,
-                 e->left, e->right, e->mode, e->muted, &l, &r);
+                 e->left, e->right, e->mode, atomic_load_explicit(&e->muted, memory_order_relaxed), &l, &r);
+    if (atomic_load_explicit(&e->overview, memory_order_relaxed))
+        cb_all_peaks(in, input->mNumberBuffers, e->preview ? 0 : 2,
+                     e->inputChannels < MAX_METER_CHANNELS ? e->inputChannels : MAX_METER_CHANNELS, e->channelPeaks);
     if (!valid)
         atomic_fetch_add_explicit(&e->faults, 1, memory_order_relaxed);
     // Keep the loudest input sample until the next UI poll, including short transients.
@@ -248,7 +326,10 @@ static OSStatus setStreamUsage(AudioObjectPropertyScope scope) {
 }
 static char *failure(NSString *message, OSStatus status) {
     cb_stop();
-    return strdup([NSString stringWithFormat:@"%@ (Core Audio: %d)", message, (int)status].UTF8String);
+    NSDictionary *error = @{@"message": [NSString stringWithFormat:@"%@ (Core Audio: %d)", message, (int)status],
+                            @"code": @(status), @"retryable": @(!(status == -1 || status == -3 || status == -4))};
+    NSData *json = [NSJSONSerialization dataWithJSONObject:error options:0 error:nil];
+    return strdup([[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding].UTF8String);
 }
 // Capture directly from the physical device while send is stopped. No virtual
 // device, aggregate, rate changes, or enabled physical outputs are needed.
@@ -266,6 +347,7 @@ char *cb_preview(const char *uid, int left, int right) {
         engine.sourceRate = sampleRate(engine.source); engine.inputChannels = count;
         engine.left = left; engine.right = right;
         atomic_store(&engine.peakL, 0); atomic_store(&engine.peakR, 0);
+        for (uint32_t ch = 0; ch < MAX_METER_CHANNELS; ch++) atomic_store(&engine.channelPeaks[ch], 0);
         atomic_store(&engine.callbacks, 0); atomic_store(&engine.faults, 0);
         OSStatus status = AudioDeviceCreateIOProcID(engine.ioDevice, render, &engine, &engine.proc);
         if (status) return failure(@"入力メーターを準備できません", status);
@@ -324,8 +406,9 @@ char *cb_start(const char *uid, int left, int right, int mode, int muted) {
             !floatStreams(engine.aggregate, kAudioObjectPropertyScopeInput) || !floatStreams(engine.aggregate, kAudioObjectPropertyScopeOutput))
             return failure(@"未対応のオーディオ形式、またはチャンネル構成です", -3);
         engine.ioDevice = engine.aggregate;
-        engine.left = left + 2; engine.right = right + 2; engine.mode = mode; engine.muted = muted;
+        engine.left = left + 2; engine.right = right + 2; engine.mode = mode; atomic_store(&engine.muted, muted);
         atomic_store(&engine.peakL, 0); atomic_store(&engine.peakR, 0);
+        for (uint32_t ch = 0; ch < MAX_METER_CHANNELS; ch++) atomic_store(&engine.channelPeaks[ch], 0);
         atomic_store(&engine.callbacks, 0); atomic_store(&engine.faults, 0);
         status = AudioDeviceCreateIOProcID(engine.aggregate, render, &engine, &engine.proc);
         if (status) return failure(@"音声処理を準備できません", status);
@@ -350,4 +433,17 @@ int cb_healthy(void) {
     if (get(engine.source, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal, &size, &alive) || !alive) return 0;
     return sampleRate(engine.source) == engine.sourceRate && (engine.preview || sampleRate(engine.sink) == engine.sourceRate)
         && channels(engine.source, kAudioObjectPropertyScopeInput) == engine.inputChannels;
+}
+
+void cb_set_muted(int muted) { atomic_store_explicit(&engine.muted, muted != 0, memory_order_relaxed); }
+void cb_set_overview(int enabled) {
+    // Called only on the control worker; peak exchanges are also safe during I/O.
+    atomic_store_explicit(&engine.overview, enabled != 0, memory_order_relaxed);
+    for (uint32_t ch = 0; ch < MAX_METER_CHANNELS; ch++) cb_take_peak(&engine.channelPeaks[ch]);
+}
+uint32_t cb_all_levels(float *levels, uint32_t capacity) {
+    uint32_t count = engine.inputChannels < MAX_METER_CHANNELS ? engine.inputChannels : MAX_METER_CHANNELS;
+    if (count > capacity) count = capacity;
+    for (uint32_t ch = 0; ch < count; ch++) levels[ch] = cb_take_peak(&engine.channelPeaks[ch]);
+    return count;
 }

@@ -47,5 +47,18 @@ int main(void) {
     assert(cb_take_peak(&meter)==.7f && cb_take_peak(&meter)==0);
     cb_hold_peak(&meter,0.00001f); cb_hold_peak(&meter,NAN); cb_hold_peak(&meter,INFINITY);
     assert(cb_take_peak(&meter)==0.00001f); // -100 dBFS must not quantize to silence.
+    // All-channel overview skips virtual aggregate inputs and tolerates disabled
+    // buffers, while retaining transients independently on every physical input.
+    _Atomic uint32_t all[32] = {0};
+    cb_all_peaks(in, 1, 0, 32, all);
+    assert(cb_take_peak(&all[8]) == .25f && cb_take_peak(&all[15]) == .5f);
+    CBBuffer aggregate[] = {{NULL,2,4}, {hardware,32,4}};
+    cb_all_peaks(aggregate, 2, 2, 32, all);
+    assert(cb_take_peak(&all[8]) == .25f && cb_take_peak(&all[15]) == .5f);
+    assert(cb_take_peak(&all[0]) == 0);
+    cb_all_peaks(planar, 2, 0, 2, all);
+    assert(cb_take_peak(&all[0]) == 2 && cb_take_peak(&all[1]) == .4f);
+    cb_all_peaks(planar, 2, 0, 1, all);
+    assert(cb_take_peak(&all[0]) == 2 && cb_take_peak(&all[1]) == 0);
     puts("Mixer: channel routing, raw input meters, mute, cancellation, transient hold and quiet levels passed");
 }

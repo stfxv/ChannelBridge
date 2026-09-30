@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"channelbridge/internal/native"
 	"channelbridge/internal/settings"
@@ -12,6 +13,20 @@ import (
 
 // Finite JSON sentinel for silence. The UI renders it as −∞ dBFS.
 const meterFloorDB float32 = -120
+
+// Hold the largest displayed peak for three seconds, independently of live dBFS.
+// Expiry uses a clock, not UI ticks, so delayed snapshots cannot extend a peak.
+type heldPeak struct {
+	db    float32
+	until time.Time
+}
+
+func (p *heldPeak) update(db float32, now time.Time) float32 {
+	if !now.Before(p.until) || db >= p.db {
+		p.db, p.until = db, now.Add(3*time.Second)
+	}
+	return p.db
+}
 
 func peakDBFS(peak float32) float32 {
 	if peak <= 0 || math.IsNaN(float64(peak)) || math.IsInf(float64(peak), 0) {

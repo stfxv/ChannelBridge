@@ -41,6 +41,25 @@ static inline float cb_take_peak(_Atomic uint32_t *meter) {
     float peak; memcpy(&peak, &bits, sizeof(peak)); return peak;
 }
 
+// Overview is opt-in. Walk buffers once and retain each physical channel's peak;
+// aggregate virtual inputs are excluded by offset. No work for hidden overview.
+static inline void cb_all_peaks(const CBBuffer *input, uint32_t inputs,
+                                uint32_t offset, uint32_t count, _Atomic uint32_t *meters) {
+    uint32_t base = 0;
+    for (uint32_t i = 0; i < inputs; i++) {
+        CBBuffer b = input[i];
+        if (b.data) for (uint32_t ch = 0; ch < b.channels; ch++) {
+            uint32_t absolute = base + ch;
+            if (absolute < offset || absolute - offset >= count) continue;
+            float peak = 0;
+            for (uint32_t f = 0; f < b.frames; f++)
+                peak = fmaxf(peak, fabsf(cb_sample(b.data[f * b.channels + ch])));
+            cb_hold_peak(&meters[absolute - offset], peak);
+        }
+        base += b.channels;
+    }
+}
+
 // Input-only metering has no output buffers and never routes audio.
 static inline int cb_input_peaks(const CBBuffer *input, uint32_t inputs,
                                  uint32_t left, uint32_t right, float *peakL, float *peakR) {

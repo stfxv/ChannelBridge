@@ -18,12 +18,24 @@ type Config struct {
 
 func Default() Config { return Config{Left: 1, Right: 2, Mode: "mono"} }
 
-func (c Config) Validate(channels int) error {
+// Selection validation is independent of device presence. Disappearing channels
+// stay saved until the user explicitly picks a replacement.
+func (c Config) ValidateSelection() error {
 	if c.DeviceUID == "" {
 		return fmt.Errorf("入力デバイスを選択してください")
 	}
 	if c.Mode != "mono" && c.Mode != "stereo" && c.Mode != "mix" {
 		return fmt.Errorf("不正な出力モードです")
+	}
+	if c.Left < 1 || c.Right < 1 {
+		return fmt.Errorf("入力チャンネルは1以上を指定してください")
+	}
+	return nil
+}
+
+func (c Config) Validate(channels int) error {
+	if err := c.ValidateSelection(); err != nil {
+		return err
 	}
 	if c.Left < 1 || c.Left > channels {
 		return fmt.Errorf("入力チャンネルが範囲外です（1〜%d）", channels)

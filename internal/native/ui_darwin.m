@@ -8,12 +8,15 @@
 @property NSStatusItem *item;
 @property NSArray<NSImage *> *statusIcons;
 @property NSPopUpButton *devices, *left, *right, *mode;
-@property NSTextField *status, *format, *levelL, *levelR;
+@property NSTextField *status, *format, *levelL, *levelR, *peakL, *peakR;
+@property NSWindow *overviewWindow;
+@property NSView *overviewContent;
+@property NSMutableArray<NSButton *> *overviewButtons;
 @property NSButton *start, *mute, *install;
 @property NSLevelIndicator *meterL, *meterR;
 @property NSDictionary *model;
 @property NSString *deviceSignature;
-@property BOOL updating, permissionRequested;
+@property BOOL updating, permissionRequested, pendingStart;
 @property NSInteger lastAuthorization;
 @end
 static CBApp *delegate;
@@ -34,6 +37,24 @@ static void action(NSString *name, NSDictionary *payload) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:payload ?: @{} options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     goAction((char *)name.UTF8String, (char *)json.UTF8String);
+}
+// Keep unavailable saved channels visible and selected. A later mute/mode
+// action must never copy a default Ch1 from a newly rebuilt popup.
+static void updateChannels(NSPopUpButton *popup, int count, NSInteger selected) {
+    [popup removeAllItems];
+    for (int ch = 1; ch <= count; ch++) {
+        [popup addItemWithTitle:[NSString stringWithFormat:@"Ch %d", ch]];
+        popup.lastItem.tag = ch;
+    }
+    if (selected > 0 && selected > count) {
+        [popup addItemWithTitle:[NSString stringWithFormat:@"Ch %ld（現在使用不可）", (long)selected]];
+        popup.lastItem.tag = selected;
+        popup.lastItem.enabled = NO;
+    }
+    [popup selectItemWithTag:selected];
+}
+static NSString *dbText(double db) {
+    return db <= -120 ? @"−∞" : [NSString stringWithFormat:@"%.1f", db];
 }
 @implementation CBApp
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -76,7 +97,13 @@ static void action(NSString *name, NSDictionary *payload) {
         m.minValue = -60; m.maxValue = 0; m.warningValue = -6; m.criticalValue = -1;
         m.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity; [v addSubview:m];
     }
-    [v addSubview:label(@"入力ピーク: −60〜0 dBFS · 開始前・停止中も表示", NSMakeRect(30, 132, 462, 18), 11, NSColor.secondaryLabelColor)];
+    self.peakL = label(@"", NSMakeRect(30, 132, 224, 18), 11, NSColor.secondaryLabelColor);
+    self.peakR = label(@"", NSMakeRect(268, 132, 224, 18), 11, NSColor.secondaryLabelColor);
+    for (NSTextField *peak in @[self.peakL, self.peakR]) {
+        peak.toolTip = @"最大入力ピークを3秒保持します。0 dBFS以上は赤で表示します。";
+        [v addSubview:peak];
+    }
+    [v addSubview:button(@"全入力のレベル", NSMakeRect(268, 100, 218, 28), self, @selector(showOverview:))];
     self.mute = [NSButton checkboxWithTitle:@"送出をミュート" target:self action:@selector(changed:)];
     self.mute.frame = NSMakeRect(28, 101, 220, 26); [v addSubview:self.mute];
     self.status = label(@"", NSMakeRect(30, 56, 462, 38), 12, NSColor.secondaryLabelColor);
@@ -104,7 +131,8 @@ static void action(NSString *name, NSDictionary *payload) {
     NSMenu *submenu = [[NSMenu alloc] init]; [submenu addItemWithTitle:@"ChannelBridge を終了" action:@selector(terminate:) keyEquivalent:@"q"]; appMenu.submenu = submenu; NSApp.mainMenu = main;
     [self update:self.model]; [self.window center]; [self show:nil];
     [self checkPermission];
-    [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
+    NSTimer *timer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
 }
 - (void)show:(id)sender { [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; }
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)flag { [self show:nil]; return YES; }
@@ -118,25 +146,81 @@ static void action(NSString *name, NSDictionary *payload) {
     if (status == AVAuthorizationStatusNotDetermined) {
         if (self.permissionRequested) return;
         self.permissionRequested = YES;
+        action(@"permission_pending", nil);
         [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
             dispatch_async(dispatch_get_main_queue(), ^{ self.permissionRequested = NO; [self checkPermission]; });
         }];
         return;
     }
-    if (self.lastAuthorization == status) return;
-    self.lastAuthorization = status;
-    action(status == AVAuthorizationStatusAuthorized ? @"permission_granted" : @"permission_denied", nil);
+    if (self.lastAuthorization != status) {
+        self.lastAuthorization = status;
+        action(status == AVAuthorizationStatusAuthorized ? @"permission_granted" : @"permission_denied", nil);
+    }
+    if (self.pendingStart) {
+        self.pendingStart = NO;
+        if (status == AVAuthorizationStatusAuthorized) action(@"start", nil);
+    }
 }
-- (void)tick:(id)sender { [self checkPermission]; action(@"tick", nil); }
-- (void)stop:(id)sender { action(@"stop", nil); }
+- (void)tick:(id)sender { [self checkPermission]; }
+- (void)stop:(id)sender { self.pendingStart = NO; action(@"stop", nil); }
 - (void)toggle:(id)sender {
-    if ([self.model[@"wanted"] boolValue]) { action(@"stop", nil); return; }
-    AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
-    if (status == AVAuthorizationStatusNotDetermined) {
-        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
-            dispatch_async(dispatch_get_main_queue(), ^{ action(granted ? @"start" : @"permission_denied", nil); });
-        }];
-    } else action(status == AVAuthorizationStatusAuthorized ? @"start" : @"permission_denied", nil);
+    if ([self.model[@"wanted"] boolValue] || self.pendingStart) { [self stop:nil]; return; }
+    self.pendingStart = YES;
+    [self checkPermission]; // Both preview and Start share one permission request.
+}
+- (void)showOverview:(id)sender {
+    if (!self.overviewWindow) {
+        self.overviewWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 340)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+        self.overviewWindow.title = @"入力チャンネルのレベル";
+        self.overviewWindow.delegate = self;
+        self.overviewWindow.releasedWhenClosed = NO;
+        [self.overviewWindow.contentView addSubview:label(@"クリックで左 / モノ入力に選択", NSMakeRect(20, 307, 480, 22), 12, NSColor.secondaryLabelColor)];
+        NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(12, 12, 496, 287)];
+        scroll.hasVerticalScroller = YES;
+        self.overviewContent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 478, 287)];
+        scroll.documentView = self.overviewContent;
+        [self.overviewWindow.contentView addSubview:scroll];
+        self.overviewButtons = [NSMutableArray array];
+        [self.overviewWindow center];
+    }
+    [self.overviewWindow makeKeyAndOrderFront:nil];
+    action(@"overview", @{@"enabled": @YES});
+}
+- (void)windowWillClose:(NSNotification *)notification {
+    if (notification.object == self.overviewWindow) action(@"overview", @{@"enabled": @NO});
+}
+- (void)selectChannel:(NSButton *)sender {
+    if (![self.left selectItemWithTag:sender.tag]) return;
+    [self changed:self.left];
+}
+- (void)updateOverview:(NSArray *)levels active:(BOOL)active {
+    if (!self.overviewWindow.isVisible) return;
+    NSInteger count = 0;
+    NSString *uid = self.model[@"config"][@"device_uid"];
+    for (NSDictionary *device in self.model[@"devices"])
+        if ([device[@"uid"] isEqual:uid]) count = MIN(512, [device[@"channels"] integerValue]);
+    if (self.overviewButtons.count != count) {
+        for (NSButton *button in self.overviewButtons) [button removeFromSuperview];
+        [self.overviewButtons removeAllObjects];
+        CGFloat height = MAX(287, ((count + 3) / 4) * 56 + 12);
+        self.overviewContent.frame = NSMakeRect(0, 0, 478, height);
+        for (NSInteger ch = 0; ch < count; ch++) {
+            NSButton *b = button(@"", NSMakeRect(6 + (ch % 4) * 117, height - 58 - (ch / 4) * 56, 111, 48), self, @selector(selectChannel:));
+            b.tag = ch + 1;
+            b.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+            b.toolTip = @"クリックすると左 / モノ入力チャンネルを選択します";
+            [self.overviewContent addSubview:b];
+            [self.overviewButtons addObject:b];
+        }
+    }
+    for (NSInteger ch = 0; ch < count; ch++) {
+        NSButton *b = self.overviewButtons[ch];
+        BOOL available = active && ch < levels.count;
+        double db = available ? [levels[ch] doubleValue] : -120;
+        b.title = [NSString stringWithFormat:@"Ch %ld\n%@", (long)ch + 1, available ? [dbText(db) stringByAppendingString:@" dBFS"] : @"—"];
+        b.bezelColor = available && db >= 0 ? NSColor.systemRedColor : nil;
+    }
 }
 - (void)install:(id)sender {
     NSString *path = [NSBundle.mainBundle pathForResource:@"ChannelBridgeDriver" ofType:@"pkg"];
@@ -171,7 +255,9 @@ static void action(NSString *name, NSDictionary *payload) {
     NSArray *devices = model[@"devices"];
     if (![devices isKindOfClass:NSArray.class]) devices = @[];
     // Don't rebuild menus on every meter tick: preserve an open popup interaction.
-    NSString *signature = [NSString stringWithFormat:@"%@/%@", devices, uid];
+    NSMutableArray *menuDevices = [NSMutableArray array];
+    for (NSDictionary *d in devices) [menuDevices addObject:@[d[@"uid"], d[@"name"], d[@"channels"]]];
+    NSString *signature = [NSString stringWithFormat:@"%@/%@", menuDevices, uid];
     if (![signature isEqualToString:self.deviceSignature]) {
         self.deviceSignature = signature; [self.devices removeAllItems]; int count = 0;
         [self.devices addItemWithTitle:@"入力デバイスを選択…"];
@@ -181,8 +267,8 @@ static void action(NSString *name, NSDictionary *payload) {
             if ([d[@"uid"] isEqual:uid]) { [self.devices selectItem:self.devices.lastItem]; count = [d[@"channels"] intValue]; }
         }
         if (uid.length && !count) { [self.devices addItemWithTitle:@"保存した入力（未接続）"]; self.devices.lastItem.representedObject = uid; [self.devices selectItem:self.devices.lastItem]; }
-        [self.left removeAllItems]; [self.right removeAllItems];
-        for (int i = 1; i <= count; i++) for (NSPopUpButton *p in @[self.left, self.right]) { [p addItemWithTitle:[NSString stringWithFormat:@"Ch %d", i]]; p.lastItem.tag = i; }
+        updateChannels(self.left, count, [config[@"left"] integerValue]);
+        updateChannels(self.right, count, [config[@"right"] integerValue]);
     }
     if (self.left.selectedItem.tag != [config[@"left"] integerValue]) [self.left selectItemWithTag:[config[@"left"] integerValue]];
     if (self.right.selectedItem.tag != [config[@"right"] integerValue]) [self.right selectItemWithTag:[config[@"right"] integerValue]];
@@ -197,7 +283,16 @@ static void action(NSString *name, NSDictionary *payload) {
     double dbL = [model[@"level_left"] doubleValue], dbR = [model[@"level_right"] doubleValue];
     [self updateLevel:self.levelL meter:self.meterL channel:[config[@"left"] integerValue] db:dbL active:active];
     [self updateLevel:self.levelR meter:self.meterR channel:[config[@"right"] integerValue] db:dbR active:active];
-    self.levelR.hidden = mode == 0; self.meterR.hidden = mode == 0;
+    self.levelR.hidden = mode == 0; self.meterR.hidden = mode == 0; self.peakR.hidden = mode == 0;
+    NSArray *peakLabels = @[self.peakL, self.peakR];
+    NSArray *peakValues = @[model[@"peak_left"] ?: @(-120), model[@"peak_right"] ?: @(-120)];
+    for (NSUInteger i = 0; i < 2; i++) {
+        double peak = [peakValues[i] doubleValue];
+        NSTextField *label = peakLabels[i];
+        label.stringValue = active ? [NSString stringWithFormat:@"最大 %@ dBFS", dbText(peak)] : @"最大 —";
+        label.textColor = active && peak >= 0 ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
+    }
+    [self updateOverview:[model[@"all_levels"] isKindOfClass:NSArray.class] ? model[@"all_levels"] : @[] active:active];
     NSString *startTitle = [model[@"wanted"] boolValue] ? @"停止" : @"開始";
     if (![self.start.title isEqualToString:startTitle]) self.start.title = startTitle;
     self.start.enabled = [model[@"wanted"] boolValue] || ([model[@"driver"] boolValue] && uid.length > 0);
@@ -214,7 +309,7 @@ void cb_run(const char *model) {
         // A single routing instance prevents duplicate summing into the virtual mic.
         NSArray *instances = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"local.channelbridge.app"];
         for (NSRunningApplication *app in instances) if (app.processIdentifier != NSProcessInfo.processInfo.processIdentifier) {
-            [app activateWithOptions:NSApplicationActivateIgnoringOtherApps]; return;
+            [app activateWithOptions:0]; return;
         }
         delegate = [[CBApp alloc] init];
         delegate.model = [NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:model] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
@@ -224,6 +319,9 @@ void cb_run(const char *model) {
 void cb_present(const char *model) {
     @autoreleasepool {
         NSDictionary *value = [NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:model] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-        [delegate update:value];
+        // AppKit is main-thread only. Capture the parsed immutable snapshot before
+        // Go frees its C string, then deliver through common run-loop modes.
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{ [delegate update:value]; });
+        CFRunLoopWakeUp(CFRunLoopGetMain());
     }
 }
