@@ -1,0 +1,35 @@
+name: Rust rewrite checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ['1.85.0', '1.98.1']
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Minimum Rust regressions
+        if: matrix.rust == '1.85.0'
+        run: cargo test --workspace --locked
+      - name: Algorithms, publication model, and Apple ABI oracle
+        if: matrix.rust == '1.98.1'
+        run: bash scripts/test-rust.sh
+      - name: Apple Silicon and Intel compilation
+        run: |
+          cargo check --workspace --locked --target aarch64-apple-darwin
+          cargo check --workspace --locked --target x86_64-apple-darwin

@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/audio", "crates/contract", "crates/hal-abi", "crates/driver"]
+
+[workspace.package]
+version = "0.5.0-alpha.1"
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# HAL callbacks must contain unwinding before returning to the host.
+# Aborting the host process is not an error-handling strategy.
+panic = "unwind"

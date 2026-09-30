@@ -2,6 +2,8 @@
 
 RME などの多チャンネル入力から必要なチャンネルを選び、他のアプリに2チャンネルの **ChannelBridge Mic** として渡す macOS ミニアプリ。
 
+Rustによるアプリ・仮想ドライバの全面再実装を進めています。[実装計画](RUST_REWRITE_PLAN.md)と[進捗・検証範囲](RUST_PROGRESS.md)を参照してください。`crates/` は開発中で、現在のインストーラや通常版をまだ置き換えません。Rustの基礎検証は `bash scripts/test-rust.sh` で実行します。
+
 ## 使い方
 
 1. `dist/ChannelBridge.app` を Applications フォルダに置いて起動します。

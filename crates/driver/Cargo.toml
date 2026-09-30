@@ -1,0 +1,14 @@
+[package]
+name = "channelbridge-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+channelbridge-audio = { path = "../audio" }
+channelbridge-contract = { path = "../contract" }
+channelbridge-hal-abi = { path = "../hal-abi" }
