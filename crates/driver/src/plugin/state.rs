@@ -246,6 +246,13 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     if r.pending_rate.load(Ordering::Acquire) != rate || !SUPPORTED_RATES.contains(&rate) {
         return ILLEGAL;
     }
+    // A completed host callback consumes this request even when we reject it.
+    // Do not depend on the host issuing Abort after a failed Perform call.
+    // Clear only this request; a different request must never be retired here.
+    let _request = PendingChange {
+        pending: &r.pending_rate,
+        rate,
+    };
     // The host must quiesce all active I/O before changing its timeline.
     let Ok(_clients) = r.clients.lock() else {
         return UNSPECIFIED;
@@ -253,9 +260,19 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     if r.started.load(Ordering::Acquire) != 0 {
         return ILLEGAL;
     }
-    let status = reset_clock(r, Some(rate));
-    r.pending_rate.store(0, Ordering::Release);
-    status
+    reset_clock(r, Some(rate))
+}
+
+struct PendingChange<'a> {
+    pending: &'a AtomicU32,
+    rate: u32,
+}
+impl Drop for PendingChange<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .pending
+            .compare_exchange(self.rate, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
 }
 pub(super) fn abort_rate_change(action: u64) -> i32 {
     let Some(r) = runtime() else {

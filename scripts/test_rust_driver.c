@@ -49,6 +49,13 @@ static void rate_change(double rate) {
     assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)!=0); // Still running.
     assert((*driver)->StopIO(driver,Device,1)==0);
     assert((*driver)->StopIO(driver,Device,2)==0);
+    // A rejected Perform consumes the request. The host need not call Abort;
+    // a new asynchronous request must be accepted after stopping I/O.
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)!=0);
+    assert((*driver)->SetPropertyData(driver,Device,0,&a,0,NULL,sizeof(rate),&rate)==0);
+    for (int i=0;i<2000 && atomic_load(&pending_action)==0;i++) usleep(1000);
+    action=atomic_exchange(&pending_action,0);
+    assert(action==(UInt64)rate);
     assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)==0);
     assert(get_rate()==rate);
     assert((*driver)->StartIO(driver,Device,1)==0);
