@@ -440,3 +440,21 @@ HAL 2003332927; coreaudiod/test host still began at 12:00:42. Therefore actual n
 live-driver readiness remains unproven. Asked the user to report completion of a
 normal Mac reboot after the installed test update. A successful future preflight
 will not establish exact Git revision, signal quality or long-call acceptance.
+
+
+### 2026-10-01 reboot exposes custom-property transport mismatch
+
+The Mac rebooted: coreaudiod/test host now began at 20:44:12, but --ready still
+returned HAL 2003332927. Installed bundle is 0.5.2 and includes its Rust package
+string; reboot alone was insufficient. Apple SDK AudioServerPlugIn.h documents
+custom-property None as no data and supports CFString / CFPropertyList marshalling.
+The driver incorrectly declared None while returning raw cbst/cbid bytes. Corrected
+cbst to owned CFData/property-list and cbid to owned CFString, pointer-sized getter
+ABI, bounded/type-checked client decoding and caller release. Full default test
+script and Clippy passed before the version bump. Updated the release to package
+0.5.3-alpha.1 / Bundle 0.5.3 build 4 to distinguish the transport correction.
+This identifies an API mismatch, not yet proof that the real host error is resolved.
+The prior direct-C run against the installed test bundle used a production-built
+oracle and failed its namespace expectation; it is not evidence of a broken UID.
+
+0.5.3 Universal test app/driver build, C fake-HAL CF transport checks, ad-hoc signatures and embedded-source offline workspace rebuild passed. Combined test package payload executable/archive comparisons passed. Production-feature Clippy passed. Actual installation and CoreAudio transport success remain pending; requested action-time authorization to open the rebuilt installer.

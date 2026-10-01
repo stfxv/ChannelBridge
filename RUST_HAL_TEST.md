@@ -86,3 +86,15 @@ or change default devices. Failure blocks actual-audio acceptance; an on-disk pl
 or installer receipt cannot substitute for this check. Success establishes package
 identity/protocol readiness only, not the exact Git revision or audio quality.
 Use `--features production` only to inspect the production target explicitly.
+
+
+### CF transport correction (0.5.3)
+
+Apple AudioServerPlugIn.h defines custom-property None as *no property data*, not
+an arbitrary raw payload. cbst is now declared CFPropertyList and returned as an
+owned CFData (48-byte protocol-v1 payload); cbid is declared/returned as owned
+CFString. The client checks CF type, bounds/copies the payload and releases the
+returned reference. Direct C mock tests validate declaration, pointer-sized ABI,
+actual CF type/content and caller release. They do not test host IPC marshalling.
+Installed 0.5.2 still failed after a verified Mac reboot; raw/None transport was a
+concrete mismatch and probable cause, but actual 0.5.3 host success is pending.

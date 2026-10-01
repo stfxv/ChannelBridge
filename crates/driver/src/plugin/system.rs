@@ -16,6 +16,7 @@ unsafe extern "C" {
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
+    fn CFDataCreate(allocator: CfRef, bytes: *const u8, length: isize) -> CfRef;
     fn CFUUIDGetUUIDBytes(uuid: CfRef) -> UuidBytes;
     fn CFStringCreateWithCString(allocator: CfRef, text: *const c_char, encoding: u32) -> CfRef;
     fn CFStringGetCString(value: CfRef, out: *mut c_char, capacity: isize, encoding: u32) -> u8;
@@ -68,4 +69,10 @@ pub unsafe fn string_equals(value: CfRef, expected: &str) -> bool {
     }
     let actual = unsafe { std::ffi::CStr::from_ptr(bytes.as_ptr()) };
     actual.to_bytes() == expected.as_bytes()
+}
+
+pub fn data(bytes: &[u8]) -> Option<CfRef> {
+    // SAFETY: CFData copies the live slice and transfers a +1 reference to caller.
+    let result = unsafe { CFDataCreate(core::ptr::null(), bytes.as_ptr(), bytes.len() as isize) };
+    (!result.is_null()).then_some(result)
 }

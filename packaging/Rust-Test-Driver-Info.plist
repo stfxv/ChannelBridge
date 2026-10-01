@@ -5,8 +5,8 @@
 <key>CFBundleIdentifier</key><string>local.channelbridge.rust.driver.test</string>
 <key>CFBundleName</key><string>ChannelBridge Rust Test</string>
 <key>CFBundlePackageType</key><string>BNDL</string>
-<key>CFBundleVersion</key><string>3</string>
-<key>CFBundleShortVersionString</key><string>0.5.2</string>
+<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleShortVersionString</key><string>0.5.3</string>
 <key>CFPlugInDynamicRegistration</key><false/>
 <key>CFPlugInFactories</key><dict><key>51D8C4EE-7CF7-46D4-9940-CEBA9EF0F843</key><string>ChannelBridge_Create</string></dict>
 <key>CFPlugInTypes</key><dict><key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key><array><string>51D8C4EE-7CF7-46D4-9940-CEBA9EF0F843</string></array></dict>

@@ -1,7 +1,6 @@
 //! Read-only control-path diagnostic access. Never opens a device or clears totals.
 use crate::devices;
 use channelbridge_contract::{DIAGNOSTICS_SELECTOR, DriverCounters};
-use channelbridge_hal_abi::fourcc;
 
 pub fn read_target_driver() -> Result<DriverCounters, Box<dyn std::error::Error>> {
     Ok(DriverCounters::decode(&read_property(
@@ -34,7 +33,11 @@ fn read_property(selector: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if selected.next().is_some() {
         return Err("duplicate virtual microphone UID".into());
     }
-    Ok(devices::property(device.id, selector, fourcc(b"glob"))?)
+    if selector == DIAGNOSTICS_SELECTOR {
+        Ok(devices::data(device.id, selector, 48)?)
+    } else {
+        Ok(devices::text(device.id, selector)?.into_bytes())
+    }
 }
 #[cfg(test)]
 mod tests {

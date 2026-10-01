@@ -37,9 +37,9 @@ impl Value {
             Self::Format => size_of::<StreamFormat>() as u32,
             Self::Formats => SUPPORTED_RATES.len() as u32 * size_of::<RangedFormat>() as u32,
             Self::Layout => 12,
-            Self::Diagnostics => 48,
+            Self::Diagnostics => size_of::<CfRef>() as u32,
             Self::CustomProperties => 24,
-            Self::Identity => env!("CARGO_PKG_VERSION").len() as u32,
+            Self::Identity => size_of::<CfRef>() as u32,
         }
     }
 }
@@ -314,14 +314,14 @@ fn bytes(value: Value) -> Vec<u8> {
             }
         }
         Value::CustomProperties => {
-            // AudioServerPlugInCustomPropertyInfo: raw bytes, no qualifier.
+            // AudioServerPlugInCustomPropertyInfo: CFData property list / CFString, no qualifier.
             // The host needs this descriptor to marshal our diagnostic property.
             for field in [
                 fourcc(b"cbst"),
-                0,
+                fourcc(b"plst"),
                 0,
                 channelbridge_contract::DRIVER_IDENTITY_SELECTOR,
-                0,
+                fourcc(b"cfst"),
                 0,
             ] {
                 result.extend(field.to_ne_bytes());
@@ -378,6 +378,20 @@ pub(super) unsafe extern "C" fn get_data(
             return BAD_SIZE;
         }
         match value {
+            Value::Diagnostics => {
+                let Some(value) = system::data(&bytes(Value::Diagnostics)) else {
+                    return UNSPECIFIED;
+                };
+                // SAFETY: checked pointer-sized output; caller owns the +1 CFData.
+                unsafe { output.cast::<CfRef>().write_unaligned(value) };
+            }
+            Value::Identity => {
+                let Some(value) = system::string(env!("CARGO_PKG_VERSION")) else {
+                    return UNSPECIFIED;
+                };
+                // SAFETY: checked pointer-sized output; caller owns the +1 CFString.
+                unsafe { output.cast::<CfRef>().write_unaligned(value) };
+            }
             Value::Text(text) => {
                 let Some(value) = system::string(text) else {
                     return UNSPECIFIED;

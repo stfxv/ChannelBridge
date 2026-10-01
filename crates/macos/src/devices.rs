@@ -83,6 +83,9 @@ unsafe extern "C" {
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
+    fn CFDataGetTypeID() -> usize;
+    fn CFDataGetLength(object: *const c_void) -> isize;
+    fn CFDataGetBytePtr(object: *const c_void) -> *const u8;
     fn CFRelease(object: *const c_void);
     fn CFGetTypeID(object: *const c_void) -> usize;
     fn CFStringGetTypeID() -> usize;
@@ -157,7 +160,7 @@ fn ids(bytes: &[u8]) -> Result<Vec<ObjectId>, Error> {
         .collect())
 }
 
-fn text(object: ObjectId, selector: u32) -> Result<String, Error> {
+pub(crate) fn text(object: ObjectId, selector: u32) -> Result<String, Error> {
     let bytes = property(object, selector, GLOBAL)?;
     let pointer_bytes: [u8; size_of::<usize>()] =
         bytes.try_into().map_err(|_| Error::MalformedProperty)?;
@@ -253,6 +256,42 @@ pub fn list() -> Result<Vec<Result<Device, Error>>, Error> {
             })
         })
         .collect())
+}
+
+/// Read an owned CFData property on the control path and copy its bounded payload.
+pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Vec<u8>, Error> {
+    let bytes = property(object, selector, GLOBAL)?;
+    let pointer_bytes: [u8; size_of::<usize>()] =
+        bytes.try_into().map_err(|_| Error::MalformedProperty)?;
+    let pointer = usize::from_ne_bytes(pointer_bytes) as *const c_void;
+    if pointer.is_null() {
+        return Err(Error::MalformedProperty);
+    }
+    struct OwnedCf(*const c_void);
+    impl Drop for OwnedCf {
+        fn drop(&mut self) {
+            // SAFETY: successful HAL CF getter transfers one retained reference.
+            unsafe { CFRelease(self.0) };
+        }
+    }
+    let owned = OwnedCf(pointer);
+    // SAFETY: HAL returned a live owned CF object; check type before CFData access.
+    if unsafe { CFGetTypeID(owned.0) != CFDataGetTypeID() } {
+        return Err(Error::MalformedProperty);
+    }
+    let length = unsafe { CFDataGetLength(owned.0) };
+    if length < 0 || length as usize > maximum {
+        return Err(Error::PropertyTooLarge);
+    }
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let source = unsafe { CFDataGetBytePtr(owned.0) };
+    if source.is_null() {
+        return Err(Error::MalformedProperty);
+    }
+    // SAFETY: validated CFData exposes length readable bytes while owner is live.
+    Ok(unsafe { std::slice::from_raw_parts(source, length as usize) }.to_vec())
 }
 
 #[cfg(test)]
