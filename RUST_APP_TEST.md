@@ -38,3 +38,9 @@ starts input preview; sending requires the send button. It requires the separate
 Rust test HAL driver to be recognized. Do not treat a successful app build or
 non-visible smoke as proof of HAL transfer, actual UI interactions, microphone
 permission handling, or long-call stability.
+
+Closing the test window now keeps the app running. The menu-bar menu offers
+open, send/stop, mute, and quit. Reopening the app from macOS reveals the existing
+window. Use the explicit quit menu to stop the worker and exit. The menu-bar
+microphone symbol uses a macOS template image so macOS can adapt its color to
+appearance; actual icon visibility still requires a visual check.

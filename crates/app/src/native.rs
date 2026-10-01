@@ -14,6 +14,7 @@ use objc2_foundation::{
 };
 
 struct Runtime {
+    menu: Option<crate::status_menu::StatusMenu>,
     screen: Screen,
     worker: channelbridge_core::worker::Worker,
     permission_monitor: bool,
@@ -41,7 +42,12 @@ define_class!(
     }
     unsafe impl NSApplicationDelegate for AppDelegate {
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
-        fn close_last_window(&self, _application: &NSApplication) -> bool { true }
+        fn close_last_window(&self, _application: &NSApplication) -> bool { false }
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn reopen(&self, _application: &NSApplication, _visible: bool) -> bool {
+            self.reveal_window();
+            true
+        }
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _application: &NSApplication) -> NSApplicationTerminateReply {
             self.ivars().shutting_down.set(true);
@@ -50,6 +56,10 @@ define_class!(
         }
     }
     impl AppDelegate {
+        #[unsafe(method(showWindow:))]
+        fn show_window(&self, _sender: &objc2::runtime::AnyObject) {
+            self.reveal_window();
+        }
         #[unsafe(method(requestMicrophone:))]
         fn request_microphone(&self, _sender: &NSButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
@@ -60,11 +70,11 @@ define_class!(
             }
         }
         #[unsafe(method(toggleSend:))]
-        fn toggle_send(&self, _sender: &NSButton) {
+        fn toggle_send(&self, _sender: &objc2::runtime::AnyObject) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.toggle_send(&runtime.worker); }
         }
         #[unsafe(method(toggleMute:))]
-        fn toggle_mute(&self, _sender: &NSButton) {
+        fn toggle_mute(&self, _sender: &objc2::runtime::AnyObject) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
                 runtime.screen.toggle_mute(&runtime.worker);
             }
@@ -93,6 +103,9 @@ define_class!(
                     runtime.screen.sync_permission(&runtime.worker);
                 }
                 runtime.screen.update(&snapshot);
+                if let Some(menu) = runtime.menu.as_ref() {
+                    menu.update(main, &snapshot, runtime.screen.send_button.isEnabled(), runtime.screen.mute_button.isEnabled());
+                }
                 if snapshot.finished && self.ivars().shutting_down.replace(false) {
                     NSApplication::sharedApplication(main).replyToApplicationShouldTerminate(true);
                 }
@@ -101,6 +114,15 @@ define_class!(
     }
 );
 impl AppDelegate {
+    fn reveal_window(&self) {
+        if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+            runtime.screen.window.makeKeyAndOrderFront(None);
+            let main = MainThreadMarker::new().expect("window action on main thread");
+            // NSApplication.activate is newer than the macOS 13 deployment target.
+            #[allow(deprecated)]
+            NSApplication::sharedApplication(main).activateIgnoringOtherApps(true);
+        }
+    }
     fn new(main: MainThreadMarker, runtime: Runtime) -> Retained<Self> {
         let allocated = Self::alloc(main).set_ivars(DelegateState {
             runtime: std::cell::RefCell::new(Some(runtime)),
@@ -540,11 +562,22 @@ pub fn run() {
     let delegate = AppDelegate::new(
         main,
         Runtime {
+            menu: None,
             screen,
             worker,
             permission_monitor: !smoke,
         },
     );
+    if !smoke {
+        let menu = crate::status_menu::StatusMenu::new(main, &delegate);
+        delegate
+            .ivars()
+            .runtime
+            .borrow_mut()
+            .as_mut()
+            .expect("runtime")
+            .menu = Some(menu);
+    }
     {
         let state = delegate.ivars().runtime.borrow();
         let screen = &state.as_ref().expect("runtime").screen;
