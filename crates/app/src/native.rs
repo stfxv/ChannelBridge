@@ -89,6 +89,7 @@ impl AppDelegate {
     }
 }
 struct Screen {
+    meters: crate::input_meters::InputMeters,
     routing: crate::routing_controls::RoutingControls,
     window: Retained<NSWindow>,
     devices: Retained<NSPopUpButton>,
@@ -134,15 +135,17 @@ impl Screen {
         ));
         let status = NSTextField::labelWithString(ns_string!("入力機器を確認しています"), main);
         status.setFrame(NSRect::new(
-            NSPoint::new(20.0, 30.0),
-            NSSize::new(340.0, 30.0),
+            NSPoint::new(20.0, 10.0),
+            NSSize::new(340.0, 25.0),
         ));
         let view = window.contentView().expect("window content view");
+        let meters = crate::input_meters::InputMeters::new(main, &view);
         let routing = crate::routing_controls::RoutingControls::new(main, &view);
         view.addSubview(&devices);
         view.addSubview(&format);
         view.addSubview(&status);
         Self {
+            meters,
             routing,
             window,
             devices,
@@ -157,6 +160,8 @@ impl Screen {
         }
     }
     fn update(&self, snapshot: &channelbridge_core::worker::Snapshot) {
+        self.meters
+            .update(&snapshot.config, snapshot.audio.as_ref());
         if self
             .pending_attempt
             .get()
@@ -417,7 +422,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                8
+                11
             );
             assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
             if let Some(device) = snapshot.devices.first() {
@@ -495,6 +500,7 @@ fn smoke_device_save(main: MainThreadMarker) {
     )
     .expect("fixture worker");
     let screen = Screen::new(main, None);
+    screen.meters.smoke();
     screen.routing.smoke();
     let wait = |predicate: &dyn Fn(&channelbridge_core::worker::Snapshot) -> bool| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);

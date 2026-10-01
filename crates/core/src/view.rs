@@ -18,6 +18,7 @@ pub struct InputFormat {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputLevel {
     pub channel: u32,
+    pub fresh: bool,
     pub current_dbfs: Option<f32>,
     pub held_dbfs: Option<f32>,
 }

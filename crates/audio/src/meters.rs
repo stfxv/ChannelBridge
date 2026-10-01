@@ -39,6 +39,8 @@ pub struct MeterReader {
 pub struct Level {
     pub current: f32,
     pub held_peak: f32,
+    /// A callback updated this channel within the last 250 ms.
+    pub fresh: bool,
 }
 
 fn allocated<T>(count: usize, mut make: impl FnMut() -> T) -> Option<Box<[T]>> {
@@ -52,7 +54,7 @@ pub fn meter_bank(channels: usize, ticks_per_second: u64) -> Option<(MeterWriter
         return None;
     }
     let levels = allocated(channels, || AtomicU32::new(0))?;
-    let updated = allocated(channels, || AtomicU64::new(0))?;
+    let updated = allocated(channels, || AtomicU64::new(u64::MAX))?;
     let history = allocated(channels * BUCKETS, || Slot {
         sequence: AtomicU64::new(0),
         bucket: AtomicU64::new(u64::MAX),
@@ -144,7 +146,9 @@ impl MeterReader {
             return Level::default();
         };
         let tick = updated.load(Ordering::Acquire);
-        let current = if now >= tick && now - tick <= self.shared.ticks_per_second / 4 {
+        let fresh =
+            tick != u64::MAX && now >= tick && now - tick <= self.shared.ticks_per_second / 4;
+        let current = if fresh {
             self.shared
                 .levels
                 .get(channel)
@@ -176,12 +180,24 @@ impl MeterReader {
         Level {
             current,
             held_peak: peak,
+            fresh,
         }
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fresh_silence_is_distinct_from_missing_and_stale_callbacks() {
+        let (mut writer, reader) = meter_bank(1, 1000).unwrap();
+        assert!(!reader.level(0, 0).fresh);
+        assert!(writer.record(0, 0.0, 0));
+        assert!(reader.level(0, 0).fresh);
+        assert!(reader.level(0, 250).fresh);
+        assert_eq!(reader.level(0, 250).current, 0.0);
+        assert!(!reader.level(0, 251).fresh);
+        assert!(!reader.level(1, 0).fresh);
+    }
     #[test]
     fn readers_do_not_clear_peaks_and_old_ring_slots_expire() {
         let (mut writer, reader) = meter_bank(10, 1000).unwrap();

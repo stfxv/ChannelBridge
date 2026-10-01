@@ -143,6 +143,7 @@ impl Backend for NativeBackend {
                 let level = session.meters.level(channel, now);
                 InputLevel {
                     channel: channel as u32 + 1,
+                    fresh: level.fresh,
                     current_dbfs: dbfs(level.current),
                     held_dbfs: dbfs(level.held_peak),
                 }
