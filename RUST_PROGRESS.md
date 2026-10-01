@@ -403,3 +403,16 @@ exact path set, file type, permission mode, symlink target and SHA-256 for every
 regular file. The complete actual production package passed, in addition to strict
 codesign and the executable/archive comparisons. This does not prove installation
 or real-driver loading. Live audio acceptance and actual rollback remain pending.
+
+
+### 2026-10-01 production CI coverage
+
+CI now checks all targets for both deployment profiles on Apple Silicon and Intel,
+adds production-feature workspace tests to the minimum-Rust lane, and builds the
+production package in the current-Rust lane after the separate test package.
+Timeout increased to 40 minutes for two Universal/offline package builds. Local
+production workspace tests and production all-target Clippy passed. Workflow YAML
+and presence of the production package step were parsed/verified. Remote workflow
+execution is not verified by these checks (gh unavailable on this shell PATH);
+GitHub CI success and billing availability remain unproven. Actual long-call and
+production migration/rollback gates are unchanged and still incomplete.

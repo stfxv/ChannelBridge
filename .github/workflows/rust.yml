@@ -8,7 +8,7 @@ permissions:
 jobs:
   rust:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -25,14 +25,21 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Minimum Rust regressions
         if: matrix.rust == '1.85.0'
-        run: cargo test --workspace --locked
+        run: |
+          cargo test --workspace --locked
+          cargo test --workspace --locked --features production
       - name: Algorithms, publication model, and Apple ABI oracle
         if: matrix.rust == '1.98.1'
         run: bash scripts/test-rust.sh
       - name: Apple Silicon and Intel compilation
         run: |
-          cargo check --workspace --locked --target aarch64-apple-darwin
-          cargo check --workspace --locked --target x86_64-apple-darwin
+          cargo check --workspace --all-targets --locked --target aarch64-apple-darwin
+          cargo check --workspace --all-targets --locked --target x86_64-apple-darwin
+          cargo check --workspace --all-targets --locked --features production --target aarch64-apple-darwin
+          cargo check --workspace --all-targets --locked --features production --target x86_64-apple-darwin
       - name: Combined universal test installer, signatures and offline sources
         if: matrix.rust == '1.98.1'
         run: bash scripts/package-rust-test-app.sh
+      - name: Combined universal production installer and complete payload integrity
+        if: matrix.rust == '1.98.1'
+        run: bash scripts/package-rust-production.sh
