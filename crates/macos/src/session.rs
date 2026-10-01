@@ -190,17 +190,63 @@ impl TestSession {
             self.output.handler().stats(),
         )
     }
-    pub fn close(self) -> Result<(), crate::io::IoError> {
+    pub fn close(self) -> Result<(), ShutdownError> {
         let route = self.routing.load();
-        self.routing
-            .configure(route.selection, false, route.overview);
+        let route_stopped = self
+            .routing
+            .configure(route.selection, false, route.overview)
+            .is_some();
         // Attempt both cleanups even if one reports an error. Each owner retains
         // its own callback storage whenever successful teardown is unconfirmed.
         let output = self.output.close();
         let capture = self.capture.close();
-        output?;
-        capture?;
+        shutdown_result(output, capture, route_stopped)
+    }
+}
+
+/// Preserve both directions' teardown outcomes instead of returning the first.
+#[derive(Debug)]
+pub struct ShutdownError {
+    pub output: Option<crate::io::IoError>,
+    pub input: Option<crate::io::IoError>,
+    pub route_stopped: bool,
+}
+impl ShutdownError {
+    pub fn context_retained(&self) -> bool {
+        self.output
+            .iter()
+            .chain(self.input.iter())
+            .any(|error| error.context_retained)
+    }
+}
+impl std::fmt::Display for ShutdownError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "session shutdown failed; route stopped: {}; output: {:?}; input: {:?}; context retained: {}",
+            self.route_stopped,
+            self.output,
+            self.input,
+            self.context_retained()
+        )
+    }
+}
+impl std::error::Error for ShutdownError {}
+fn shutdown_result<O, I>(
+    output: Result<O, crate::io::IoError>,
+    input: Result<I, crate::io::IoError>,
+    route_stopped: bool,
+) -> Result<(), ShutdownError> {
+    let output = output.err();
+    let input = input.err();
+    if output.is_none() && input.is_none() && route_stopped {
         Ok(())
+    } else {
+        Err(ShutdownError {
+            output,
+            input,
+            route_stopped,
+        })
     }
 }
 
@@ -257,6 +303,30 @@ fn startup_error(cause: String, retained: bool, outcomes: Vec<crate::io::IoError
 mod tests {
     use super::*;
     use channelbridge_audio::routing::Mode;
+    #[test]
+    fn shutdown_preserves_both_failures_and_retained_context_information() {
+        let error = shutdown_result::<(), ()>(
+            Err(crate::io::IoError {
+                operation: "callback panic",
+                status: 0,
+                context_retained: false,
+            }),
+            Err(crate::io::IoError {
+                operation: "input stop",
+                status: -1,
+                context_retained: true,
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.output.is_some() && error.input.is_some());
+        assert!(error.context_retained());
+        assert!(error.route_stopped);
+        assert!(shutdown_result(Ok(()), Ok(()), true).is_ok());
+        let error = shutdown_result(Ok(()), Ok(()), false).unwrap_err();
+        assert!(!error.context_retained());
+        assert!(!error.route_stopped);
+    }
     #[test]
     fn startup_error_distinguishes_clean_failure_from_retained_callbacks() {
         let clean = startup_error("start failed".into(), false, Vec::new());

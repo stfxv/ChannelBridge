@@ -28,7 +28,7 @@
 
 `bash scripts/test-rust.sh`:
 
-- 通常のRustテスト54件。FIFO、補間品質・位相、時計速度・補正制御、PCMパイプラインの到着ジッター、不足からの復旧を含む。
+- 通常のRustテスト55件。FIFO、補間品質・位相、時計速度・補正制御、PCMパイプラインの到着ジッター、不足からの復旧を含む。
 - Loomによる並行操作のモデル検査1件。公開途中の新しい音声と古いタグを混ぜて返さない条件を確認。検査はpreemption bound 2の有限モデルであり、全ての将来の並行処理を証明したものではない。
 - Rustfmt / Clippy。テスト・exampleを含めて警告なし。
 - CのSDK照会とRustの実際のレイアウトの一致: AudioTimeStamp 64、IOCycleInfo 224、ClientInfo 24、PropertyAddress 12、HostInterface 40、DriverInterface 184、StreamFormat 40、RangedFormat 56 bytes。
@@ -82,3 +82,7 @@ objc2 0.6.4 / Foundation・AVFoundation 0.3.2 / block2 0.6.2を固定し、OSの
 根拠: [Apple authorizationStatus](https://developer.apple.com/documentation/AVFoundation/AVCaptureDevice/authorizationStatus%28for%3A%29)、[Apple requestAccess](https://developer.apple.com/documentation/avfoundation/avcapturedevice/requestaccess%28for%3Acompletionhandler%3A%29)、固定したobjc2-av-foundationの生成バインディング。Rust 1.85の対象crate試験とIntel向け全ターゲットコンパイルを確認。ドライバはこのcrateに依存せず、AVFoundationをドライバへリンクしない構成を維持する。
 
 2026-10-01の最新チェックポイントで権限バインディング込みの全体検証を再実行。通常54テスト、並行モデル、ABI比較、模擬HAL、二つの確保検査が通過。音声coreとネイティブ側でexample名が重複していたため、ネイティブ側をnative_realtime_allocationsへ改名し、手順も更新。再実行ログではこの出力ファイル衝突を含む警告なしを確認。実HALの読み込み/転送、UIと長時間通話の必須条件は未完了のままである。
+
+## 終了診断の追加（2026-10-01）
+
+セッション終了は両IOProcの後始末を必ず試み、出力/入力の各エラー、送出停止スナップショットの反映結果、コールバック用メモリ保持の有無を一つのShutdownErrorへまとめる。最初のエラーだけを返して次のエラーを隠す動作を除去。模擬結果で両方の失敗と片方だけの保持情報、停止反映失敗、成功を検証。実HALの同時失敗を再現したものではない。対象crateの最低RustテストとIntel向け全ターゲットコンパイルが通過。
