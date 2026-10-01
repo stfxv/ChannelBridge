@@ -276,3 +276,9 @@ core::diagnostics::save_newを追加。所有済みworker snapshotからschema v
 試験アプリに診断保存ボタンと結果表示を追加。AppKitのNSSavePanelで保存先を選び、ボタンを押した時点のworker snapshotを別スレッドでsave_newへ渡す。保存待ちの重複操作を禁止し、完了/失敗を既存UI timerで受け取る。音声スレッド/制御ワーカーでファイルI/Oをしない。保存処理中の終了要求では音声停止を先に要求し、保存結果を受け取ってからアプリ終了へ応答する。同名ファイルは置換せず、新しい名前を求めるエラーを表示する。診断用に画面下部を40 px追加した。
 
 Clippy、最低Rust app全ターゲットcheck、Universalビルド/署名/metadata/非表示AppKit smokeが通過。最初のsmokeは旧部品数15の期待値で失敗したため17へ更新し、保存ボタンのtitle/有効状態/位置も確認した。実GUIで保存panel、新規保存、結果「保存しました」、キャンセル後ボタン有効、Command-Q終了を確認。ローカルhomeに生成された243-byteのJSONがschema 1/Blocked/session_counters=null/0600であることを読出し、試験フォルダwork/test/rustへ移動した。Go To経由の試験フォルダ指定は画面上homeのままであり、フォルダ移動成功とは扱わない。clipboard操作もtimeoutしたが、保存操作自体は通常のpanel操作で完了した。マイク許可/送出は行わず、送出中保存や保存中終了競合の実機確認、driver値/形式/時計補正の統合は未完了である。
+
+## 保存診断へのドライバ統計統合（2026-10-01）
+
+Backend/Controllerにドライバ診断の読み取り口を追加し、制御ワーカーの機器一覧更新と同じ1秒周期で取得する。音声セッション/マイク許可の有無に依存せず試験UIDのread-onlyプロパティを読み、UI更新ごとにHALを呼び直さない。Worker SnapshotとJSONへ、取得時のworker経過msと、Available（generationと累積5指標のうちgeneration以外4値）/Unavailable（エラー本文）の明示状態を加えた。未取得はnullであり、失敗時に過去の成功値を残さない。終了/panicではドライバsnapshotもnullへ戻す。ドライバとアプリの統計は独立に取得され、同時刻の一括epochとは扱わない。
+
+core 16試験、Clippy、最低Rust全workspace/全ターゲットcheck、全体スクリプトが通過。export回帰試験でUnavailableにwritten_framesが存在しないことを確認。実機のread-only inventory workerからsave_newまでの経路も実行し、391-byte/0600のファイルへobserved_worker_ms=148、Unavailable/CoreAudio status 2003332927、session_counters=nullが保存されたことを検証した。診断取得失敗をworkerの音声開始成功や無欠落へ変換していない。現ロードでの成功カウンタ取得、更新後アプリでのGUI保存、FIFO/補正量/形式/履歴の実装と長時間試験は未完了である。

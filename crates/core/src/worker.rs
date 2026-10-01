@@ -24,6 +24,7 @@ pub struct Snapshot {
     pub finished: bool,
     pub audio: Option<crate::view::AudioView>,
     pub diagnostics: Option<crate::view::AudioDiagnostics>,
+    pub driver_diagnostics: Option<crate::view::DriverDiagnostics>,
     pub devices: Arc<[crate::view::DeviceChoice]>,
     pub device_error: Option<String>,
 }
@@ -51,6 +52,7 @@ impl Drop for WorkerExit {
             snapshot.wanted_send = false;
             snapshot.audio = None;
             snapshot.diagnostics = None;
+            snapshot.driver_diagnostics = None;
             snapshot.error = Some("control worker terminated unexpectedly".into());
         }
     }
@@ -92,6 +94,7 @@ impl Worker {
             finished: false,
             audio: None,
             diagnostics: None,
+            driver_diagnostics: None,
             devices: Arc::from([]),
             device_error: None,
         }));
@@ -120,6 +123,7 @@ impl Worker {
                             finished: true,
                             audio: None,
                             diagnostics: None,
+                            driver_diagnostics: None,
                             devices: Arc::from([]),
                             device_error: None,
                         });
@@ -134,6 +138,7 @@ impl Worker {
                 let mut devices = Arc::<[crate::view::DeviceChoice]>::from([]);
                 let mut device_error = None;
                 let mut next_inventory = Instant::now();
+                let mut driver_diagnostics = None;
                 loop {
                     if exiting.load(Ordering::Acquire) {
                         break;
@@ -198,6 +203,16 @@ impl Worker {
                             }
                             Err(error) => device_error = Some(error),
                         }
+                        driver_diagnostics = controller.driver_diagnostics().map(|reading| {
+                            crate::view::DriverDiagnostics {
+                                observed_worker_ms: start
+                                    .elapsed()
+                                    .as_millis()
+                                    .min(u64::MAX as u128)
+                                    as u64,
+                                reading,
+                            }
+                        });
                         next_inventory = Instant::now() + Duration::from_secs(1);
                     }
                     publish(Snapshot {
@@ -210,6 +225,7 @@ impl Worker {
                         finished: false,
                         audio: controller.audio_view(),
                         diagnostics: controller.diagnostics(),
+                        driver_diagnostics: driver_diagnostics.clone(),
                         devices: Arc::clone(&devices),
                         device_error: device_error.clone(),
                     });
@@ -225,6 +241,7 @@ impl Worker {
                     finished: true,
                     audio: None,
                     diagnostics: None,
+                    driver_diagnostics: None,
                     devices,
                     device_error,
                 });

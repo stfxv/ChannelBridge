@@ -84,6 +84,21 @@ fn initialized_driver(counters: channelbridge_contract::DriverCounters) -> Resul
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
+    fn driver_diagnostics(&self) -> Option<channelbridge_core::view::DriverReading> {
+        use channelbridge_core::view::DriverReading;
+        Some(match crate::diagnostics::read_test_driver() {
+            Ok(counters) => DriverReading::Available {
+                generation: counters.generation,
+                written_frames: counters.written_frames,
+                missing_read_frames: counters.missing_read_frames,
+                rejected_write_frames: counters.rejected_write_frames,
+                invalid_timestamps: counters.invalid_timestamps,
+            },
+            Err(error) => DriverReading::Unavailable {
+                error: error.to_string(),
+            },
+        })
+    }
     fn diagnostics(
         &self,
         session: &TestSession,

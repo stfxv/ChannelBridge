@@ -18,6 +18,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !snapshot.devices.is_empty() {
             assert!(!snapshot.wanted_send);
             assert!(snapshot.audio.is_none());
+            assert!(snapshot.driver_diagnostics.is_some());
+            println!("Driver diagnostics: {:?}", snapshot.driver_diagnostics);
+            if std::env::args().nth(1).as_deref() == Some("--save-diagnostics") {
+                let path = std::env::args()
+                    .nth(2)
+                    .ok_or("diagnostic output path required")?;
+                channelbridge_core::diagnostics::save_new(std::path::Path::new(&path), &snapshot)?;
+            }
             for device in snapshot.devices.iter() {
                 println!(
                     "{} | {} input channels | {} Hz | physical {:?}",

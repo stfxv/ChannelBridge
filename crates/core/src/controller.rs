@@ -2,6 +2,9 @@
 use crate::{CaptureState, Command, Config};
 
 pub trait Backend {
+    fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
+        None
+    }
     fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
         Ok(Vec::new())
     }
@@ -72,6 +75,9 @@ impl<B: Backend> Controller<B> {
     }
     pub fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
         self.backend.devices()
+    }
+    pub fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
+        self.backend.driver_diagnostics()
     }
     pub fn audio_view(&self) -> Option<crate::view::AudioView> {
         self.session.as_ref().and_then(|session| {

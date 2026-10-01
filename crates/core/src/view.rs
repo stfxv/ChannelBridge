@@ -1,4 +1,24 @@
 //! Owned display data, with no HAL objects or callback pointers.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DriverDiagnostics {
+    /// Monotonic time since control worker startup, not a wall-clock timestamp.
+    pub observed_worker_ms: u64,
+    pub reading: DriverReading,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DriverReading {
+    Available {
+        generation: u64,
+        written_frames: u64,
+        missing_read_frames: u64,
+        rejected_write_frames: u64,
+        invalid_timestamps: u64,
+    },
+    Unavailable {
+        error: String,
+    },
+}
 /// Session-local cumulative counters, read independently rather than as one
 /// synchronized audio epoch. No samples, device UID or user paths are included.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]

@@ -22,6 +22,7 @@ struct Report<'a> {
     mode: crate::Mode,
     muted: bool,
     session_counters: &'a Option<crate::view::AudioDiagnostics>,
+    driver: &'a Option<crate::view::DriverDiagnostics>,
     error: &'a Option<String>,
     command_error: &'a Option<String>,
 }
@@ -59,6 +60,7 @@ pub fn save_new(path: &Path, snapshot: &Snapshot) -> io::Result<()> {
         mode: snapshot.config.mode,
         muted: snapshot.config.muted,
         session_counters: &snapshot.diagnostics,
+        driver: &snapshot.driver_diagnostics,
         error: &snapshot.error,
         command_error: &snapshot.command_error,
     };
@@ -144,11 +146,20 @@ mod tests {
         .unwrap();
         let mut snapshot = worker.snapshot();
         worker.join().unwrap();
+        snapshot.driver_diagnostics = Some(crate::view::DriverDiagnostics {
+            observed_worker_ms: 17,
+            reading: crate::view::DriverReading::Unavailable {
+                error: "unsupported property".into(),
+            },
+        });
         let destination = directory.join("report.json");
         save_new(&destination, &snapshot).unwrap();
         let bytes = fs::read(&destination).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json["session_counters"].is_null());
+        assert_eq!(json["driver"]["reading"]["status"], "unavailable");
+        assert_eq!(json["driver"]["reading"]["error"], "unsupported property");
+        assert!(json["driver"]["reading"].get("written_frames").is_none());
         assert!(!String::from_utf8_lossy(&bytes).contains("private-device-serial"));
         assert_eq!(
             save_new(&destination, &snapshot).unwrap_err().kind(),
