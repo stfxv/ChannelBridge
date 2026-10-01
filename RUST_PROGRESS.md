@@ -416,3 +416,15 @@ and presence of the production package step were parsed/verified. Remote workflo
 execution is not verified by these checks (gh unavailable on this shell PATH);
 GitHub CI success and billing availability remain unproven. Actual long-call and
 production migration/rollback gates are unchanged and still incomplete.
+
+
+### 2026-10-01 actual legacy backup
+
+Added backup-rust-migration.py, requiring the actual legacy app 0.4.0 / driver 0.1.0
+IDs and versions and a separate new destination. It copies bundles without system
+writes, verifies every entry/mode/link/hash and unchanged source snapshots, and
+verifies settings bytes without printing their contents. Private destination 0700,
+settings/manifest 0600. An actual verified backup exists locally at ignored
+work/legacy-backup-20261001, retaining the app from outputs/ChannelBridge.app,
+installed legacy HAL and current production settings. This preserves rollback
+artifacts; it is not an actual successful restore, migration or uninstall test.
