@@ -25,6 +25,7 @@ pub struct Snapshot {
     pub audio: Option<crate::view::AudioView>,
     pub diagnostics: Option<crate::view::AudioDiagnostics>,
     pub driver_diagnostics: Option<crate::view::DriverDiagnostics>,
+    pub control_history: Arc<[crate::view::ControlEvent]>,
     pub devices: Arc<[crate::view::DeviceChoice]>,
     pub device_error: Option<String>,
 }
@@ -95,6 +96,7 @@ impl Worker {
             audio: None,
             diagnostics: None,
             driver_diagnostics: None,
+            control_history: Arc::from([]),
             devices: Arc::from([]),
             device_error: None,
         }));
@@ -124,6 +126,7 @@ impl Worker {
                             audio: None,
                             diagnostics: None,
                             driver_diagnostics: None,
+                            control_history: Arc::from([]),
                             devices: Arc::from([]),
                             device_error: None,
                         });
@@ -226,6 +229,7 @@ impl Worker {
                         audio: controller.audio_view(),
                         diagnostics: controller.diagnostics(),
                         driver_diagnostics: driver_diagnostics.clone(),
+                        control_history: controller.history(),
                         devices: Arc::clone(&devices),
                         device_error: device_error.clone(),
                     });
@@ -242,6 +246,7 @@ impl Worker {
                     audio: None,
                     diagnostics: None,
                     driver_diagnostics: None,
+                    control_history: controller.history(),
                     devices,
                     device_error,
                 });
@@ -391,6 +396,10 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(!worker.snapshot().wanted_send);
+        assert_eq!(
+            worker.snapshot().control_history.last().unwrap().kind,
+            crate::view::ControlEventKind::SessionOpened
+        );
         let diagnostics = worker.snapshot().diagnostics.unwrap();
         assert_eq!(diagnostics.capture_written_frames, (1_u64 << 54) + 3);
         let json: serde_json::Value = serde_json::to_value(&diagnostics).unwrap();
@@ -413,6 +422,16 @@ mod tests {
         let shared_snapshot = Arc::clone(&worker.snapshot);
         worker.join().unwrap();
         assert!(shared_snapshot.lock().unwrap().diagnostics.is_none());
+        assert_eq!(
+            shared_snapshot
+                .lock()
+                .unwrap()
+                .control_history
+                .last()
+                .unwrap()
+                .kind,
+            crate::view::ControlEventKind::PermissionRevoked
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
     #[test]

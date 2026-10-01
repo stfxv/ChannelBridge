@@ -306,3 +306,9 @@ InputFormat/InputLevel/AudioViewをserialize可能にし、レポートにアク
 出力callbackでフェード/ミュート適用後の実HAL bufferの左右ピークを求め、一つのAtomicU64へ二つのf32 bitsをまとめて公開する。制御側でdBFSへ変換しoutput_peak_dbfsに保存。最初の未観測または非有限PCMを含むブロックはnull、観測済み左右無音は[null,null]（−∞ dBFS）で区別する。送出停止中の正常callbackとpanic時の無音化ではピーク0を公開する。不正buffer/競合で拒否されたcallbackは以前の値を保持するため、値は最新の受理ブロックの観測であり、常に最新の全callbackや現在の通話音量とは称さない。callback停止後の値の鮮度や実際の受信アプリの音量も保証しない。
 
 既存native output試験で、未観測null、初期無音、左右0.5/0.25の独立ピーク、ミュート定常時/送出停止時0を確認。音声bufferやミュート処理の値は変更せず、診断の走査/固定atomic公開のみ追加した。Clippyと最低Rust全workspace全ターゲットcheckが通過。新版アプリでの保存操作/負荷の実機確認、版と復旧履歴、長時間通話は未完了である。
+
+## 再接続・交渉の制限付き履歴（2026-10-01）
+
+Controllerに交渉開始/交渉準備完了/セッション開始/再試行/終了失敗/権限失効/機器変更/経路失敗のイベント履歴を追加し、Worker SnapshotからJSONのcontrol_historyへ保存する。直近32件・理由本文最大256 UTF-8 bytesで古いイベントを除く。immutable Arcをイベント更新時だけ作り直し、画面snapshotではArcを共有する。音声callbackで履歴の確保/文字列処理をしない。復旧で現在エラーが消えても履歴は残り、正常終了時にも保持する。tick由来イベントの時刻はworker単調経過ms、UIコマンド由来は時刻なしとし不正確な時刻を付けない。
+
+回帰試験で開始失敗→復旧後エラー消去/理由保持、以前のArc不変、40件後の最新32件、マルチバイト文字の255-byte境界を確認。worker試験で開始イベントがsnapshotへ届き、終了後にも権限失効履歴が残ることを確認。core 17試験、Clippy、最低Rust全workspace全ターゲットcheck、全体検証が通過し、追加worker確認後も対象試験/Clippyが通過。履歴は交渉段階の成功を表し、要求した正確なレート値/driver callbackの完了時刻をまだ収集しない。実機での障害再現、レート追従、版情報、長時間通話ゲートは未完了である。

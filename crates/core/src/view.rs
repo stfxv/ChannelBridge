@@ -1,5 +1,24 @@
 //! Owned display data, with no HAL objects or callback pointers.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ControlEvent {
+    /// None for UI commands without a worker tick timestamp.
+    pub worker_ms: Option<u64>,
+    pub kind: ControlEventKind,
+    pub detail: Option<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlEventKind {
+    NegotiationStarted,
+    NegotiationReady,
+    SessionOpened,
+    RetryScheduled,
+    TeardownFailed,
+    PermissionRevoked,
+    DeviceChanged,
+    RouteFailed,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct DriverDiagnostics {
     /// Monotonic time since control worker startup, not a wall-clock timestamp.
     pub observed_worker_ms: u64,

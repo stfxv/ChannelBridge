@@ -54,6 +54,7 @@ pub struct Controller<B: Backend> {
     retry_delay: u64,
     state: CaptureState,
     error: Option<String>,
+    history: std::sync::Arc<[crate::view::ControlEvent]>,
 }
 impl<B: Backend> Controller<B> {
     pub fn new(backend: B, config: Config) -> Self {
@@ -71,10 +72,41 @@ impl<B: Backend> Controller<B> {
             retry_delay: 1000,
             state: CaptureState::Idle,
             error: None,
+            history: std::sync::Arc::from([]),
         }
     }
     pub fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
         self.backend.devices()
+    }
+    pub fn history(&self) -> std::sync::Arc<[crate::view::ControlEvent]> {
+        std::sync::Arc::clone(&self.history)
+    }
+    fn record(
+        &mut self,
+        worker_ms: Option<u64>,
+        kind: crate::view::ControlEventKind,
+        detail: Option<&str>,
+    ) {
+        let detail = detail.map(|text| {
+            let mut end = text.len().min(256);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text[..end].to_owned()
+        });
+        let mut events = Vec::with_capacity(32);
+        events.extend(
+            self.history
+                .iter()
+                .skip(self.history.len().saturating_sub(31))
+                .cloned(),
+        );
+        events.push(crate::view::ControlEvent {
+            worker_ms,
+            kind,
+            detail,
+        });
+        self.history = events.into();
     }
     pub fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         self.backend.driver_diagnostics()
@@ -106,6 +138,11 @@ impl<B: Backend> Controller<B> {
         self.pending = None;
         if let Some(session) = self.session.take() {
             if let Err(error) = self.backend.close(session) {
+                self.record(
+                    None,
+                    crate::view::ControlEventKind::TeardownFailed,
+                    Some(&error),
+                );
                 self.teardown_failed = true;
                 self.state = CaptureState::Blocked;
                 self.error = Some(error.clone());
@@ -132,6 +169,7 @@ impl<B: Backend> Controller<B> {
             Command::PermissionChanged(value) => {
                 self.permission = value;
                 if !value {
+                    self.record(None, crate::view::ControlEventKind::PermissionRevoked, None);
                     self.disconnect()?;
                     self.state = CaptureState::Blocked;
                 }
@@ -148,6 +186,7 @@ impl<B: Backend> Controller<B> {
                 let changed_device = self.config.device_uid != config.device_uid;
                 self.config = config;
                 if changed_device {
+                    self.record(None, crate::view::ControlEventKind::DeviceChanged, None);
                     self.disconnect()?;
                     self.retry_at = 0;
                 }
@@ -158,6 +197,11 @@ impl<B: Backend> Controller<B> {
                 self.backend
                     .route(session, &self.config, self.wanted_send, self.overview)
             {
+                self.record(
+                    None,
+                    crate::view::ControlEventKind::RouteFailed,
+                    Some(&error),
+                );
                 self.error = Some(error.clone());
                 self.disconnect()?;
                 self.state = CaptureState::Recovering;
@@ -173,6 +217,11 @@ impl<B: Backend> Controller<B> {
         Ok(())
     }
     fn retry(&mut self, now_ms: u64, error: String) {
+        self.record(
+            Some(now_ms),
+            crate::view::ControlEventKind::RetryScheduled,
+            Some(&error),
+        );
         self.error = Some(error);
         if self.disconnect().is_err() {
             return;
@@ -205,6 +254,11 @@ impl<B: Backend> Controller<B> {
             return;
         }
         if self.pending.is_none() {
+            self.record(
+                Some(now_ms),
+                crate::view::ControlEventKind::NegotiationStarted,
+                None,
+            );
             match self.backend.negotiate(&self.config) {
                 Ok(pending) => {
                     self.pending = Some(pending);
@@ -221,10 +275,20 @@ impl<B: Backend> Controller<B> {
             Ok(false) => {}
             Err(error) => self.retry(now_ms, error),
             Ok(true) => {
+                self.record(
+                    Some(now_ms),
+                    crate::view::ControlEventKind::NegotiationReady,
+                    None,
+                );
                 self.pending = None;
                 match self.backend.open(&self.config) {
                     Err(error) => {
                         if self.backend.open_failure_requires_stop() {
+                            self.record(
+                                Some(now_ms),
+                                crate::view::ControlEventKind::TeardownFailed,
+                                Some(&error),
+                            );
                             self.teardown_failed = true;
                             self.error = Some(error);
                             self.state = CaptureState::Blocked;
@@ -245,6 +309,11 @@ impl<B: Backend> Controller<B> {
                             return;
                         }
                         self.retry_delay = 1000;
+                        self.record(
+                            Some(now_ms),
+                            crate::view::ControlEventKind::SessionOpened,
+                            None,
+                        );
                         self.error = None;
                         self.state = if self.wanted_send {
                             CaptureState::Sending
@@ -332,6 +401,53 @@ mod tests {
                 ..Config::default()
             },
         )
+    }
+    #[test]
+    fn history_keeps_recovery_reason_after_success_and_bounds_utf8_details() {
+        use crate::view::ControlEventKind;
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.backend.ready = true;
+        worker.backend.open_fail = true;
+        worker.tick(0);
+        let failed = worker.history();
+        assert_eq!(
+            failed.last().unwrap().kind,
+            ControlEventKind::RetryScheduled
+        );
+        assert_eq!(
+            failed.last().unwrap().detail.as_deref(),
+            Some("open failed")
+        );
+        worker.backend.open_fail = false;
+        worker.tick(1000);
+        assert_eq!(worker.error(), None);
+        assert_eq!(
+            worker.history().last().unwrap().kind,
+            ControlEventKind::SessionOpened
+        );
+        assert!(
+            worker
+                .history()
+                .iter()
+                .any(|event| event.detail.as_deref() == Some("open failed"))
+        );
+        assert_eq!(
+            failed.last().unwrap().kind,
+            ControlEventKind::RetryScheduled
+        );
+        for index in 0..40 {
+            worker.retry(2000 + index, "音".repeat(200));
+        }
+        let events = worker.history();
+        assert_eq!(events.len(), 32);
+        assert_eq!(events.first().unwrap().worker_ms, Some(2008));
+        assert_eq!(events.last().unwrap().worker_ms, Some(2039));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.detail.as_ref().unwrap().len() == 255)
+        );
     }
     #[test]
     fn clean_start_failure_retries_but_retained_context_never_starts_replacement() {

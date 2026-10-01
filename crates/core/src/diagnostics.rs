@@ -27,6 +27,7 @@ struct Report<'a> {
     audio: &'a Option<crate::view::AudioView>,
     /// Most recent device inventory, distinct from active-session evidence.
     selected_input_inventory: Option<InputInventory<'a>>,
+    control_history: &'a [crate::view::ControlEvent],
     error: &'a Option<String>,
     command_error: &'a Option<String>,
 }
@@ -72,6 +73,7 @@ pub fn save_new(path: &Path, snapshot: &Snapshot) -> io::Result<()> {
         session_counters: &snapshot.diagnostics,
         driver: &snapshot.driver_diagnostics,
         audio: &snapshot.audio,
+        control_history: &snapshot.control_history,
         selected_input_inventory: snapshot
             .devices
             .iter()
