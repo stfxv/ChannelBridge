@@ -300,3 +300,9 @@ OutputCallbackのatomic統計へ、DSP生成フレーム数、FIFOの処理後�
 InputFormat/InputLevel/AudioViewをserialize可能にし、レポートにアクティブセッションのaudioを追加した。物理入力のrate/bits/channels/float、仮想rate/bits、選択チャンネルのdry dBFS/freshnessを保存する。無音のdBFSはnullでfresh=true、未取得はaudio=nullまたはfresh=falseで区別できる。機器一覧の最終読出しに含まれる選択機器の名目レート/物理形式/形式取得エラーもselected_input_inventoryへ保存し、アクティブセッションの形式証拠と混同しない。名前/UIDを専用出力フィールドに追加しない。
 
 保存回帰試験で物理24bit signed整数/10ch/48kと仮想32bit/48kの区別、dry無音のfresh=true/null、機器名とUID除外を確認した。追加の別ファイルでセッションと機器不在の両フィールドnullも確認。最低Rust全workspace全ターゲットcheck、Clippy、全体検証が通過し、nullの追加ケース後も保存試験/Clippyが通過。アプリ/ドライバの版、レート要求履歴、仮想出力レベルと実機長時間ゲートは未完了であり、全診断要件の完成とは扱わない。
+
+## 仮想出力の実レベルを保存診断へ追加（2026-10-01）
+
+出力callbackでフェード/ミュート適用後の実HAL bufferの左右ピークを求め、一つのAtomicU64へ二つのf32 bitsをまとめて公開する。制御側でdBFSへ変換しoutput_peak_dbfsに保存。最初の未観測または非有限PCMを含むブロックはnull、観測済み左右無音は[null,null]（−∞ dBFS）で区別する。送出停止中の正常callbackとpanic時の無音化ではピーク0を公開する。不正buffer/競合で拒否されたcallbackは以前の値を保持するため、値は最新の受理ブロックの観測であり、常に最新の全callbackや現在の通話音量とは称さない。callback停止後の値の鮮度や実際の受信アプリの音量も保証しない。
+
+既存native output試験で、未観測null、初期無音、左右0.5/0.25の独立ピーク、ミュート定常時/送出停止時0を確認。音声bufferやミュート処理の値は変更せず、診断の走査/固定atomic公開のみ追加した。Clippyと最低Rust全workspace全ターゲットcheckが通過。新版アプリでの保存操作/負荷の実機確認、版と復旧履歴、長時間通話は未完了である。

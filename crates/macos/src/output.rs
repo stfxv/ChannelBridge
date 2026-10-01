@@ -33,6 +33,8 @@ pub struct OutputCallback {
     fifo_max: AtomicU64,
     buffered_target: u64,
     correction_ppm: AtomicU64,
+    /// Both channel peaks from one completed valid callback, packed together.
+    peak: AtomicU64,
 }
 // SAFETY: State is Send and accessed only under the single-attempt exclusive
 // gate. Control code cannot obtain a reference to State; other fields are atomic.
@@ -57,6 +59,7 @@ pub struct OutputStats {
     pub fifo_max: Option<u64>,
     pub buffered_target: u64,
     pub correction_ppm: Option<f64>,
+    pub peak: Option<[f32; 2]>,
     pub failed: bool,
 }
 impl OutputCallback {
@@ -87,6 +90,7 @@ impl OutputCallback {
             fifo_max: AtomicU64::new(0),
             buffered_target,
             correction_ppm: AtomicU64::new(f64::NAN.to_bits()),
+            peak: AtomicU64::new(u64::MAX),
         })
     }
     pub fn with_source_clock(mut self, clock: Arc<SourceClock>) -> Self {
@@ -97,6 +101,11 @@ impl OutputCallback {
         let minimum = self.fifo_min.load(Ordering::Acquire);
         let observed = minimum != u64::MAX;
         let correction = f64::from_bits(self.correction_ppm.load(Ordering::Acquire));
+        let peak = self.peak.load(Ordering::Acquire);
+        let peak = [
+            f32::from_bits(peak as u32),
+            f32::from_bits((peak >> 32) as u32),
+        ];
         OutputStats {
             callbacks: self.callbacks.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
@@ -109,6 +118,7 @@ impl OutputCallback {
             fifo_max: observed.then(|| self.fifo_max.load(Ordering::Acquire)),
             buffered_target: self.buffered_target,
             correction_ppm: correction.is_finite().then_some(correction),
+            peak: peak.iter().all(|value| value.is_finite()).then_some(peak),
             failed: self.failed.load(Ordering::Acquire),
         }
     }
@@ -142,6 +152,7 @@ impl OutputCallback {
             state.processor.set_generation(route.generation);
             if !route.sending {
                 state.gain = 0.0;
+                self.peak.store(0, Ordering::Release);
                 return;
             }
             let frames = &mut state.scratch[..output.len()];
@@ -160,6 +171,18 @@ impl OutputCallback {
                 }
                 *destination = [frame.left * state.gain, frame.right * state.gain];
             }
+            let peak = output.iter().try_fold([0.0_f32; 2], |peak, frame| {
+                frame
+                    .iter()
+                    .all(|value| value.is_finite())
+                    .then(|| [peak[0].max(frame[0].abs()), peak[1].max(frame[1].abs())])
+            });
+            self.peak.store(
+                peak.map_or(u64::MAX, |peak| {
+                    u64::from(peak[0].to_bits()) | (u64::from(peak[1].to_bits()) << 32)
+                }),
+                Ordering::Release,
+            );
             self.missing
                 .fetch_add(report.missing as u64, Ordering::Relaxed);
             if report.priming {
@@ -184,6 +207,7 @@ impl OutputCallback {
         }));
         if result.is_err() {
             output.fill([0.0; 2]);
+            self.peak.store(0, Ordering::Release);
             self.failed.store(true, Ordering::Release);
             self.rejected.fetch_add(1, Ordering::Relaxed);
         }
@@ -211,6 +235,7 @@ mod tests {
         let callback = OutputCallback::new(processor, routing).unwrap();
         assert_eq!(callback.stats().fifo_min, None);
         assert_eq!(callback.stats().correction_ppm, None);
+        assert_eq!(callback.stats().peak, None);
         assert_eq!(callback.stats().buffered_target, 1024);
         let mut samples = [[9.0_f32; 2]; 512];
         let mut buffer = AudioBufferList {
@@ -225,6 +250,7 @@ mod tests {
         unsafe { callback.process(&mut buffer, None) };
         assert_eq!(callback.stats().priming_callbacks, 1);
         assert_eq!(callback.stats().missing, 0);
+        assert_eq!(callback.stats().peak, Some([0.0; 2]));
         assert_eq!(callback.stats().fifo_min, Some(0));
         assert_eq!(callback.stats().correction_ppm, Some(0.0));
         assert!(samples.iter().all(|sample| *sample == [0.0; 2]));
@@ -271,6 +297,9 @@ mod tests {
             callback.process(&mut buffer, None);
         }
         assert!((samples[511][0] - 0.5).abs() < 0.0001);
+        let peak = callback.stats().peak.unwrap();
+        assert!((peak[0] - 0.5).abs() < 0.0001);
+        assert!((peak[1] - 0.25).abs() < 0.0001);
         let muted = Selection::new(1, 2, Mode::Stereo, true).unwrap();
         assert_eq!(
             routing.configure(muted, true, false).unwrap().generation,
@@ -285,6 +314,7 @@ mod tests {
             assert_eq!(samples[511], [0.0; 2]);
         }
         routing.configure(selection, true, false).unwrap();
+        assert_eq!(callback.stats().peak, Some([0.0; 2]));
         producer.push_generation(&fresh, generation);
         unsafe {
             callback.process(&mut buffer, None);
@@ -295,6 +325,7 @@ mod tests {
             callback.process(&mut buffer, None);
         }
         assert!(samples.iter().all(|frame| *frame == [0.0; 2]));
+        assert_eq!(callback.stats().peak, Some([0.0; 2]));
         let restarted = routing
             .configure(selection, true, false)
             .unwrap()

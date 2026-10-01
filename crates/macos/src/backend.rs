@@ -128,6 +128,9 @@ impl Backend for NativeBackend {
             fifo_max_frames: output.fifo_max,
             buffered_input_target_frames: output.buffered_target,
             correction_ppm: output.correction_ppm,
+            output_peak_dbfs: output
+                .peak
+                .map(|peak| peak.map(channelbridge_core::view::dbfs)),
             output_failed: output.failed,
         })
     }

@@ -44,6 +44,9 @@ pub struct AudioDiagnostics {
     pub fifo_max_frames: Option<u64>,
     pub buffered_input_target_frames: u64,
     pub correction_ppm: Option<f64>,
+    /// Latest accepted output block after fades/mute. None means unobserved or invalid;
+    /// [None, None] inside Some represents known stereo silence (-infinity).
+    pub output_peak_dbfs: Option<[Option<f32>; 2]>,
     pub output_failed: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
