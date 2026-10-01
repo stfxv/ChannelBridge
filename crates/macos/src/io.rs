@@ -1,6 +1,6 @@
 //! Control-thread IOProc ownership and callback-context lifetime.
 use crate::{capture::CaptureCallback, output::OutputCallback};
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId};
+use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, PropertyAddress, fourcc};
 use std::{
     ffi::c_void,
     marker::PhantomData,
@@ -29,6 +29,14 @@ unsafe extern "C" {
     fn AudioDeviceStart(device: ObjectId, id: IoProc) -> i32;
     fn AudioDeviceStop(device: ObjectId, id: IoProc) -> i32;
     fn AudioDeviceDestroyIOProcID(device: ObjectId, id: IoProc) -> i32;
+    fn AudioObjectSetPropertyData(
+        object: ObjectId,
+        address: *const PropertyAddress,
+        qualifier_size: u32,
+        qualifier: *const c_void,
+        size: u32,
+        data: *const c_void,
+    ) -> i32;
 }
 #[derive(Clone, Copy)]
 struct Api {
@@ -144,6 +152,27 @@ impl std::fmt::Display for IoError {
 }
 impl std::error::Error for IoError {}
 
+#[derive(Clone, Copy)]
+pub enum Direction {
+    Input,
+    Output,
+}
+fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
+    if !(1..=512).contains(&count) {
+        return None;
+    }
+    let size = 12 + count * 4;
+    let mut payload = vec![0_u64; size.div_ceil(8)];
+    payload[0] = id as usize as u64;
+    // Native-endian bytes avoid conflating the UInt32 count with the first flag.
+    let bytes = (count as u32).to_ne_bytes();
+    // SAFETY: allocated words cover the full initialized header and flag array.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload.as_mut_ptr().cast::<u8>().add(8), 4);
+    }
+    Some((payload, size as u32))
+}
+
 /// Thread-confined owner. Drop never releases memory if Stop/Destroy fails.
 pub struct Registration<T: Handler> {
     device: ObjectId,
@@ -200,6 +229,56 @@ impl<T: Handler> Registration<T> {
     }
     pub fn handler(&self) -> &T {
         &self.context.as_ref().expect("live registration").handler
+    }
+    /// Disable this IOProc's streams in one direction before Start. This does
+    /// not change global stream activity or other clients' stream usage.
+    pub fn disable_streams(
+        &mut self,
+        direction: Direction,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.start_attempted {
+            return Err("stream usage must be configured before Start".into());
+        }
+        let scope = match direction {
+            Direction::Input => fourcc(b"inpt"),
+            Direction::Output => fourcc(b"outp"),
+        };
+        let streams = crate::devices::property(self.device, fourcc(b"stm#"), scope)?;
+        if streams.len() % 4 != 0 || streams.len() / 4 > 512 {
+            return Err("invalid stream list".into());
+        }
+        let count = streams.len() / 4;
+        if count == 0 {
+            return Ok(());
+        }
+        let (payload, size) = disabled_usage(self.id.expect("registered ID"), count)
+            .ok_or("invalid stream usage size")?;
+        let address = PropertyAddress {
+            selector: fourcc(b"suse"),
+            scope,
+            element: 0,
+        };
+        // SAFETY: initialized aligned payload follows SDK's 8-byte pointer,
+        // 4-byte count and UInt32 flags; all streams in this scope are included.
+        let status = unsafe {
+            AudioObjectSetPropertyData(
+                self.device,
+                &address,
+                0,
+                std::ptr::null(),
+                size,
+                payload.as_ptr().cast(),
+            )
+        };
+        if status != 0 {
+            return Err(IoError {
+                operation: "disable streams",
+                status,
+                context_retained: false,
+            }
+            .into());
+        }
+        Ok(())
     }
     pub fn start(&mut self) -> Result<(), IoError> {
         if self.start_attempted {
@@ -348,6 +427,21 @@ mod tests {
     unsafe extern "C" fn destroy(_: ObjectId, _: IoProc) -> i32 {
         DESTROYS.fetch_add(1, Ordering::Relaxed);
         DESTROY_ERROR.load(Ordering::Relaxed)
+    }
+    #[test]
+    fn stream_usage_payload_includes_id_count_and_every_disabled_flag() {
+        let (payload, size) = disabled_usage(dispatch::<TestHandler>, 3).unwrap();
+        assert_eq!(size, 24);
+        assert_eq!(
+            payload[0],
+            dispatch::<TestHandler> as *const () as usize as u64
+        );
+        let bytes =
+            unsafe { std::slice::from_raw_parts(payload.as_ptr().cast::<u8>(), size as usize) };
+        assert_eq!(u32::from_ne_bytes(bytes[8..12].try_into().unwrap()), 3);
+        assert!(bytes[12..].iter().all(|byte| *byte == 0));
+        assert!(disabled_usage(dispatch::<TestHandler>, 0).is_none());
+        assert!(disabled_usage(dispatch::<TestHandler>, 513).is_none());
     }
     #[test]
     fn lifecycle_releases_only_after_deregistration_and_retains_on_errors() {

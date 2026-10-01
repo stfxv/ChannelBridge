@@ -114,6 +114,72 @@ impl PreparedSession {
         })
     }
 }
+/// Development session, restricted to the separate Rust test device UID.
+/// Both IOProcs keep running for preview/stop; sending is controlled atomically.
+pub struct TestSession {
+    capture: crate::io::Registration<CaptureCallback>,
+    output: crate::io::Registration<OutputCallback>,
+    pub routing: Arc<AtomicRouting>,
+    pub meters: MeterReader,
+    pub source_streams: Vec<Stream>,
+}
+impl TestSession {
+    pub fn preview(
+        source_uid: &str,
+        selection: Selection,
+        ticks_per_second: u64,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let devices = devices::list()?;
+        let find = |uid: &str| -> Result<ObjectId, Box<dyn std::error::Error>> {
+            let mut matching = devices
+                .iter()
+                .filter_map(|entry| entry.as_ref().ok())
+                .filter(|device| device.uid == uid);
+            let device = matching.next().ok_or("selected device is unavailable")?;
+            if matching.next().is_some() {
+                return Err("duplicate device UID".into());
+            }
+            Ok(device.id)
+        };
+        let source = find(source_uid)?;
+        let target = find(channelbridge_contract::TEST_DEVICE_UID)?;
+        let prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
+        let mut capture = crate::io::Registration::new(source, prepared.capture)?;
+        capture.disable_streams(crate::io::Direction::Output)?;
+        let mut output = crate::io::Registration::new(target, prepared.output)?;
+        output.disable_streams(crate::io::Direction::Input)?;
+        // Output starts silent; source first fills dry preview meters. No sending
+        // is enabled until the caller explicitly changes the routing snapshot.
+        output.start()?;
+        capture.start()?;
+        Ok(Self {
+            capture,
+            output,
+            routing: prepared.routing,
+            meters: prepared.meters,
+            source_streams: prepared.source_streams,
+        })
+    }
+    pub fn stats(&self) -> (crate::capture::CaptureStats, crate::output::OutputStats) {
+        (
+            self.capture.handler().stats(),
+            self.output.handler().stats(),
+        )
+    }
+    pub fn close(self) -> Result<(), crate::io::IoError> {
+        let route = self.routing.load();
+        self.routing
+            .configure(route.selection, false, route.overview);
+        // Attempt both cleanups even if one reports an error. Each owner retains
+        // its own callback storage whenever successful teardown is unconfirmed.
+        let output = self.output.close();
+        let capture = self.capture.close();
+        output?;
+        capture?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
