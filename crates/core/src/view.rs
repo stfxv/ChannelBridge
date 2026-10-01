@@ -21,7 +21,7 @@ pub enum DriverReading {
 }
 /// Session-local cumulative counters, read independently rather than as one
 /// synchronized audio epoch. No samples, device UID or user paths are included.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct AudioDiagnostics {
     pub capture_callbacks: u64,
     pub capture_rejected: u64,
@@ -36,6 +36,12 @@ pub struct AudioDiagnostics {
     pub output_missing_frames: u64,
     pub output_priming_callbacks: u64,
     pub output_dropped_lookahead_frames: u64,
+    pub output_rendered_frames: u64,
+    pub fifo_current_frames: Option<u64>,
+    pub fifo_min_frames: Option<u64>,
+    pub fifo_max_frames: Option<u64>,
+    pub buffered_input_target_frames: u64,
+    pub correction_ppm: Option<f64>,
     pub output_failed: bool,
 }
 #[derive(Clone, Debug, PartialEq)]

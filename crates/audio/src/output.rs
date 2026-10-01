@@ -53,6 +53,13 @@ impl OutputProcessor {
     pub fn correction_ppm(&self) -> f64 {
         self.controller.correction_ppm()
     }
+    pub fn fifo_frames(&self) -> usize {
+        self.input.available()
+    }
+    /// Target includes FIFO and interpolation history together.
+    pub fn target_frames(&self) -> usize {
+        self.target
+    }
     pub fn stale_discarded(&self) -> u64 {
         self.stale_discarded
     }

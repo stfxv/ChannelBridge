@@ -118,6 +118,12 @@ impl Backend for NativeBackend {
             output_missing_frames: output.missing,
             output_priming_callbacks: output.priming_callbacks,
             output_dropped_lookahead_frames: output.dropped_lookahead,
+            output_rendered_frames: output.rendered_frames,
+            fifo_current_frames: output.fifo_current,
+            fifo_min_frames: output.fifo_min,
+            fifo_max_frames: output.fifo_max,
+            buffered_input_target_frames: output.buffered_target,
+            correction_ppm: output.correction_ppm,
             output_failed: output.failed,
         })
     }

@@ -27,6 +27,12 @@ pub struct OutputCallback {
     missing: AtomicU64,
     priming_callbacks: AtomicU64,
     dropped_lookahead: AtomicU64,
+    rendered_frames: AtomicU64,
+    fifo_current: AtomicU64,
+    fifo_min: AtomicU64,
+    fifo_max: AtomicU64,
+    buffered_target: u64,
+    correction_ppm: AtomicU64,
 }
 // SAFETY: State is Send and accessed only under the single-attempt exclusive
 // gate. Control code cannot obtain a reference to State; other fields are atomic.
@@ -45,6 +51,12 @@ pub struct OutputStats {
     /// Waiting for startup/recovery buffering, separate from an active underrun.
     pub priming_callbacks: u64,
     pub dropped_lookahead: u64,
+    pub rendered_frames: u64,
+    pub fifo_current: Option<u64>,
+    pub fifo_min: Option<u64>,
+    pub fifo_max: Option<u64>,
+    pub buffered_target: u64,
+    pub correction_ppm: Option<f64>,
     pub failed: bool,
 }
 impl OutputCallback {
@@ -53,6 +65,7 @@ impl OutputCallback {
         let mut scratch = Vec::new();
         scratch.try_reserve_exact(4096).ok()?;
         scratch.resize(4096, StereoFrame::SILENCE);
+        let buffered_target = processor.target_frames() as u64;
         Some(Self {
             source_clock: Arc::new(SourceClock::default()),
             state: UnsafeCell::new(State {
@@ -68,6 +81,12 @@ impl OutputCallback {
             missing: AtomicU64::new(0),
             priming_callbacks: AtomicU64::new(0),
             dropped_lookahead: AtomicU64::new(0),
+            rendered_frames: AtomicU64::new(0),
+            fifo_current: AtomicU64::new(0),
+            fifo_min: AtomicU64::new(u64::MAX),
+            fifo_max: AtomicU64::new(0),
+            buffered_target,
+            correction_ppm: AtomicU64::new(f64::NAN.to_bits()),
         })
     }
     pub fn with_source_clock(mut self, clock: Arc<SourceClock>) -> Self {
@@ -75,12 +94,21 @@ impl OutputCallback {
         self
     }
     pub fn stats(&self) -> OutputStats {
+        let minimum = self.fifo_min.load(Ordering::Acquire);
+        let observed = minimum != u64::MAX;
+        let correction = f64::from_bits(self.correction_ppm.load(Ordering::Acquire));
         OutputStats {
             callbacks: self.callbacks.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
             missing: self.missing.load(Ordering::Acquire),
             priming_callbacks: self.priming_callbacks.load(Ordering::Acquire),
             dropped_lookahead: self.dropped_lookahead.load(Ordering::Acquire),
+            rendered_frames: self.rendered_frames.load(Ordering::Acquire),
+            fifo_current: observed.then(|| self.fifo_current.load(Ordering::Acquire)),
+            fifo_min: observed.then_some(minimum),
+            fifo_max: observed.then(|| self.fifo_max.load(Ordering::Acquire)),
+            buffered_target: self.buffered_target,
+            correction_ppm: correction.is_finite().then_some(correction),
             failed: self.failed.load(Ordering::Acquire),
         }
     }
@@ -117,6 +145,7 @@ impl OutputCallback {
                 return;
             }
             let frames = &mut state.scratch[..output.len()];
+            let fifo_before = state.processor.fifo_frames() as u64;
             let report = state.processor.render(
                 frames,
                 source_speed.or_else(|| self.source_clock.speed(route.generation)),
@@ -138,6 +167,20 @@ impl OutputCallback {
             }
             self.dropped_lookahead
                 .fetch_add(report.dropped_lookahead as u64, Ordering::Relaxed);
+            self.rendered_frames
+                .fetch_add(report.produced as u64, Ordering::Relaxed);
+            let fifo = state.processor.fifo_frames() as u64;
+            self.fifo_current.store(fifo, Ordering::Relaxed);
+            // Render may move the entire FIFO into interpolation history.
+            // Sample both boundaries so that this does not hide input backlog.
+            self.fifo_max
+                .fetch_max(fifo.max(fifo_before), Ordering::Relaxed);
+            self.fifo_min
+                .fetch_min(fifo.min(fifo_before), Ordering::Release);
+            self.correction_ppm.store(
+                state.processor.correction_ppm().to_bits(),
+                Ordering::Release,
+            );
         }));
         if result.is_err() {
             output.fill([0.0; 2]);
@@ -166,6 +209,9 @@ mod tests {
         let (mut producer, consumer) = stereo_queue(8192).unwrap();
         let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
         let callback = OutputCallback::new(processor, routing).unwrap();
+        assert_eq!(callback.stats().fifo_min, None);
+        assert_eq!(callback.stats().correction_ppm, None);
+        assert_eq!(callback.stats().buffered_target, 1024);
         let mut samples = [[9.0_f32; 2]; 512];
         let mut buffer = AudioBufferList {
             count: 1,
@@ -179,6 +225,8 @@ mod tests {
         unsafe { callback.process(&mut buffer, None) };
         assert_eq!(callback.stats().priming_callbacks, 1);
         assert_eq!(callback.stats().missing, 0);
+        assert_eq!(callback.stats().fifo_min, Some(0));
+        assert_eq!(callback.stats().correction_ppm, Some(0.0));
         assert!(samples.iter().all(|sample| *sample == [0.0; 2]));
         assert_eq!(
             producer.push_generation(&[StereoFrame::new(0.5, 0.25); 2048], generation),
@@ -191,6 +239,8 @@ mod tests {
         assert!(stats.missing > 0);
         assert!(stats.dropped_lookahead > 0);
         assert!(stats.priming_callbacks > 1);
+        assert!(stats.rendered_frames > 0);
+        assert!(stats.fifo_max.unwrap() > 0);
         assert_eq!(stats.rejected, 0);
         assert!(!stats.failed);
     }
