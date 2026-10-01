@@ -7,7 +7,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run --quiet -p channelbridge-audio --example realtime_allocations
-cargo run --quiet -p channelbridge-macos --example realtime_allocations
+cargo run --quiet -p channelbridge-macos --example native_realtime_allocations
 cargo test -p channelbridge-audio --features model-check ring::model_tests
 clang -Wall -Wextra -Werror scripts/test_rust_abi.c -framework CoreAudio -o work/test/rust/abi
 work/test/rust/abi > work/test/rust/apple-layout.txt

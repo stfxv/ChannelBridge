@@ -80,3 +80,5 @@
 objc2 0.6.4 / Foundation・AVFoundation 0.3.2 / block2 0.6.2を固定し、OSのマイク認可状態の照会と、メインスレッドの明示操作からの許可要求を追加。要求前に実行バンドルの非空NSMicrophoneUsageDescriptionを確認し、重複要求は保留する。完了ブロックは原子状態だけを更新し、UIを操作しない。NativeBackendは交渉/開始前と稼働中にもOS状態を確認する。未決定/拒否/制限/未知状態を許可と扱わない分類試験が通過。実Macで状態照会のみ実行しAuthorizedを取得したが、これは今回の実行元の認可であり、新Rustアプリの認可ではない。新アプリのバンドルと許可ダイアログでの拒否/取消/許可試験は未完了。
 
 根拠: [Apple authorizationStatus](https://developer.apple.com/documentation/AVFoundation/AVCaptureDevice/authorizationStatus%28for%3A%29)、[Apple requestAccess](https://developer.apple.com/documentation/avfoundation/avcapturedevice/requestaccess%28for%3Acompletionhandler%3A%29)、固定したobjc2-av-foundationの生成バインディング。Rust 1.85の対象crate試験とIntel向け全ターゲットコンパイルを確認。ドライバはこのcrateに依存せず、AVFoundationをドライバへリンクしない構成を維持する。
+
+2026-10-01の最新チェックポイントで権限バインディング込みの全体検証を再実行。通常54テスト、並行モデル、ABI比較、模擬HAL、二つの確保検査が通過。音声coreとネイティブ側でexample名が重複していたため、ネイティブ側をnative_realtime_allocationsへ改名し、手順も更新。再実行ログではこの出力ファイル衝突を含む警告なしを確認。実HALの読み込み/転送、UIと長時間通話の必須条件は未完了のままである。
