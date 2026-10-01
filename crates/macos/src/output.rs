@@ -25,6 +25,8 @@ pub struct OutputCallback {
     callbacks: AtomicU64,
     rejected: AtomicU64,
     missing: AtomicU64,
+    priming_callbacks: AtomicU64,
+    dropped_lookahead: AtomicU64,
 }
 // SAFETY: State is Send and accessed only under the single-attempt exclusive
 // gate. Control code cannot obtain a reference to State; other fields are atomic.
@@ -40,6 +42,9 @@ pub struct OutputStats {
     pub callbacks: u64,
     pub rejected: u64,
     pub missing: u64,
+    /// Waiting for startup/recovery buffering, separate from an active underrun.
+    pub priming_callbacks: u64,
+    pub dropped_lookahead: u64,
     pub failed: bool,
 }
 impl OutputCallback {
@@ -61,6 +66,8 @@ impl OutputCallback {
             callbacks: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             missing: AtomicU64::new(0),
+            priming_callbacks: AtomicU64::new(0),
+            dropped_lookahead: AtomicU64::new(0),
         })
     }
     pub fn with_source_clock(mut self, clock: Arc<SourceClock>) -> Self {
@@ -72,6 +79,8 @@ impl OutputCallback {
             callbacks: self.callbacks.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
             missing: self.missing.load(Ordering::Acquire),
+            priming_callbacks: self.priming_callbacks.load(Ordering::Acquire),
+            dropped_lookahead: self.dropped_lookahead.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
         }
     }
@@ -124,6 +133,11 @@ impl OutputCallback {
             }
             self.missing
                 .fetch_add(report.missing as u64, Ordering::Relaxed);
+            if report.priming {
+                self.priming_callbacks.fetch_add(1, Ordering::Relaxed);
+            }
+            self.dropped_lookahead
+                .fetch_add(report.dropped_lookahead as u64, Ordering::Relaxed);
         }));
         if result.is_err() {
             output.fill([0.0; 2]);
@@ -141,6 +155,45 @@ mod tests {
         routing::{Mode, Selection},
     };
     use channelbridge_hal_abi::AudioBuffer;
+    #[test]
+    fn diagnostics_separate_buffering_from_active_audio_shortage() {
+        let selection = Selection::new(1, 2, Mode::Stereo, false).unwrap();
+        let routing = Arc::new(AtomicRouting::new(selection));
+        let generation = routing
+            .configure(selection, true, false)
+            .unwrap()
+            .generation;
+        let (mut producer, consumer) = stereo_queue(8192).unwrap();
+        let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
+        let callback = OutputCallback::new(processor, routing).unwrap();
+        let mut samples = [[9.0_f32; 2]; 512];
+        let mut buffer = AudioBufferList {
+            count: 1,
+            buffers: [AudioBuffer {
+                channels: 2,
+                byte_size: 4096,
+                data: samples.as_mut_ptr().cast(),
+            }],
+        };
+        // SAFETY: all calls own the complete native stereo output buffer.
+        unsafe { callback.process(&mut buffer, None) };
+        assert_eq!(callback.stats().priming_callbacks, 1);
+        assert_eq!(callback.stats().missing, 0);
+        assert!(samples.iter().all(|sample| *sample == [0.0; 2]));
+        assert_eq!(
+            producer.push_generation(&[StereoFrame::new(0.5, 0.25); 2048], generation),
+            2048
+        );
+        for _ in 0..6 {
+            unsafe { callback.process(&mut buffer, None) };
+        }
+        let stats = callback.stats();
+        assert!(stats.missing > 0);
+        assert!(stats.dropped_lookahead > 0);
+        assert!(stats.priming_callbacks > 1);
+        assert_eq!(stats.rejected, 0);
+        assert!(!stats.failed);
+    }
     #[test]
     fn mute_consumes_audio_and_stop_restart_cannot_replay_it() {
         let selection = Selection::new(1, 2, Mode::Stereo, false).unwrap();
