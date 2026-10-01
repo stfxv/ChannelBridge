@@ -49,6 +49,12 @@ define_class!(
         }
     }
     impl AppDelegate {
+        #[unsafe(method(selectRouting:))]
+        fn select_routing(&self, sender: &NSPopUpButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                runtime.screen.select_routing(sender, &runtime.worker);
+            }
+        }
         #[unsafe(method(selectDevice:))]
         fn select_device(&self, _sender: &NSPopUpButton) {
             let state = self.ivars().runtime.borrow();
@@ -83,6 +89,7 @@ impl AppDelegate {
     }
 }
 struct Screen {
+    routing: crate::routing_controls::RoutingControls,
     window: Retained<NSWindow>,
     devices: Retained<NSPopUpButton>,
     format: Retained<NSTextField>,
@@ -96,7 +103,7 @@ struct Screen {
 }
 impl Screen {
     fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 180.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 330.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -115,14 +122,14 @@ impl Screen {
         window.setTitle(ns_string!("ChannelBridge Rust Test"));
         let devices = NSPopUpButton::initWithFrame_pullsDown(
             NSPopUpButton::alloc(main),
-            NSRect::new(NSPoint::new(20.0, 110.0), NSSize::new(340.0, 32.0)),
+            NSRect::new(NSPoint::new(20.0, 275.0), NSSize::new(340.0, 32.0)),
             false,
         );
-        // Display-only until actions and transactional config acknowledgement are wired.
+        // Enabled after a valid settings snapshot arrives.
         devices.setEnabled(false);
         let format = NSTextField::labelWithString(ns_string!("—"), main);
         format.setFrame(NSRect::new(
-            NSPoint::new(20.0, 75.0),
+            NSPoint::new(20.0, 240.0),
             NSSize::new(340.0, 24.0),
         ));
         let status = NSTextField::labelWithString(ns_string!("入力機器を確認しています"), main);
@@ -131,10 +138,12 @@ impl Screen {
             NSSize::new(340.0, 30.0),
         ));
         let view = window.contentView().expect("window content view");
+        let routing = crate::routing_controls::RoutingControls::new(main, &view);
         view.addSubview(&devices);
         view.addSubview(&format);
         view.addSubview(&status);
         Self {
+            routing,
             window,
             devices,
             format,
@@ -171,6 +180,12 @@ impl Screen {
             .devices
             .iter()
             .position(|device| device.uid == snapshot.config.device_uid);
+        self.routing.update(
+            &snapshot.config,
+            selected.map_or(0, |index| snapshot.devices[index].channels),
+            self.devices.isEnabled(),
+            self.menu_open.get(),
+        );
         let placeholder = if snapshot.config.device_uid.is_empty() {
             "入力機器を選択してください"
         } else {
@@ -272,6 +287,27 @@ impl Screen {
         config.device_uid = uid;
         // Restore the committed selection until Configure has completed.
         self.devices.selectItemAtIndex(committed_index);
+        self.submit_config(worker, &snapshot, config);
+    }
+    fn select_routing(&self, sender: &NSPopUpButton, worker: &channelbridge_core::worker::Worker) {
+        if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
+            return;
+        }
+        let snapshot = worker.snapshot();
+        let config = self.routing.selected_config(sender, &snapshot.config);
+        self.routing.restore(&snapshot.config);
+        if let Some(config) = config.filter(|config| config != &snapshot.config) {
+            self.submit_config(worker, &snapshot, config);
+        } else {
+            self.update(&snapshot);
+        }
+    }
+    fn submit_config(
+        &self,
+        worker: &channelbridge_core::worker::Worker,
+        snapshot: &channelbridge_core::worker::Snapshot,
+        config: channelbridge_core::Config,
+    ) {
         match worker.send(channelbridge_core::Command::Configure(config)) {
             Ok(()) => {
                 self.pending_attempt
@@ -280,7 +316,7 @@ impl Screen {
             }
             Err(error) => *self.action_error.borrow_mut() = Some(error),
         }
-        self.update(&snapshot);
+        self.update(snapshot);
     }
 }
 pub fn run() {
@@ -314,6 +350,21 @@ pub fn run() {
             .menu()
             .expect("device menu")
             .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        for popup in [
+            &screen.routing.left,
+            &screen.routing.right,
+            &screen.routing.mode,
+        ] {
+            // SAFETY: same main-thread retained delegate and matching selector.
+            unsafe {
+                popup.setTarget(Some(&delegate));
+                popup.setAction(Some(sel!(selectRouting:)));
+            }
+            popup
+                .menu()
+                .expect("routing menu")
+                .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        }
     }
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     // SAFETY: matching Objective-C selector implemented above, main-thread
@@ -366,7 +417,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                3
+                8
             );
             assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
             if let Some(device) = snapshot.devices.first() {
@@ -444,6 +495,7 @@ fn smoke_device_save(main: MainThreadMarker) {
     )
     .expect("fixture worker");
     let screen = Screen::new(main, None);
+    screen.routing.smoke();
     let wait = |predicate: &dyn Fn(&channelbridge_core::worker::Snapshot) -> bool| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
@@ -494,6 +546,23 @@ fn smoke_device_save(main: MainThreadMarker) {
     screen.devices.selectItemAtIndex(0);
     screen.select_device(&worker);
     assert_eq!(screen.devices.indexOfSelectedItem(), 1);
+    screen.routing.mode.selectItemAtIndex(1);
+    screen.select_routing(&screen.routing.mode, &worker);
+    let stereo = wait(&|snapshot| snapshot.configuration_attempt == 3);
+    screen.update(&stereo);
+    assert_eq!(stereo.config.mode, channelbridge_core::Mode::Stereo);
+    assert!(screen.routing.right.isEnabled());
+    if stereo.devices[0].channels >= 2 {
+        screen.routing.left.selectItemAtIndex(2);
+        screen.select_routing(&screen.routing.left, &worker);
+        let selected = wait(&|snapshot| snapshot.configuration_attempt == 4);
+        screen.update(&selected);
+        assert_eq!((selected.config.left, selected.config.right), (2, 2));
+        assert_eq!(
+            channelbridge_core::storage::load(&destination).expect("channel config"),
+            selected.config
+        );
+    }
     worker.request_shutdown();
     wait(&|snapshot| snapshot.finished);
     worker.join().expect("fixture worker shutdown");
