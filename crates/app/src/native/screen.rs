@@ -6,6 +6,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, ns_string};
 
 pub(super) struct Screen {
+    pub(super) export: super::export::Export,
     overview: std::cell::RefCell<Option<crate::overview::Overview>>,
     overview_sent: std::cell::Cell<bool>,
     pub(super) overview_button: Retained<NSButton>,
@@ -29,7 +30,7 @@ pub(super) struct Screen {
 }
 impl Screen {
     pub(super) fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 400.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 440.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -102,7 +103,21 @@ impl Screen {
             NSPoint::new(20.0, 90.0),
             NSSize::new(340.0, 28.0),
         ));
+        for index in 0..view.subviews().len() {
+            let child = view.subviews().objectAtIndex(index);
+            let mut frame = child.frame();
+            frame.origin.y += 40.0;
+            child.setFrame(frame);
+        }
+        status.setFrame(NSRect::new(
+            NSPoint::new(20.0, 10.0),
+            NSSize::new(340.0, 25.0),
+        ));
+        let export = super::export::Export::new(main);
+        view.addSubview(&export.button);
+        view.addSubview(&export.label);
         Self {
+            export,
             overview: Default::default(),
             overview_sent: Default::default(),
             overview_button,
@@ -126,6 +141,7 @@ impl Screen {
         }
     }
     pub(super) fn update(&self, snapshot: &channelbridge_core::worker::Snapshot) {
+        self.export.poll();
         self.meters
             .update(&snapshot.config, snapshot.audio.as_ref());
         if self

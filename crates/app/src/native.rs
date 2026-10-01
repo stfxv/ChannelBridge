@@ -1,4 +1,5 @@
 //! Main-thread application lifecycle, selectors and timer ownership.
+mod export;
 mod screen;
 mod smoke;
 use objc2::{
@@ -58,6 +59,13 @@ define_class!(
         }
     }
     impl AppDelegate {
+        #[unsafe(method(saveDiagnostics:))]
+        fn save_diagnostics(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                let main = MainThreadMarker::new().expect("save action on main thread");
+                runtime.screen.export.begin(main, runtime.worker.snapshot());
+            }
+        }
         #[unsafe(method(showOverview:))]
         fn show_overview(&self, _sender: &NSButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
@@ -115,7 +123,7 @@ define_class!(
                 if let Some(menu) = runtime.menu.as_ref() {
                     menu.update(main, &snapshot, runtime.screen.send_button.isEnabled(), runtime.screen.mute_button.isEnabled());
                 }
-                if snapshot.finished && self.ivars().shutting_down.replace(false) {
+                if snapshot.finished && !runtime.screen.export.pending() && self.ivars().shutting_down.replace(false) {
                     NSApplication::sharedApplication(main).replyToApplicationShouldTerminate(true);
                 }
             }
@@ -233,6 +241,7 @@ pub fn run() {
             (&screen.permission_button, sel!(requestMicrophone:)),
             (&screen.send_button, sel!(toggleSend:)),
             (&screen.mute_button, sel!(toggleMute:)),
+            (&screen.export.button, sel!(saveDiagnostics:)),
         ] {
             // SAFETY: matching main-thread delegate selectors; delegate retained
             // through the event loop, targets are weak.
@@ -319,8 +328,14 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                15
+                17
             );
+            assert_eq!(
+                runtime.screen.export.button.title().to_string(),
+                "診断を保存"
+            );
+            assert!(runtime.screen.export.button.isEnabled());
+            assert!(runtime.screen.export.button.frame().origin.y > 35.0);
             assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
             if let Some(device) = snapshot.devices.first() {
                 let mut selected = snapshot.clone();
