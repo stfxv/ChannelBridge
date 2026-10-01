@@ -112,6 +112,10 @@ impl Backend for NativeBackend {
             capture_invalid_clock: capture.invalid_clock,
             capture_discontinuities: capture.discontinuities,
             capture_unavailable_channel: capture.unavailable_channel,
+            capture_clock_generation: capture.clock_generation,
+            observed_source_speed_ppm: capture
+                .source_speed
+                .map(|speed| (speed - 1.0) * 1_000_000.0),
             capture_failed: capture.failed,
             output_callbacks: output.callbacks,
             output_rejected: output.rejected,

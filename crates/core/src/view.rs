@@ -30,6 +30,8 @@ pub struct AudioDiagnostics {
     pub capture_invalid_clock: u64,
     pub capture_discontinuities: u64,
     pub capture_unavailable_channel: u64,
+    pub capture_clock_generation: Option<u64>,
+    pub observed_source_speed_ppm: Option<f64>,
     pub capture_failed: bool,
     pub output_callbacks: u64,
     pub output_rejected: u64,

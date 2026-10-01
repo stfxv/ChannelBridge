@@ -46,6 +46,8 @@ pub struct CaptureStats {
     pub invalid_clock: u64,
     pub discontinuities: u64,
     pub unavailable_channel: u64,
+    pub clock_generation: Option<u64>,
+    pub source_speed: Option<f64>,
     pub failed: bool,
 }
 struct Gate<'a>(&'a AtomicBool);
@@ -75,6 +77,7 @@ impl CaptureCallback {
         Arc::clone(&self.source_clock)
     }
     pub fn stats(&self) -> CaptureStats {
+        let clock = self.source_clock.snapshot();
         CaptureStats {
             callbacks: self.callbacks.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
@@ -83,6 +86,8 @@ impl CaptureCallback {
             invalid_clock: self.invalid_clock.load(Ordering::Acquire),
             discontinuities: self.discontinuities.load(Ordering::Acquire),
             unavailable_channel: self.unavailable_channel.load(Ordering::Acquire),
+            clock_generation: clock.map(|(generation, _)| generation),
+            source_speed: clock.and_then(|(_, speed)| speed),
             failed: self.failed.load(Ordering::Acquire),
         }
     }
@@ -208,6 +213,8 @@ mod tests {
         }])
         .unwrap();
         let callback = CaptureCallback::new(layout, processor);
+        assert_eq!(callback.stats().clock_generation, None);
+        assert_eq!(callback.stats().source_speed, None);
         let mut samples = [[0.25_f32, -0.5]; 64];
         let input = AudioBufferList {
             count: 1,
@@ -261,6 +268,8 @@ mod tests {
         callback.busy.store(false, Ordering::Release);
         assert_eq!(callback.stats().rejected, 1);
         assert_eq!(callback.stats().written, 64);
+        assert_eq!(callback.stats().clock_generation, Some(generation));
+        assert_eq!(callback.stats().source_speed, Some(1.0));
         unsafe {
             callback.process(&input, std::ptr::null(), &stamp);
         }
@@ -286,6 +295,8 @@ mod tests {
         unsafe { callback.process(&input, &now, std::ptr::null()) };
         assert_eq!(callback.stats().invalid_clock, 1);
         assert_eq!(callback.stats().discontinuities, 1);
+        assert_eq!(callback.stats().source_speed, None);
+        assert!(callback.stats().clock_generation.unwrap() > generation);
         assert!(!callback.stats().failed);
     }
 }

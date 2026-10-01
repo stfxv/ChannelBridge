@@ -30,10 +30,21 @@ impl SourceClock {
             .is_ok()
     }
     pub fn speed(&self, generation: u64) -> Option<f64> {
+        self.snapshot()
+            .filter(|(observed, _)| *observed == generation)
+            .and_then(|(_, speed)| speed)
+    }
+    /// A single atomic word keeps diagnostic speed and generation paired too.
+    pub fn snapshot(&self) -> Option<(u64, Option<f64>)> {
         let word = self.0.load(Ordering::Acquire);
         let encoded = word & MASK;
-        (word >> SHIFT == generation && encoded != 0)
-            .then(|| 1.0 + (encoded as i64 - CENTER) as f64 / SCALE)
+        let generation = word >> SHIFT;
+        (generation != 0).then(|| {
+            (
+                generation,
+                (encoded != 0).then(|| 1.0 + (encoded as i64 - CENTER) as f64 / SCALE),
+            )
+        })
     }
 }
 #[cfg(test)]
@@ -43,12 +54,15 @@ mod tests {
     fn clock_snapshot_is_generation_tagged_and_rejects_invalid_speed() {
         let clock = SourceClock::default();
         assert_eq!(clock.speed(1), None);
+        assert_eq!(clock.snapshot(), None);
         assert!(clock.publish(2, Some(1.000_123_456)));
         assert!((clock.speed(2).unwrap() - 1.000_123_456).abs() <= 0.000_000_005);
         assert_eq!(clock.speed(1), None);
+        assert_eq!(clock.snapshot().unwrap().0, 2);
         assert!(!clock.publish(1, Some(1.0)));
         assert!(clock.publish(3, Some(f64::NAN)));
         assert_eq!(clock.speed(3), None);
+        assert_eq!(clock.snapshot(), Some((3, None)));
         assert!(clock.publish(4, Some(1.5)));
         assert_eq!(clock.speed(4), None);
     }
