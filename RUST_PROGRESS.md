@@ -534,3 +534,25 @@ Clippy passed. A 1200-second observer is confirmed live (PID 2478, exec session
 57724) with no result yet. The test app was absent from the process inventory, so
 this is virtual-reader continuity observation only, not the required physical
 stereo/Discord long-call test. Do not count pending runtime as a passed test.
+
+
+### 2026-10-01 user-authorized promotion to official Rust release
+
+User reports two hours of conversation without recurring warbling and explicitly
+requests promoting Rust to the official version and pushing Git. Current tests use
+E1x2; RME is deferred at user request. The report does not identify mono/stereo or
+prove eight-hour acceptance. Promote package version from 0.5.3-alpha.1 to 0.5.3,
+make top-level build/test scripts use Rust production packaging/tests, replace the
+legacy README with current Rust instructions and preserve legacy Go build/test/docs.
+Legacy Go CI becomes manually dispatched; Rust CI remains the normal check path.
+Unverified real-device/rollback/signing gates remain documented rather than claimed
+passed; release promotion reflects the user's explicit decision.
+
+The earlier 20-minute observer completed: 300000 callbacks, 57600000 frames,
+nonzero frames 55474432 per channel, peak 1.0103427 per channel, invalid callbacks
+and samples 0. The sender was absent at the start but signal later appeared; this
+mixed-state observation is not a controlled 20-minute physical-route quality pass.
+Values exceeding unity were observed and must not be described as guaranteed
+clipping to +/-1. No sample waveforms were retained.
+
+Official 0.5.3 full Rust test script, production workspace tests/Clippy and production Universal package build passed. Expanded payload path/type/mode/all-file hashes, signatures and offline production source rebuild passed. dist/ contains the official app and package. Actual production installation/reload remains separate from release promotion; pkgbuild environment warnings remain unresolved.

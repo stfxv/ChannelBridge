@@ -1,7 +1,5 @@
-name: macOS checks
+name: Legacy Go checks
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,6 +18,6 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: false
       - name: Controller, mixer, UI, and driver regressions
-        run: bash scripts/test.sh
+        run: bash scripts/test-legacy-go.sh
       - name: Build and verify application signature
-        run: bash scripts/build.sh
+        run: bash scripts/build-legacy-go.sh
