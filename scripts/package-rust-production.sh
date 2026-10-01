@@ -27,14 +27,28 @@ COPYFILE_DISABLE=1 pkgbuild --root "$root" \
     --ownership recommended --install-location / "$stage/ChannelBridge-Rust.pkg"
 pkgutil --expand-full "$stage/ChannelBridge-Rust.pkg" "$stage/expanded"
 python3 - "$root" "$stage/expanded" <<'PYVERIFY'
-import pathlib, sys
+import hashlib, pathlib, stat, sys
 root, expanded = map(pathlib.Path, sys.argv[1:])
 payload = expanded / 'Payload'
 expected = {str(p.relative_to(root)) for p in root.rglob('*')}
 actual = {str(p.relative_to(payload)) for p in payload.rglob('*')}
 assert actual == expected, (actual - expected, expected - actual)
+for relative in sorted(expected):
+    source, installed = root / relative, payload / relative
+    assert stat.S_IFMT(source.lstat().st_mode) == stat.S_IFMT(installed.lstat().st_mode), relative
+    assert stat.S_IMODE(source.lstat().st_mode) == stat.S_IMODE(installed.lstat().st_mode), relative
+    if source.is_symlink():
+        assert source.readlink() == installed.readlink(), relative
+    elif source.is_file():
+        def digest(path):
+            with path.open('rb') as stream:
+                result = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    result.update(chunk)
+                return result.digest()
+        assert digest(source) == digest(installed), relative
 assert not (expanded / 'Scripts').exists(), 'Installer must not run scripts'
-print('Production payload paths match staged app and driver; no installer scripts')
+print('Production payload paths, types, modes and all file hashes match; no installer scripts')
 PYVERIFY
 for path in "$app_path" "$driver_path"; do
     codesign --verify --strict "$stage/expanded/Payload/$path"

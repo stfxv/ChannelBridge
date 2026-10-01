@@ -388,3 +388,18 @@ installed test driver to load. Existing coreaudiod/test host start times remain
 12:00:42.
 
 Production package build/expand checks passed. pkgbuild still emits `write: Permission denied` warnings as in the test package build; their cause is unresolved and payload verification is not treated as resolution of those warnings.
+
+
+### 2026-10-01 package warning isolation and full payload integrity
+
+An empty root pkgbuild invocation (no app, driver, component plist or source archive)
+also emitted four identical write: Permission denied messages and exited zero.
+This narrows the warning to the local packaging invocation/environment rather than
+these bundle contents; the precise failed write and cause are still unknown. No
+permission or system protection changes were attempted.
+
+Production package expansion now compares every staged entry against the payload:
+exact path set, file type, permission mode, symlink target and SHA-256 for every
+regular file. The complete actual production package passed, in addition to strict
+codesign and the executable/archive comparisons. This does not prove installation
+or real-driver loading. Live audio acceptance and actual rollback remain pending.
