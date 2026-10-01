@@ -232,3 +232,11 @@ package-rust-test-app.shで一つのpkgにUniversal試験アプリと試験ド�
 両アーキテクチャのビルド、ドライバCFPlugInの模擬HAL、署名、bundle metadata、空キャッシュの対応ソースoffline/locked check、pkg展開後の両署名/両実行ファイルとソースarchiveのバイト一致が通過。PackageInfoに二bundleの専用ID、0.5.1/build 2、postinstall-action=none、relocatable=falseを確認。新bundleの非表示UI smokeも通過。12 MB程度のChannelBridge-Rust-Test.pkgを生成した。CIも一つの統合ビルド手順へまとめたが、CIの課金停止解除や実行合格は確認していない。
 
 pkgbuildのwrite: Permission denied警告4件は継続しており、ペイロード確認の成功と警告原因の解決は区別する。実際の統合導入/更新/削除/復帰、ロードし直したドライバでのレート追従、Developer ID署名/公証、長時間通話は未完了。生成物は試験用途であり通常版への切替とはしない。
+
+## ドライバ診断プロトコルの読み取り（2026-10-01）
+
+既存cbst診断プロパティを読む制御側diagnosticsモジュールとprobe --diagnosticsを追加。試験UIDだけを読み、音声開始、既定機器変更、カウンタ消去は行わない。contractで48-byte native-endian protocol v1を明示的に解読し、サイズ・未対応版・予約値の不一致を拒否。非整列データと2^54を超える整数カウント、47/49 bytes、protocol 2、非ゼロreservedを単体試験で確認した。独立に採取された累積カウントを一括同時刻のepoch snapshotと扱わない。
+
+最低Rustのcontract試験、Intel全ターゲットcheck、workspace Clippy、通常62試験/Loom 2/応答格子1/模擬HAL/ABI/確保検証を含む全体スクリプトが通過。Apple C ABIの模擬HALにもcbst読み取りを追加し、255書込/256読出に対するgenerationとwritten=255、missing=1、rejected=0、invalid=0およびreserved=0を確認した。ドライバ側の既存wire形式や製品音声処理は変更していない。
+
+実HALへのreadはUnknownProperty（2003332927）で終了した。音声ホスト/ドライバホストの起動日時は更新前のままであり、古いロード状態の影響が考えられるが原因の確定とはしない。値を取得できないことをカウント0/無欠落へ変換していない。新版ロード後に実カウンタの読み出しと差分・世代の評価が必要である。累積missingは起動区間や書き手不在も含み、値の増加だけで今回の通話障害の原因とは判断しない。

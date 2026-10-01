@@ -133,6 +133,12 @@ int main(int argc, char **argv) {
     transfer(kAudioServerPlugInIOOperationReadInput,128.5,256,received);
     for(int i=0;i<510;i++) assert(received[i]==sent[i]);
     assert(received[510]==0 && received[511]==0);
+    a=address('cbst');
+    assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(diagnostics),&bytes,diagnostics)==0 && bytes==48);
+    UInt32 reserved=1; memcpy(&reserved,(char *)diagnostics+4,sizeof(reserved));
+    assert(reserved==0);
+    assert(diagnostics[1]==original_seed && diagnostics[2]==255 && diagnostics[3]==1);
+    assert(diagnostics[4]==0 && diagnostics[5]==0);
     transfer(kAudioServerPlugInIOOperationReadInput,400,256,received);
     transfer(kAudioServerPlugInIOOperationReadInput,128,256,received);
     assert(received[0]==.25f && received[1]==-.5f); // No global ring clearing.

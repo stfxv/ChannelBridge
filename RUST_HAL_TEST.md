@@ -51,6 +51,16 @@ cargo run --locked -p channelbridge-macos --example monitor -- --expect-signal
 
 送出停止・ミュート時は無音、実入力に音がある送出時は信号ありを確認する。起動/ミュート切り替えの短い過渡区間が測定へ入らないよう、画面の状態反映後に各検査を開始する。引数なしなら値だけを報告する。どのモードでも不正callback/サンプルまたは検査量不足は失敗となる。
 
+## ドライバの累積診断値
+
+```sh
+cargo run --locked -p channelbridge-macos --example probe -- --diagnostics
+```
+
+試験UIDの読み取り専用カスタムプロパティcbstを照会する。音声デバイスを開始せず、カウンタを消去しない。protocol v1は48 bytesで、native-endianのu32 version、u32 reserved=0、u64 generation/written_frames/missing_read_frames/rejected_write_frames/invalid_timestampsの順。サイズ・未対応版・予約値不一致はエラーにする。各カウンタは独立した原子値の累積であり、一括で同時刻に採取されたスナップショットではない。
+
+missing_read_framesは書き込み前の起動区間や書き手不在の読み取りも含み、その増加だけでは通話中の障害と判定できない。無音サンプルと未書込フレームは別である。値を取得できない場合も無欠落/0へ置き換えない。現在の実機ではUnknownProperty（2003332927）で取得できておらず、新版ロード後の確認が必要。CFPlugInの模擬HALでは宣言されたcustom property情報と、255フレーム書込/256フレーム読出時のwritten=255・missing=1・rejected=0・invalid=0を検証する。
+
 ## 削除
 
 通話等を終え、試験を停止してから試験ドライバだけを取り除く。

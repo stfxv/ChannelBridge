@@ -1,5 +1,12 @@
 //! Read-only inventory: no microphone capture or default-device changes.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--diagnostics") {
+        println!(
+            "{:?}",
+            channelbridge_macos::diagnostics::read_test_driver()?
+        );
+        return Ok(());
+    }
     let show_formats = std::env::args().nth(1).as_deref() == Some("--formats");
     if std::env::args().nth(1).as_deref() == Some("--loopback") {
         let report = channelbridge_macos::loopback::run(std::time::Duration::from_secs(3))?;

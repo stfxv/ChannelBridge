@@ -10,6 +10,9 @@ pub mod loopback;
 pub mod monitor;
 
 #[cfg(target_os = "macos")]
+pub mod diagnostics;
+
+#[cfg(target_os = "macos")]
 pub mod capture;
 
 #[cfg(target_os = "macos")]
