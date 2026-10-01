@@ -71,3 +71,18 @@ sudo pkgutil --forget local.channelbridge.rust.driver.test.pkg
 ```
 
 削除後の認識更新が必要ならMacを再起動する。通常版 `ChannelBridge.driver` は削除しない。
+
+
+## Read-only test-driver readiness after installation/reboot
+
+```sh
+cargo run --locked -p channelbridge-macos --example probe -- --ready
+```
+
+This requires the separate test UID to be uniquely present, both live cbid and cbst
+properties to be readable, the package version to match the probe and a nonzero
+initialized timeline generation. It does not open audio, request microphone access
+or change default devices. Failure blocks actual-audio acceptance; an on-disk plist
+or installer receipt cannot substitute for this check. Success establishes package
+identity/protocol readiness only, not the exact Git revision or audio quality.
+Use `--features production` only to inspect the production target explicitly.

@@ -1,5 +1,24 @@
 //! Read-only inventory: no microphone capture or default-device changes.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--ready") {
+        let identity = channelbridge_macos::diagnostics::read_target_driver_identity()?;
+        let counters = channelbridge_macos::diagnostics::read_target_driver()?;
+        if identity != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "loaded driver package {identity} differs from probe package {}",
+                env!("CARGO_PKG_VERSION")
+            )
+            .into());
+        }
+        if counters.generation == 0 {
+            return Err("loaded driver has no initialized timeline generation".into());
+        }
+        println!(
+            "Loaded driver package {identity}; diagnostic protocol 1; generation {}. Read-only readiness passed; audio quality and exact source revision are not verified.",
+            counters.generation
+        );
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--diagnostics") {
         println!(
             "{:?}",

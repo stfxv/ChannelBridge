@@ -428,3 +428,15 @@ settings/manifest 0600. An actual verified backup exists locally at ignored
 work/legacy-backup-20261001, retaining the app from outputs/ChannelBridge.app,
 installed legacy HAL and current production settings. This preserves rollback
 artifacts; it is not an actual successful restore, migration or uninstall test.
+
+
+### 2026-10-01 live-driver readiness gate
+
+Added probe --ready for a read-only preflight: unique selected profile UID via
+property lookup, live cbid matching the probe Cargo package, protocol-v1 decoded
+cbst and nonzero generation. It opens no audio and does not request microphone
+permission or change defaults. Clippy passed. Actual invocation failed with
+HAL 2003332927; coreaudiod/test host still began at 12:00:42. Therefore actual new
+live-driver readiness remains unproven. Asked the user to report completion of a
+normal Mac reboot after the installed test update. A successful future preflight
+will not establish exact Git revision, signal quality or long-call acceptance.
