@@ -252,6 +252,8 @@ mod tests {
         healthy: bool,
         save_fail: bool,
         close_fail: bool,
+        open_fail: bool,
+        retained_on_open_failure: bool,
         opens: usize,
         closes: usize,
         sends: Vec<bool>,
@@ -274,7 +276,11 @@ mod tests {
         }
         fn open(&mut self, _: &Config) -> Result<(), String> {
             self.opens += 1;
-            Ok(())
+            if self.open_fail {
+                Err("open failed".into())
+            } else {
+                Ok(())
+            }
         }
         fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
             Ok(self.healthy)
@@ -282,6 +288,9 @@ mod tests {
         fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
             self.sends.push(sending);
             Ok(())
+        }
+        fn open_failure_requires_stop(&self) -> bool {
+            self.retained_on_open_failure
         }
         fn close(&mut self, _: ()) -> Result<(), String> {
             self.closes += 1;
@@ -303,6 +312,61 @@ mod tests {
                 ..Config::default()
             },
         )
+    }
+    #[test]
+    fn clean_start_failure_retries_but_retained_context_never_starts_replacement() {
+        for retained in [false, true] {
+            let mut worker = controller();
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.backend.ready = true;
+            worker.backend.open_fail = true;
+            worker.backend.retained_on_open_failure = retained;
+            worker.tick(0);
+            assert_eq!(worker.backend.opens, 1);
+            assert_eq!(
+                worker.state(),
+                if retained {
+                    CaptureState::Blocked
+                } else {
+                    CaptureState::Recovering
+                }
+            );
+            worker.backend.open_fail = false;
+            worker.tick(999);
+            assert_eq!(worker.backend.opens, 1);
+            worker.tick(1000);
+            assert_eq!(worker.backend.opens, if retained { 1 } else { 2 });
+            if retained {
+                worker.command(Command::Refresh).unwrap();
+                worker.command(Command::Start).unwrap();
+                worker.tick(100000);
+                assert_eq!(worker.backend.opens, 1);
+            }
+        }
+    }
+    #[test]
+    fn permission_revocation_closes_audio_and_stop_prevents_restart_on_return() {
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        worker.command(Command::PermissionChanged(false)).unwrap();
+        assert_eq!(worker.backend.closes, 1);
+        assert_eq!(worker.state(), CaptureState::Blocked);
+        worker.tick(10000);
+        assert_eq!(worker.backend.opens, 1);
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.tick(10001);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert_eq!(worker.backend.sends.last(), Some(&false));
+        worker.command(Command::Quit).unwrap();
+        assert_eq!(worker.backend.closes, 2);
+        worker.tick(20000);
+        assert_eq!(worker.backend.opens, 2);
+        assert!(worker.command(Command::Start).is_err());
     }
     #[test]
     fn stop_during_negotiation_survives_reconnect_and_preview_stays_live() {
