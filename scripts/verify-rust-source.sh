@@ -18,7 +18,7 @@ with tarfile.open(sys.argv[1]) as archive:
             continue
         assert not name.is_absolute() and '..' not in name.parts, member.name
         top = name.parts[0]
-        assert top in allowed or (top.startswith('RUST_') and top.endswith('.md')), member.name
+        assert top in allowed or (top.startswith('RUST_') and top.endswith(('.md', '.tsv'))), member.name
         names.add(str(name))
     for required in ['Cargo.lock', 'README.md', 'THIRD_PARTY_RUST.md',
                      '.cargo/config.toml', 'scripts/build-rust-app.sh',

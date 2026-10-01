@@ -14,7 +14,7 @@ stage="$(mktemp -d "$CHANNELBRIDGE_ROOT/work/rust-dist/source-stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/.cargo" "$stage/scripts" "$stage/packaging/assets"
 cp Cargo.toml Cargo.lock rust-toolchain.toml LICENSE THIRD_PARTY_RUST.md \
-    ARCHITECTURE.md RUST_*.md "$stage/"
+    ARCHITECTURE.md RUST_*.md RUST_*.tsv "$stage/"
 cp RUST_DISTRIBUTION.md "$stage/README.md"
 ditto --norsrc --noextattr --noacl crates "$stage/crates"
 cp scripts/*rust* "$stage/scripts/"

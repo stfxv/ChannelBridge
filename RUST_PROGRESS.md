@@ -210,3 +210,11 @@ E1x2入力48 kHz/24bit、試験アプリのステレオ設定で、実HALの読�
 従来のRust試験アプリのソースarchiveには旧Go/BlackHole実装と旧ビルド手順も含まれていた。package-rust-source.shへ同梱処理を分離し、Rust crates/manifest/lock、Rustビルド・検証スクリプト、専用plist、ChannelBridgeアイコン、依存元ソースとライセンスだけを含める構成へ変更。旧Goのcmd/internal/go.mod、旧driver/vendor/BlackHoleと旧ビルド・音声試験のC/Objective-Cは除外する。Rust用C ABI/模擬HAL検証プログラムは対応ソースへ残すが、製品音声経路へリンクしない。THIRD_PARTY_RUST.mdとRUST_DISTRIBUTION.mdを追加し、試験アプリのnoticeも専用内容へ変更。旧版の原ソースとライセンスはリポジトリに保持する。
 
 Universalアプリの署名、bundle ID/マイク説明検証、非表示UI smokeが通過。verify-rust-source.shで同梱archiveの許容root/必須ファイルを確認し、展開先を作業ディレクトリとして空のCARGO_HOME・offline/lockedで全ワークスペース全ターゲットcheckが通過した。manifest-pathだけを元repoから指定する確認とは区別し、展開先の.cargo設定を実際に使用した。cargo vendorにもrespect-source-configを付け、展開先の依存置換設定を尊重する。検証をCIへ追加したが、GitHubの課金停止が解消したとは確認しておらずCI合格と扱わない。新helper初回のシェル構文ミスは検出・修正し、最終版の構文確認/アプリ再ビルド/空キャッシュ再検証が通過。再起動前の音声プロセスが続いており、実機レート追従ゲートは未達である。
+
+## 出力DSPの処理時間測定（2026-10-01）
+
+再起動前の音声プロセスが引き続き稼働しており、実機レート変更を合格と扱わず、独立して音声処理の負荷を測定。render_timing例でOutputProcessor::renderをreleaseビルドし、16レート×512フレームと優先4レート×64/192/4096フレームの計28条件を実行。各64回のウォームアップと256回の測定で出力不足/primingなしを確認。M2 Max・Rust 1.98.1で48 kHz/512のp99は0.21050 ms（期限の1.97%）、192 kHz/512は0.21029 ms（7.89%）、768 kHz/512は0.22575 ms（33.86%）。生データRUST_RENDER_TIMING.tsvと測定範囲をRUST_AUDIO_TEST.mdへ記録した。
+
+この値は同一名目レートでFIFO読み取り・補間を含む出力DSPだけの経過時間である。OSのプリエンプションは含むが、物理入力、HAL、ドライバ、画面、構築、異レート変換や復旧は計測していない。全CPU使用率・追加音声遅延・実機での締切保証へ一般化しない。最低Rust/IntelコンパイルとClippyが通過。初回の測定例ではFIFO pushの戻り型を誤りコンパイルが失敗したが、修正後の全28条件が成功した。生データもRustソースarchiveへ含める構成へ更新した。
+
+更新後Universal試験アプリのビルド/署名/bundle metadataと、空Cargoキャッシュ・offline/lockedの同梱ソース全ターゲットcheckが通過。archive内の測定例と生データが作業ツリーと一致することも確認した。通常画面や音声経路は起動していない。
