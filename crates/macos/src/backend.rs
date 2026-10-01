@@ -76,14 +76,23 @@ impl Backend for NativeBackend {
             .map_err(|error| error.to_string())
     }
     fn open(&mut self, config: &Config) -> Result<TestSession, String> {
-        self.startup_failed = true;
-        let session = TestSession::preview(
+        self.startup_failed = false;
+        let session = match TestSession::preview(
             &config.device_uid,
             selection(config)?,
             self.ticks_per_second,
-        )
-        .map_err(|error| error.to_string())?;
-        self.startup_failed = false;
+        ) {
+            Ok(session) => session,
+            Err(error) => {
+                self.startup_failed = error
+                    .downcast_ref::<crate::session::StartupError>()
+                    .is_some_and(|error| error.context_retained)
+                    || error
+                        .downcast_ref::<crate::io::IoError>()
+                        .is_some_and(|error| error.context_retained);
+                return Err(error.to_string());
+            }
+        };
         self.activity = Some(((0, 0), Instant::now()));
         Ok(session)
     }

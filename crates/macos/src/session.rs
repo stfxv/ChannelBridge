@@ -154,13 +154,24 @@ impl TestSession {
         let mut virtual_streams = devices::streams(target, fourcc(b"inpt"))?;
         virtual_streams.extend(devices::streams(target, fourcc(b"outp"))?);
         let mut capture = crate::io::Registration::new(source, prepared.capture)?;
-        capture.disable_streams(crate::io::Direction::Output)?;
-        let mut output = crate::io::Registration::new(target, prepared.output)?;
-        output.disable_streams(crate::io::Direction::Input)?;
+        if let Err(error) = capture.disable_streams(crate::io::Direction::Output) {
+            return Err(failed_start(error, Some(capture), None));
+        }
+        let mut output = match crate::io::Registration::new(target, prepared.output) {
+            Ok(output) => output,
+            Err(error) => return Err(failed_start(error.into(), Some(capture), None)),
+        };
+        if let Err(error) = output.disable_streams(crate::io::Direction::Input) {
+            return Err(failed_start(error, Some(capture), Some(output)));
+        }
         // Output starts silent; source first fills dry preview meters. No sending
         // is enabled until the caller explicitly changes the routing snapshot.
-        output.start()?;
-        capture.start()?;
+        if let Err(error) = output.start() {
+            return Err(failed_start(error.into(), Some(capture), Some(output)));
+        }
+        if let Err(error) = capture.start() {
+            return Err(failed_start(error.into(), Some(capture), Some(output)));
+        }
         Ok(Self {
             virtual_streams,
             source_id: source,
@@ -193,10 +204,84 @@ impl TestSession {
     }
 }
 
+/// Startup cause and all cleanup errors, preserving whether callbacks may remain.
+#[derive(Debug)]
+pub struct StartupError {
+    pub cause: String,
+    pub cleanup_errors: Vec<String>,
+    pub context_retained: bool,
+}
+impl std::fmt::Display for StartupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; cleanup: {:?}; callback context retained: {}",
+            self.cause, self.cleanup_errors, self.context_retained
+        )
+    }
+}
+impl std::error::Error for StartupError {}
+fn failed_start(
+    cause: Box<dyn std::error::Error>,
+    capture: Option<crate::io::Registration<CaptureCallback>>,
+    output: Option<crate::io::Registration<OutputCallback>>,
+) -> Box<dyn std::error::Error> {
+    let retained = cause
+        .downcast_ref::<crate::io::IoError>()
+        .is_some_and(|error| error.context_retained);
+    let mut outcomes = Vec::new();
+    if let Some(output) = output {
+        if let Err(error) = output.close() {
+            outcomes.push(error);
+        }
+    }
+    if let Some(capture) = capture {
+        if let Err(error) = capture.close() {
+            outcomes.push(error);
+        }
+    }
+    Box::new(startup_error(cause.to_string(), retained, outcomes))
+}
+fn startup_error(cause: String, retained: bool, outcomes: Vec<crate::io::IoError>) -> StartupError {
+    StartupError {
+        cause,
+        context_retained: retained || outcomes.iter().any(|error| error.context_retained),
+        cleanup_errors: outcomes
+            .into_iter()
+            .map(|error| error.to_string())
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use channelbridge_audio::routing::Mode;
+    #[test]
+    fn startup_error_distinguishes_clean_failure_from_retained_callbacks() {
+        let clean = startup_error("start failed".into(), false, Vec::new());
+        assert!(!clean.context_retained);
+        let retained = startup_error(
+            "start failed".into(),
+            false,
+            vec![
+                crate::io::IoError {
+                    operation: "output stop",
+                    status: -1,
+                    context_retained: true,
+                },
+                crate::io::IoError {
+                    operation: "input destroy",
+                    status: -2,
+                    context_retained: true,
+                },
+            ],
+        );
+        assert!(retained.context_retained);
+        assert_eq!(retained.cleanup_errors.len(), 2);
+        assert_eq!(retained.cause, "start failed");
+        assert!(startup_error("registration failed".into(), true, Vec::new()).context_retained);
+    }
     #[test]
     fn preparation_preserves_rates_and_rejects_missing_channels() {
         let format = StreamFormat {
