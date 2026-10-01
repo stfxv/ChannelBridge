@@ -19,6 +19,8 @@ pub struct Snapshot {
     pub wanted_send: bool,
     pub error: Option<String>,
     pub command_error: Option<String>,
+    /// Completed Configure attempts, including failed saves.
+    pub configuration_attempt: u64,
     pub finished: bool,
     pub audio: Option<crate::view::AudioView>,
     pub devices: Arc<[crate::view::DeviceChoice]>,
@@ -35,12 +37,17 @@ fn apply_command<B: Backend>(
     controller: &mut Controller<B>,
     command: Command,
     error: &mut Option<String>,
+    configuration_attempt: &mut u64,
 ) {
+    let configuring = matches!(command, Command::Configure(_));
     let clear = matches!(command, Command::Configure(_) | Command::Refresh);
     match controller.command(command) {
         Err(failure) => *error = Some(failure),
         Ok(()) if clear => *error = None,
         Ok(()) => {}
+    }
+    if configuring {
+        *configuration_attempt = configuration_attempt.saturating_add(1);
     }
 }
 impl Worker {
@@ -59,6 +66,7 @@ impl Worker {
             wanted_send: false,
             error: None,
             command_error: None,
+            configuration_attempt: 0,
             finished: false,
             audio: None,
             devices: Arc::from([]),
@@ -82,6 +90,7 @@ impl Worker {
                             wanted_send: false,
                             error: Some(error),
                             command_error: None,
+                            configuration_attempt: 0,
                             finished: true,
                             audio: None,
                             devices: Arc::from([]),
@@ -94,6 +103,7 @@ impl Worker {
                 let start = Instant::now();
                 let mut next_tick = Instant::now();
                 let mut command_error = None;
+                let mut configuration_attempt = 0;
                 let mut devices = Arc::<[crate::view::DeviceChoice]>::from([]);
                 let mut device_error = None;
                 let mut next_inventory = Instant::now();
@@ -103,7 +113,12 @@ impl Worker {
                     }
                     match receiver.recv_timeout(Duration::from_millis(20)) {
                         Ok(command) => {
-                            apply_command(&mut controller, command, &mut command_error);
+                            apply_command(
+                                &mut controller,
+                                command,
+                                &mut command_error,
+                                &mut configuration_attempt,
+                            );
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -112,7 +127,12 @@ impl Worker {
                     for _ in 0..31 {
                         match receiver.try_recv() {
                             Ok(command) => {
-                                apply_command(&mut controller, command, &mut command_error);
+                                apply_command(
+                                    &mut controller,
+                                    command,
+                                    &mut command_error,
+                                    &mut configuration_attempt,
+                                );
                             }
                             Err(_) => break,
                         }
@@ -122,10 +142,20 @@ impl Worker {
                     }
                     match requested.swap(0, Ordering::AcqRel) {
                         1 => {
-                            apply_command(&mut controller, Command::Start, &mut command_error);
+                            apply_command(
+                                &mut controller,
+                                Command::Start,
+                                &mut command_error,
+                                &mut configuration_attempt,
+                            );
                         }
                         2 => {
-                            apply_command(&mut controller, Command::Stop, &mut command_error);
+                            apply_command(
+                                &mut controller,
+                                Command::Stop,
+                                &mut command_error,
+                                &mut configuration_attempt,
+                            );
                         }
                         _ => {}
                     }
@@ -149,6 +179,7 @@ impl Worker {
                         wanted_send: controller.wanted_send(),
                         error: controller.error().map(str::to_owned),
                         command_error: command_error.clone(),
+                        configuration_attempt,
                         finished: false,
                         audio: controller.audio_view(),
                         devices: Arc::clone(&devices),
@@ -162,6 +193,7 @@ impl Worker {
                     wanted_send: false,
                     error: shutdown_error.or_else(|| controller.error().map(str::to_owned)),
                     command_error,
+                    configuration_attempt,
                     finished: true,
                     audio: None,
                     devices,
