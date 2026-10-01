@@ -126,3 +126,7 @@ audio/app/macosの43試験が通過。追加試験は未取得/新鮮な無音/�
 AppKitへマイク許可要求、送出開始/停止、ミュート操作を追加。許可要求は明示ボタンから既存MicrophonePermission境界へ渡し、起動時は要求しない。通常実行では1秒間隔でOS認可状態を確認し、変化をPermissionChangedとして制御ワーカーへ渡す。非表示smokeではこの認可通知を無効化し、実入力を開かない。拒否/制限/未決定/確認不可/許可済みをボタン表示で区別。開始は権限・選択の妥当性・保存完了を条件にし、停止は送出意図があれば設定保存中や再接続待ちにも可能。ミュートはConfigureの保存完了経路を共用。制御状態とエラーを状態ラベルへ反映する。
 
 実Macの非表示smokeで隔離した保存先へミュート操作を送り、保存ファイル・スナップショット・ボタン表示の一致を確認。模擬スナップショットで再接続待ち/保存待ちの停止操作が有効、終了済みでは無効を確認。整形、workspace Clippy、最低Rustコンパイル、Intel全ターゲットコンパイルが通過。実NSButtonマウスイベント、TCCダイアログ/許可取消、新アプリバンドル、実送出/停止は未検証。仮想ドライバの実HAL認識と転送が完了したと扱わない。
+
+## 独立したUniversal試験アプリ（2026-10-01）
+
+build-rust-app.shと専用Info.plistを追加。macOS 13を最低バージョンとしてApple Silicon/Intelをビルドし、既存Cアイコン・マイク使用説明・別bundle ID・GPLと依存ライセンスを含むソースを同梱。依存ソースはCargo.lockに固定してrust-vendorへ同梱し、展開先でoffline/lockedのappコンパイルが通過。既存通常アプリは置換しない。両Mach-OのminOS 13.0と両アーキテクチャ、ad-hoc署名を確認。Universalアプリ内の実行ファイルからNSBundle ID/非空マイク説明を検証し、非表示UI smokeも通過。CIには実機器一覧を必要としない明示的build-onlyとmetadata検証を追加。詳細はRUST_APP_TEST.md。これはDeveloper ID署名/公証、macOS 13/Intel実行、Dock表示、通常UI/権限画面や実HALを検証したものではない。

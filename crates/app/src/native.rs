@@ -473,6 +473,30 @@ pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
     let smoke = std::env::args().any(|argument| argument == "--smoke");
+    let check_bundle = std::env::args().any(|argument| argument == "--check-bundle");
+    if check_bundle || std::env::args().any(|argument| argument == "--require-bundle") {
+        let bundle = objc2_foundation::NSBundle::mainBundle();
+        assert_eq!(
+            bundle
+                .bundleIdentifier()
+                .expect("bundle identifier")
+                .to_string(),
+            "local.channelbridge.rust.app.test"
+        );
+        let description = bundle
+            .objectForInfoDictionaryKey(ns_string!("NSMicrophoneUsageDescription"))
+            .expect("microphone usage description");
+        assert!(
+            !description
+                .downcast_ref::<NSString>()
+                .expect("usage NSString")
+                .is_empty()
+        );
+        if check_bundle {
+            println!("Rust test bundle identifier and microphone description verified");
+            return;
+        }
+    }
     let settings = if smoke {
         crate::startup::Settings::smoke()
     } else {

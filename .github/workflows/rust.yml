@@ -36,3 +36,6 @@ jobs:
       - name: Universal test driver bundle and signature
         if: matrix.rust == '1.98.1'
         run: bash scripts/package-rust-test-driver.sh
+      - name: Universal test app bundle and metadata (no audio inventory required)
+        if: matrix.rust == '1.98.1'
+        run: bash scripts/build-rust-app.sh --build-only
