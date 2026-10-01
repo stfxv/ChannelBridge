@@ -56,6 +56,12 @@ define_class!(
         }
     }
     impl AppDelegate {
+        #[unsafe(method(showOverview:))]
+        fn show_overview(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                runtime.screen.show_overview();
+            }
+        }
         #[unsafe(method(showWindow:))]
         fn show_window(&self, _sender: &objc2::runtime::AnyObject) {
             self.reveal_window();
@@ -103,6 +109,7 @@ define_class!(
                     runtime.screen.sync_permission(&runtime.worker);
                 }
                 runtime.screen.update(&snapshot);
+                runtime.screen.sync_overview(&runtime.worker, &snapshot);
                 if let Some(menu) = runtime.menu.as_ref() {
                     menu.update(main, &snapshot, runtime.screen.send_button.isEnabled(), runtime.screen.mute_button.isEnabled());
                 }
@@ -134,6 +141,9 @@ impl AppDelegate {
     }
 }
 struct Screen {
+    overview: std::cell::RefCell<Option<crate::overview::Overview>>,
+    overview_sent: std::cell::Cell<bool>,
+    overview_button: Retained<NSButton>,
     permission: channelbridge_macos::permission::MicrophonePermission,
     observed_permission: std::cell::Cell<Option<channelbridge_macos::permission::Permission>>,
     permission_button: Retained<NSButton>,
@@ -222,7 +232,15 @@ impl Screen {
         let permission_button = button("マイクを許可", 20.0);
         let send_button = button("送出開始", 137.0);
         let mute_button = button("ミュート", 255.0);
+        let overview_button = button("全入力のレベルを確認", 20.0);
+        overview_button.setFrame(NSRect::new(
+            NSPoint::new(20.0, 90.0),
+            NSSize::new(340.0, 28.0),
+        ));
         Self {
+            overview: Default::default(),
+            overview_sent: Default::default(),
+            overview_button,
             permission: Default::default(),
             observed_permission: Default::default(),
             permission_button,
@@ -306,6 +324,8 @@ impl Screen {
         });
         self.mute_button
             .setEnabled(self.devices.isEnabled() && !snapshot.config.device_uid.is_empty());
+        self.overview_button
+            .setEnabled(selected.is_some() && !snapshot.finished);
         self.routing.update(
             &snapshot.config,
             selected.map_or(0, |index| snapshot.devices[index].channels),
@@ -396,6 +416,35 @@ impl Screen {
         self.status.setStringValue(&NSString::from_str(status));
         if let Some(error) = self.action_error.borrow().as_deref() {
             self.status.setStringValue(&NSString::from_str(error));
+        }
+    }
+    fn show_overview(&self) {
+        let main = MainThreadMarker::new().expect("overview on main thread");
+        let mut overview = self.overview.borrow_mut();
+        let overview = overview.get_or_insert_with(|| crate::overview::Overview::new(main));
+        overview.window.center();
+        overview.window.makeKeyAndOrderFront(None);
+    }
+    fn sync_overview(
+        &self,
+        worker: &channelbridge_core::worker::Worker,
+        snapshot: &channelbridge_core::worker::Snapshot,
+    ) {
+        let overview = self.overview.borrow();
+        let visible = overview
+            .as_ref()
+            .is_some_and(|overview| overview.window.isVisible());
+        if !snapshot.finished && visible != self.overview_sent.get() {
+            match worker.send(channelbridge_core::Command::Overview(visible)) {
+                Ok(()) => self.overview_sent.set(visible),
+                Err(error) => *self.action_error.borrow_mut() = Some(error),
+            }
+        }
+        if let Some(overview) = overview.as_ref().filter(|_| visible) {
+            overview.update(
+                MainThreadMarker::new().expect("overview refresh on main thread"),
+                snapshot,
+            );
         }
     }
     fn sync_permission(&self, worker: &channelbridge_core::worker::Worker) {
@@ -581,6 +630,11 @@ pub fn run() {
     {
         let state = delegate.ivars().runtime.borrow();
         let screen = &state.as_ref().expect("runtime").screen;
+        // SAFETY: retained main-thread delegate implements showOverview:.
+        unsafe {
+            screen.overview_button.setTarget(Some(&delegate));
+            screen.overview_button.setAction(Some(sel!(showOverview:)));
+        }
         for (button, action) in [
             (&screen.permission_button, sel!(requestMicrophone:)),
             (&screen.send_button, sel!(toggleSend:)),
@@ -671,7 +725,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                14
+                15
             );
             assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
             if let Some(device) = snapshot.devices.first() {
@@ -766,6 +820,10 @@ fn smoke_device_save(main: MainThreadMarker) {
         }
     };
     let initial = wait(&|snapshot| !snapshot.devices.is_empty());
+    let overview = crate::overview::Overview::new(main);
+    let mut overview_fixture = initial.clone();
+    overview_fixture.config.device_uid = initial.devices[0].uid.clone();
+    overview.smoke(main, &overview_fixture);
     screen.update(&initial);
     let uid = initial.devices[0].uid.clone();
     // Inventory changes while a menu is open are deferred until it closes.

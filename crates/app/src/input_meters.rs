@@ -92,7 +92,7 @@ fn decibels(value: Option<f32>) -> String {
         .filter(|value| value.is_finite())
         .map_or_else(|| "−∞".into(), |value| format!("{value:.1}"))
 }
-fn channel_text(channel: u32, audio: Option<&AudioView>) -> String {
+pub(crate) fn channel_text(channel: u32, audio: Option<&AudioView>) -> String {
     match audio.and_then(|audio| audio.levels.iter().find(|level| level.channel == channel)) {
         Some(InputLevel {
             fresh: true,
