@@ -12,7 +12,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub state: CaptureState,
     pub config: Config,
@@ -20,6 +20,7 @@ pub struct Snapshot {
     pub error: Option<String>,
     pub command_error: Option<String>,
     pub finished: bool,
+    pub audio: Option<crate::view::AudioView>,
 }
 pub struct Worker {
     commands: SyncSender<Command>,
@@ -57,6 +58,7 @@ impl Worker {
             error: None,
             command_error: None,
             finished: false,
+            audio: None,
         }));
         let shared = Arc::clone(&snapshot);
         let requested = Arc::clone(&intent);
@@ -77,6 +79,7 @@ impl Worker {
                             error: Some(error),
                             command_error: None,
                             finished: true,
+                            audio: None,
                         });
                         return;
                     }
@@ -128,6 +131,7 @@ impl Worker {
                         error: controller.error().map(str::to_owned),
                         command_error: command_error.clone(),
                         finished: false,
+                        audio: controller.audio_view(),
                     });
                 }
                 let shutdown_error = controller.command(Command::Quit).err();
@@ -138,6 +142,7 @@ impl Worker {
                     error: shutdown_error.or_else(|| controller.error().map(str::to_owned)),
                     command_error,
                     finished: true,
+                    audio: None,
                 });
             })?;
         Ok(Self {

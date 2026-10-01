@@ -14,6 +14,7 @@ use std::{
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioGetHostClockFrequency() -> f64;
+    fn AudioGetCurrentHostTime() -> u64;
 }
 pub struct NativeBackend {
     startup_failed: bool,
@@ -69,6 +70,59 @@ fn same_format(a: &StreamFormat, b: &StreamFormat) -> bool {
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
+    fn audio_view(
+        &self,
+        session: &TestSession,
+        config: &Config,
+        overview: bool,
+    ) -> Option<channelbridge_core::view::AudioView> {
+        use channelbridge_core::view::{AudioView, InputFormat, InputLevel, dbfs};
+        let selected = selection(config).ok()?;
+        let channels = session
+            .source_streams
+            .iter()
+            .map(|stream| stream.virtual_format.channels_per_frame as usize)
+            .sum::<usize>();
+        let indices = if overview {
+            (0..channels).collect::<Vec<_>>()
+        } else if selected.left() == selected.right() {
+            vec![selected.left()]
+        } else {
+            vec![selected.left(), selected.right()]
+        };
+        let now = unsafe { AudioGetCurrentHostTime() };
+        let levels = indices
+            .into_iter()
+            .filter(|channel| *channel < channels)
+            .map(|channel| {
+                let level = session.meters.level(channel, now);
+                InputLevel {
+                    channel: channel as u32 + 1,
+                    current_dbfs: dbfs(level.current),
+                    held_dbfs: dbfs(level.held_peak),
+                }
+            })
+            .collect();
+        let physical_inputs = session
+            .source_streams
+            .iter()
+            .map(|stream| {
+                let format = stream.physical_format;
+                InputFormat {
+                    channels: format.channels_per_frame,
+                    rate: format.sample_rate,
+                    bits: format.bits_per_channel,
+                    float: format.format_flags & 1 != 0,
+                }
+            })
+            .collect();
+        Some(AudioView {
+            physical_inputs,
+            virtual_rate: session.rate,
+            virtual_bits: 32,
+            levels,
+        })
+    }
     fn save(&mut self, config: &Config) -> Result<(), String> {
         selection(config)?;
         storage::save(&self.settings, config).map_err(|error| error.to_string())

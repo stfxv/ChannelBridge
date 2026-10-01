@@ -4,6 +4,14 @@ use crate::{CaptureState, Command, Config};
 pub trait Backend {
     type Pending;
     type Session;
+    fn audio_view(
+        &self,
+        _session: &Self::Session,
+        _config: &Config,
+        _overview: bool,
+    ) -> Option<crate::view::AudioView> {
+        None
+    }
     fn save(&mut self, config: &Config) -> Result<(), String>;
     fn negotiate(&mut self, config: &Config) -> Result<Self::Pending, String>;
     fn ready(&mut self, pending: &Self::Pending) -> Result<bool, String>;
@@ -55,6 +63,12 @@ impl<B: Backend> Controller<B> {
             state: CaptureState::Idle,
             error: None,
         }
+    }
+    pub fn audio_view(&self) -> Option<crate::view::AudioView> {
+        self.session.as_ref().and_then(|session| {
+            self.backend
+                .audio_view(session, &self.config, self.overview)
+        })
     }
     pub fn state(&self) -> CaptureState {
         self.state
