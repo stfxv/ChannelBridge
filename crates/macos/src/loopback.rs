@@ -16,6 +16,7 @@ pub struct Report {
     pub missing_after_startup: u64,
     pub mismatched_frames: u64,
     pub invalid_callbacks: u64,
+    pub first_missing_input_sample: Option<f64>,
 }
 impl Report {
     pub fn passed(&self) -> bool {
@@ -34,6 +35,7 @@ struct Context {
     missing: AtomicU64,
     mismatched: AtomicU64,
     invalid: AtomicU64,
+    first_missing: AtomicU64,
 }
 impl Context {
     fn new(rate: f64) -> Self {
@@ -45,6 +47,7 @@ impl Context {
             missing: AtomicU64::new(0),
             mismatched: AtomicU64::new(0),
             invalid: AtomicU64::new(0),
+            first_missing: AtomicU64::new(u64::MAX),
         }
     }
 }
@@ -145,6 +148,12 @@ unsafe fn process(
             silent += 1;
             if received {
                 missing += 1;
+                let _ = context.first_missing.compare_exchange(
+                    u64::MAX,
+                    (input_time.sample_time.floor() + index as f64).to_bits(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
             }
             continue;
         }
@@ -226,6 +235,10 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
         missing_after_startup: context.missing.load(Ordering::Acquire),
         mismatched_frames: context.mismatched.load(Ordering::Acquire),
         invalid_callbacks: context.invalid.load(Ordering::Acquire),
+        first_missing_input_sample: match context.first_missing.load(Ordering::Acquire) {
+            u64::MAX => None,
+            bits => Some(f64::from_bits(bits)),
+        },
     })
 }
 
