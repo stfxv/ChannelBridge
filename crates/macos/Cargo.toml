@@ -10,3 +10,9 @@ channelbridge-hal-abi = { path = "../hal-abi" }
 channelbridge-contract = { path = "../contract" }
 channelbridge-audio = { path = "../audio" }
 channelbridge-core = { path = "../core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
+block2 = "=0.6.2"

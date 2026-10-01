@@ -26,3 +26,6 @@ pub mod rate;
 
 #[cfg(target_os = "macos")]
 pub mod backend;
+
+#[cfg(target_os = "macos")]
+pub mod permission;

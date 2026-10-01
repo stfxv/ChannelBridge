@@ -28,7 +28,7 @@
 
 `bash scripts/test-rust.sh`:
 
-- 通常のRustテスト53件。FIFO、補間品質・位相、時計速度・補正制御、PCMパイプラインの到着ジッター、不足からの復旧を含む。
+- 通常のRustテスト54件。FIFO、補間品質・位相、時計速度・補正制御、PCMパイプラインの到着ジッター、不足からの復旧を含む。
 - Loomによる並行操作のモデル検査1件。公開途中の新しい音声と古いタグを混ぜて返さない条件を確認。検査はpreemption bound 2の有限モデルであり、全ての将来の並行処理を証明したものではない。
 - Rustfmt / Clippy。テスト・exampleを含めて警告なし。
 - CのSDK照会とRustの実際のレイアウトの一致: AudioTimeStamp 64、IOCycleInfo 224、ClientInfo 24、PropertyAddress 12、HostInterface 40、DriverInterface 184、StreamFormat 40、RangedFormat 56 bytes。
@@ -74,3 +74,9 @@
 ## 入力機器一覧の公開（2026-10-01）
 
 入力機器のUID/name/channel/rate/physical形式を制御ワーカーから1秒間隔で公開。マイク権限の許可を設定しなくても読み取りだけで一覧を取得する。形式の照会失敗は項目に残し、列挙失敗は前回一覧とエラーを維持する。自分の通常/試験仮想マイクは入力候補から除外する。実Macで `cargo run -p channelbridge-macos --example inventory_worker` を実行し、E1x2の10ch/48k/24bitほか4入力機器を取得し、音声開始なしで終了を確認。設定書き込み、レート変更、IOProc登録は行わない試験である。AppKitの機器選択への接続は未完了。
+
+## マイク権限境界（2026-10-01）
+
+objc2 0.6.4 / Foundation・AVFoundation 0.3.2 / block2 0.6.2を固定し、OSのマイク認可状態の照会と、メインスレッドの明示操作からの許可要求を追加。要求前に実行バンドルの非空NSMicrophoneUsageDescriptionを確認し、重複要求は保留する。完了ブロックは原子状態だけを更新し、UIを操作しない。NativeBackendは交渉/開始前と稼働中にもOS状態を確認する。未決定/拒否/制限/未知状態を許可と扱わない分類試験が通過。実Macで状態照会のみ実行しAuthorizedを取得したが、これは今回の実行元の認可であり、新Rustアプリの認可ではない。新アプリのバンドルと許可ダイアログでの拒否/取消/許可試験は未完了。
+
+根拠: [Apple authorizationStatus](https://developer.apple.com/documentation/AVFoundation/AVCaptureDevice/authorizationStatus%28for%3A%29)、[Apple requestAccess](https://developer.apple.com/documentation/avfoundation/avcapturedevice/requestaccess%28for%3Acompletionhandler%3A%29)、固定したobjc2-av-foundationの生成バインディング。Rust 1.85の対象crate試験とIntel向け全ターゲットコンパイルを確認。ドライバはこのcrateに依存せず、AVFoundationをドライバへリンクしない構成を維持する。

@@ -173,6 +173,9 @@ impl Backend for NativeBackend {
         storage::save(&self.settings, config).map_err(|error| error.to_string())
     }
     fn negotiate(&mut self, config: &Config) -> Result<RateFollow, String> {
+        if !crate::permission::status().allowed() {
+            return Err("microphone permission is not authorized".into());
+        }
         selection(config)?;
         RateFollow::request_for_source(&config.device_uid).map_err(|error| error.to_string())
     }
@@ -184,6 +187,9 @@ impl Backend for NativeBackend {
     }
     fn open(&mut self, config: &Config) -> Result<TestSession, String> {
         self.startup_failed = false;
+        if !crate::permission::status().allowed() {
+            return Err("microphone permission is not authorized".into());
+        }
         let session = match TestSession::preview(
             &config.device_uid,
             selection(config)?,
@@ -204,6 +210,9 @@ impl Backend for NativeBackend {
         Ok(session)
     }
     fn healthy(&mut self, session: &TestSession, config: &Config) -> Result<bool, String> {
+        if !crate::permission::status().allowed() {
+            return Err("microphone permission was revoked".into());
+        }
         let devices = devices::list().map_err(|error| error.to_string())?;
         let source = devices
             .iter()
