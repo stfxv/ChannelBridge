@@ -506,3 +506,19 @@ This tests the virtual driver with generated known samples; it is not the physic
 E1x2/RME -> DSP -> Discord route, concurrent clients, latency or long-call acceptance.
 Physical-source rate following, sleep/disconnect, two-hour mono/stereo Discord,
 eight-hour stereo, production migration/rollback and signing gates remain open.
+
+
+### 2026-10-01 short physical-route mute observations
+
+Actual installed test app UI showed authorized E1x2 input, 48 kHz / physical 24 bit,
+stereo Ch1/2, sending with mute engaged. Its dry input meter was active. Three-second
+virtual input monitor observed 752 callbacks / 144384 frames, exact zero on both
+channels, invalid callbacks/samples 0. No samples were saved. A mute-release click
+was rejected by CUA because the user changed the app; re-observation showed mono,
+right selector disabled and mute still engaged. No further configuration actions
+were performed. A read-only second monitor observed 751 callbacks / 144192 frames,
+zero both channels, invalid callbacks/samples 0. Driver cumulative diagnostics were
+generation 17, written 8156736, missing 3584, rejected writes 0, invalid timestamps 0.
+These establish short mute silence only, not unmuted physical signal fidelity,
+mode-switch continuity or long-duration operation. User-selected live settings were
+not restored or changed after the concurrent-input notice.
