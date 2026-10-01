@@ -60,17 +60,32 @@ impl Export {
             return;
         };
         let (sender, receiver) = mpsc::channel();
+        let bundle = objc2_foundation::NSBundle::mainBundle();
+        let version = |key: &NSString| {
+            bundle.objectForInfoDictionaryKey(key).and_then(|value| {
+                value
+                    .downcast_ref::<NSString>()
+                    .map(|text| text.to_string())
+            })
+        };
+        let metadata = channelbridge_core::diagnostics::ReportMetadata {
+            application_package_version: Some(env!("CARGO_PKG_VERSION").into()),
+            application_bundle_version: version(ns_string!("CFBundleShortVersionString")),
+            application_bundle_build: version(ns_string!("CFBundleVersion")),
+        };
         match std::thread::Builder::new()
             .name("channelbridge-export".into())
             .spawn(move || {
-                let result =
-                    channelbridge_core::diagnostics::save_new(&path, &snapshot).map_err(|error| {
-                        if error.kind() == std::io::ErrorKind::AlreadyExists {
-                            "同名のファイルがあります".into()
-                        } else {
-                            format!("診断の保存に失敗しました: {error}")
-                        }
-                    });
+                let result = channelbridge_core::diagnostics::save_new_with_metadata(
+                    &path, &snapshot, &metadata,
+                )
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        "同名のファイルがあります".into()
+                    } else {
+                        format!("診断の保存に失敗しました: {error}")
+                    }
+                });
                 let _ = sender.send(result);
             }) {
             Ok(_) => {

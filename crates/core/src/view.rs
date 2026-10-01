@@ -30,6 +30,9 @@ pub struct DriverDiagnostics {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DriverReading {
     Available {
+        diagnostic_protocol: u32,
+        /// Only an identity returned by the live driver may populate this.
+        loaded_driver_version: Option<String>,
         generation: u64,
         written_frames: u64,
         missing_read_frames: u64,

@@ -10,10 +10,19 @@ use std::{
 
 pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// Caller supplies versions from its actual executable and main bundle.
+/// Missing identity is preserved rather than inferred from installed files.
+#[derive(Default, Serialize)]
+pub struct ReportMetadata {
+    pub application_package_version: Option<String>,
+    pub application_bundle_version: Option<String>,
+    pub application_bundle_build: Option<String>,
+}
 
 #[derive(Serialize)]
 struct Report<'a> {
     schema_version: u32,
+    metadata: &'a ReportMetadata,
     state: crate::CaptureState,
     wanted_send: bool,
     finished: bool,
@@ -61,8 +70,16 @@ impl Drop for Temporary {
 /// (including symlinks) are never replaced. The parent directory must exist.
 /// Missing session data is JSON null, never fabricated zero counters.
 pub fn save_new(path: &Path, snapshot: &Snapshot) -> io::Result<()> {
+    save_new_with_metadata(path, snapshot, &ReportMetadata::default())
+}
+pub fn save_new_with_metadata(
+    path: &Path,
+    snapshot: &Snapshot,
+    metadata: &ReportMetadata,
+) -> io::Result<()> {
     let report = Report {
         schema_version: 1,
+        metadata,
         state: snapshot.state,
         wanted_send: snapshot.wanted_send,
         finished: snapshot.finished,
@@ -205,6 +222,7 @@ mod tests {
         let bytes = fs::read(&destination).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json["session_counters"].is_null());
+        assert!(json["metadata"]["application_bundle_version"].is_null());
         assert_eq!(json["audio"]["physical_inputs"][0]["bits"], 24);
         assert_eq!(json["audio"]["virtual_bits"], 32);
         assert_eq!(
@@ -234,11 +252,26 @@ mod tests {
         snapshot.audio = None;
         snapshot.devices = Vec::new().into();
         let unavailable_path = directory.join("unavailable.json");
-        save_new(&unavailable_path, &snapshot).unwrap();
+        save_new_with_metadata(
+            &unavailable_path,
+            &snapshot,
+            &ReportMetadata {
+                application_package_version: Some("0.5.0-alpha.1".into()),
+                application_bundle_version: Some("0.5.1".into()),
+                application_bundle_build: Some("2".into()),
+            },
+        )
+        .unwrap();
         let unknown: serde_json::Value =
             serde_json::from_slice(&fs::read(unavailable_path).unwrap()).unwrap();
         assert!(unknown["audio"].is_null());
         assert!(unknown["selected_input_inventory"].is_null());
+        assert_eq!(
+            unknown["metadata"]["application_package_version"],
+            "0.5.0-alpha.1"
+        );
+        assert_eq!(unknown["metadata"]["application_bundle_version"], "0.5.1");
+        assert_eq!(unknown["metadata"]["application_bundle_build"], "2");
         snapshot.error = Some("x".repeat(MAX_REPORT_BYTES));
         assert!(save_new(&directory.join("oversize.json"), &snapshot).is_err());
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);

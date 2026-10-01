@@ -91,6 +91,8 @@ impl Backend for NativeBackend {
         use channelbridge_core::view::DriverReading;
         Some(match crate::diagnostics::read_test_driver() {
             Ok(counters) => DriverReading::Available {
+                diagnostic_protocol: channelbridge_contract::PROTOCOL_VERSION,
+                loaded_driver_version: None,
                 generation: counters.generation,
                 written_frames: counters.written_frames,
                 missing_read_frames: counters.missing_read_frames,
