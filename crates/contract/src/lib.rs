@@ -3,6 +3,9 @@
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DIAGNOSTICS_SELECTOR: u32 = u32::from_be_bytes(*b"cbst");
+/// Raw, non-NUL ASCII Cargo package version of the live driver (1..64 bytes).
+pub const DRIVER_IDENTITY_SELECTOR: u32 = u32::from_be_bytes(*b"cbid");
+pub const DRIVER_IDENTITY_MAX_BYTES: usize = 64;
 pub const DIAGNOSTICS_BYTES: usize = 48;
 pub const TEST_DEVICE_UID: &str = "ChannelBridge_Rust_Test_UID";
 pub const TEST_DEVICE_NAME: &str = "ChannelBridge Mic (Rust Test)";

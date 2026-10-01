@@ -90,15 +90,23 @@ impl Backend for NativeBackend {
     fn driver_diagnostics(&self) -> Option<channelbridge_core::view::DriverReading> {
         use channelbridge_core::view::DriverReading;
         Some(match crate::diagnostics::read_test_driver() {
-            Ok(counters) => DriverReading::Available {
-                diagnostic_protocol: channelbridge_contract::PROTOCOL_VERSION,
-                loaded_driver_version: None,
-                generation: counters.generation,
-                written_frames: counters.written_frames,
-                missing_read_frames: counters.missing_read_frames,
-                rejected_write_frames: counters.rejected_write_frames,
-                invalid_timestamps: counters.invalid_timestamps,
-            },
+            Ok(counters) => {
+                let identity = crate::diagnostics::read_test_driver_identity();
+                let (version, identity_error) = match identity {
+                    Ok(version) => (Some(version), None),
+                    Err(error) => (None, Some(error.to_string())),
+                };
+                DriverReading::Available {
+                    diagnostic_protocol: channelbridge_contract::PROTOCOL_VERSION,
+                    loaded_driver_package_version: version,
+                    identity_error,
+                    generation: counters.generation,
+                    written_frames: counters.written_frames,
+                    missing_read_frames: counters.missing_read_frames,
+                    rejected_write_frames: counters.rejected_write_frames,
+                    invalid_timestamps: counters.invalid_timestamps,
+                }
+            }
             Err(error) => DriverReading::Unavailable {
                 error: error.to_string(),
             },

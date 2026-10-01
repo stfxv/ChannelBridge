@@ -32,7 +32,8 @@ pub enum DriverReading {
     Available {
         diagnostic_protocol: u32,
         /// Only an identity returned by the live driver may populate this.
-        loaded_driver_version: Option<String>,
+        loaded_driver_package_version: Option<String>,
+        identity_error: Option<String>,
         generation: u64,
         written_frames: u64,
         missing_read_frames: u64,

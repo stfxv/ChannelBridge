@@ -9,6 +9,10 @@ use std::mem::size_of;
 const GLOBAL: u32 = fourcc(b"glob");
 const IN: u32 = fourcc(b"inpt");
 const OUT: u32 = fourcc(b"outp");
+const _: () = assert!(
+    !env!("CARGO_PKG_VERSION").is_empty()
+        && env!("CARGO_PKG_VERSION").len() <= channelbridge_contract::DRIVER_IDENTITY_MAX_BYTES
+);
 
 enum Value {
     Integer(u32),
@@ -22,6 +26,7 @@ enum Value {
     Layout,
     Diagnostics,
     CustomProperties,
+    Identity,
 }
 impl Value {
     fn size(&self) -> u32 {
@@ -35,7 +40,8 @@ impl Value {
             Self::Formats => SUPPORTED_RATES.len() as u32 * size_of::<RangedFormat>() as u32,
             Self::Layout => 12,
             Self::Diagnostics => 48,
-            Self::CustomProperties => 12,
+            Self::CustomProperties => 24,
+            Self::Identity => env!("CARGO_PKG_VERSION").len() as u32,
         }
     }
 }
@@ -162,6 +168,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
         s if s == fourcc(b"srnd") => Ok(Value::Layout),
         s if s == fourcc(b"capp") => Ok(Value::Text("")),
         s if s == fourcc(b"cbst") => Ok(Value::Diagnostics),
+        s if s == channelbridge_contract::DRIVER_IDENTITY_SELECTOR => Ok(Value::Identity),
         _ => Err(UNKNOWN_PROPERTY),
     }
 }
@@ -311,10 +318,18 @@ fn bytes(value: Value) -> Vec<u8> {
         Value::CustomProperties => {
             // AudioServerPlugInCustomPropertyInfo: raw bytes, no qualifier.
             // The host needs this descriptor to marshal our diagnostic property.
-            for field in [fourcc(b"cbst"), 0, 0] {
+            for field in [
+                fourcc(b"cbst"),
+                0,
+                0,
+                channelbridge_contract::DRIVER_IDENTITY_SELECTOR,
+                0,
+                0,
+            ] {
                 result.extend(field.to_ne_bytes());
             }
         }
+        Value::Identity => result.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes()),
         Value::Text(_) | Value::TranslateUid => {}
     }
     result
