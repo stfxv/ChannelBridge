@@ -522,3 +522,15 @@ generation 17, written 8156736, missing 3584, rejected writes 0, invalid timesta
 These establish short mute silence only, not unmuted physical signal fidelity,
 mode-switch continuity or long-duration operation. User-selected live settings were
 not restored or changed after the concurrent-input notice.
+
+
+### 2026-10-01 continuous monitor duration support
+
+Added --seconds 1..28800 to the monitor example with duplicate/unknown/missing
+argument rejection; default remains three seconds. Extended the monitor API limit
+to eight hours without repeated stop/start between observation blocks. It retains
+bounded atomic summaries and saves no audio. macOS crate tests and all-target
+Clippy passed. A 1200-second observer is confirmed live (PID 2478, exec session
+57724) with no result yet. The test app was absent from the process inventory, so
+this is virtual-reader continuity observation only, not the required physical
+stereo/Discord long-call test. Do not count pending runtime as a passed test.

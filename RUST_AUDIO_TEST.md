@@ -94,3 +94,15 @@ Rust 1.98.1 releaseの結果は[RUST_RESPONSE_GRID.tsv](RUST_RESPONSE_GRID.tsv)�
 これは固定係数・一時刻でのフィルター応答である。全周波数/全補間位相の連続保証、全16レートの全組合せ、アップサンプリングのimage、時間変動するASRC、FIFO/ドライバ/Discord、総合ノイズ、可聴評価の合格とはしない。大きなstepでは同じ帯域条件に合わせてタップ数が増える。通常の高速unit testではignoreし、test-rust.shではreleaseで明示実行する。
 
 同一名目レートの最大step=1.002では、今回の帯域内上限は48 kHzで約19.96 kHz、44.1 kHzで約18.34 kHzである。44.1 kHzで20 kHzまで0.1 dB以内を満たす検証ではなく、製品として必要な帯域の最終決定と遷移帯域の評価は残る。
+
+
+## Continuous virtual-input observation
+
+`cargo run --locked -p channelbridge-macos --example monitor -- --seconds 1200`
+keeps one test-device reader open for 20 minutes; 1..28800 seconds is supported.
+No audio samples are saved. An existing microphone grant is required; this program
+does not request permission, change routes/rates or start the app sender.
+The cumulative result checks callback/frame presence and nonfinite/malformed data.
+It does not detect every gap, measure waveform fidelity, prove the sender stayed
+active or establish Discord/physical-route acceptance. If the app is stopped or
+muted, successful silence monitoring proves only virtual-reader operation.

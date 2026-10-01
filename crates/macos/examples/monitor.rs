@@ -1,14 +1,30 @@
 //! Counts the test microphone's samples without writing audio or saving samples.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let expected = std::env::args().nth(1);
-    if !matches!(
-        expected.as_deref(),
-        None | Some("--expect-silence") | Some("--expect-signal")
-    ) || std::env::args().count() > 2
-    {
-        return Err("usage: monitor [--expect-silence|--expect-signal]".into());
+    let mut expected = None;
+    let mut seconds = 3_u64;
+    let mut duration_supplied = false;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--expect-silence" | "--expect-signal" if expected.is_none() => expected = Some(arg),
+            "--seconds" if !duration_supplied => {
+                seconds = args.next().ok_or("--seconds requires a value")?.parse()?;
+                if !(1..=28_800).contains(&seconds) {
+                    return Err("--seconds must be between 1 and 28800".into());
+                }
+                duration_supplied = true;
+            }
+            _ => {
+                return Err(
+                    "usage: monitor [--expect-silence|--expect-signal] [--seconds 1..28800]".into(),
+                );
+            }
+        }
     }
-    let report = channelbridge_macos::monitor::run(std::time::Duration::from_secs(3))?;
+    println!(
+        "Observing test microphone for {seconds} seconds; samples are not saved. This does not establish signal fidelity or uninterrupted callback timing."
+    );
+    let report = channelbridge_macos::monitor::run(std::time::Duration::from_secs(seconds))?;
     println!("{report:?}");
     if !report.valid() {
         return Err("invalid or insufficient input callbacks".into());

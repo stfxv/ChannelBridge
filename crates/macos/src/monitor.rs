@@ -115,8 +115,8 @@ impl Handler for Observer {
 /// Observe the test UID without changing its rate, writing audio or selecting it
 /// as the default microphone. Requires existing OS permission; never requests it.
 pub fn run(duration: Duration) -> Result<Report, Box<dyn Error>> {
-    if !(Duration::from_secs(1)..=Duration::from_secs(30)).contains(&duration) {
-        return Err("monitor duration must be between 1 and 30 seconds".into());
+    if !(Duration::from_secs(1)..=Duration::from_secs(28_800)).contains(&duration) {
+        return Err("monitor duration must be between 1 and 28800 seconds".into());
     }
     if !crate::permission::status().allowed() {
         return Err("microphone permission is not authorized".into());
