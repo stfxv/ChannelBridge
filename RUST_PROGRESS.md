@@ -146,3 +146,9 @@ workspace Clippy、非表示smoke、最低RustとIntelコンパイル、Universa
 overviewモジュールへスクロール可能な全入力一覧を追加。メイン画面のボタンで開き、表示中だけCommand::Overview(true)を送り、閉じるとfalseへ戻す。送信失敗は次更新で再試行する。UIは512行を上限として機器の入力数に合わせ、未取得/無音/dBFS/保持ピークを既存表示関数で統一。非表示期間は行の更新を停止する。通常画面の実ボタンで一覧を開き、E1x2のCh 1〜10が表示されること、閉じて通常画面へ戻ることをCUAの画像/AXで確認。権限未許可なので値は未取得であり、実音声の全チャンネル測定ではない。非表示smokeでは行の生成/機器不在時の除去/復帰を確認。Clippy、最低Rust/Intelコンパイル、Universal再ビルドとbundle metadataが通過。試験アプリは終了済み。
 
 同日の実HAL loopback再確認は引き続き「Rust test driver is not loaded」で音声開始前に終了。ドライバ認識・転送・長時間通話ゲートは未達であり、既存版への切替や安定性の達成を意味しない。
+
+## 全体検証とCIの外部停止要因（2026-10-01）
+
+現在のAppKit/overviewまで含む全体検証を再実行し、通常58テスト、Loomモデル、Apple SDK ABI比較、模擬HALのfactory/clients/audio/rate/epoch、二つの音声処理確保検査（確保/解放0）が通過。実HALや8時間の実音声を確認したものではない。メニューバー用objc2-core-foundation featureの依存辺をCargo.lockへ反映し、test-rust.shのCargo解決操作へ--lockedを追加。依存関係が検証中に暗黙変更されないようにする。
+
+[GitHub run 36806987421](https://github.com/stfxv/ChannelBridge/actions/runs/36806987421)は両Rustジョブともstepsなしで失敗。Checks APIのannotationは「recent account payments have failed or your spending limit needs to be increased」と報告。従ってCI上でコードが検証されたとは扱わない。課金/利用上限の変更は実施していない。実機ゲートには試験ドライバの認識が必要であり、音声サービス再起動は通話等を中断し得るため、既存のインストール許可とは分けて確認を依頼した。
