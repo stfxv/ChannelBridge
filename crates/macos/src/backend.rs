@@ -70,6 +70,51 @@ fn same_format(a: &StreamFormat, b: &StreamFormat) -> bool {
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
+    fn devices(&mut self) -> Result<Vec<channelbridge_core::view::DeviceChoice>, String> {
+        use channelbridge_core::view::{DeviceChoice, InputFormat};
+        let entries = devices::list().map_err(|error| error.to_string())?;
+        let mut choices = Vec::new();
+        for entry in entries {
+            let device = entry.map_err(|error| error.to_string())?;
+            if device.input_channels == 0
+                || [
+                    channelbridge_contract::TEST_DEVICE_UID,
+                    channelbridge_contract::PRODUCTION_DEVICE_UID,
+                ]
+                .contains(&device.uid.as_str())
+            {
+                continue;
+            }
+            let (physical_inputs, format_error) = match devices::streams(device.id, fourcc(b"inpt"))
+            {
+                Ok(streams) => (
+                    streams
+                        .into_iter()
+                        .map(|stream| {
+                            let format = stream.physical_format;
+                            InputFormat {
+                                channels: format.channels_per_frame,
+                                rate: format.sample_rate,
+                                bits: format.bits_per_channel,
+                                float: format.format_flags & 1 != 0,
+                            }
+                        })
+                        .collect(),
+                    None,
+                ),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+            choices.push(DeviceChoice {
+                uid: device.uid,
+                name: device.name,
+                channels: device.input_channels,
+                rate: device.rate,
+                physical_inputs,
+                format_error,
+            });
+        }
+        Ok(choices)
+    }
     fn audio_view(
         &self,
         session: &TestSession,

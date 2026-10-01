@@ -21,6 +21,8 @@ pub struct Snapshot {
     pub command_error: Option<String>,
     pub finished: bool,
     pub audio: Option<crate::view::AudioView>,
+    pub devices: Arc<[crate::view::DeviceChoice]>,
+    pub device_error: Option<String>,
 }
 pub struct Worker {
     commands: SyncSender<Command>,
@@ -59,6 +61,8 @@ impl Worker {
             command_error: None,
             finished: false,
             audio: None,
+            devices: Arc::from([]),
+            device_error: None,
         }));
         let shared = Arc::clone(&snapshot);
         let requested = Arc::clone(&intent);
@@ -80,6 +84,8 @@ impl Worker {
                             command_error: None,
                             finished: true,
                             audio: None,
+                            devices: Arc::from([]),
+                            device_error: None,
                         });
                         return;
                     }
@@ -88,6 +94,9 @@ impl Worker {
                 let start = Instant::now();
                 let mut next_tick = Instant::now();
                 let mut command_error = None;
+                let mut devices = Arc::<[crate::view::DeviceChoice]>::from([]);
+                let mut device_error = None;
+                let mut next_inventory = Instant::now();
                 loop {
                     if exiting.load(Ordering::Acquire) {
                         break;
@@ -124,6 +133,16 @@ impl Worker {
                         controller.tick(start.elapsed().as_millis().min(u64::MAX as u128) as u64);
                         next_tick = Instant::now() + Duration::from_millis(100);
                     }
+                    if Instant::now() >= next_inventory {
+                        match controller.devices() {
+                            Ok(current) => {
+                                devices = current.into();
+                                device_error = None;
+                            }
+                            Err(error) => device_error = Some(error),
+                        }
+                        next_inventory = Instant::now() + Duration::from_secs(1);
+                    }
                     publish(Snapshot {
                         state: controller.state(),
                         config: controller.config().clone(),
@@ -132,6 +151,8 @@ impl Worker {
                         command_error: command_error.clone(),
                         finished: false,
                         audio: controller.audio_view(),
+                        devices: Arc::clone(&devices),
+                        device_error: device_error.clone(),
                     });
                 }
                 let shutdown_error = controller.command(Command::Quit).err();
@@ -143,6 +164,8 @@ impl Worker {
                     command_error,
                     finished: true,
                     audio: None,
+                    devices,
+                    device_error,
                 });
             })?;
         Ok(Self {

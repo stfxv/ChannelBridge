@@ -1,5 +1,14 @@
 //! Owned display data, with no HAL objects or callback pointers.
 #[derive(Clone, Debug, PartialEq)]
+pub struct DeviceChoice {
+    pub uid: String,
+    pub name: String,
+    pub channels: u32,
+    pub rate: f64,
+    pub physical_inputs: Vec<InputFormat>,
+    pub format_error: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq)]
 pub struct InputFormat {
     pub channels: u32,
     pub rate: f64,

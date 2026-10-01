@@ -2,6 +2,9 @@
 use crate::{CaptureState, Command, Config};
 
 pub trait Backend {
+    fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+        Ok(Vec::new())
+    }
     type Pending;
     type Session;
     fn audio_view(
@@ -63,6 +66,9 @@ impl<B: Backend> Controller<B> {
             state: CaptureState::Idle,
             error: None,
         }
+    }
+    pub fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+        self.backend.devices()
     }
     pub fn audio_view(&self) -> Option<crate::view::AudioView> {
         self.session.as_ref().and_then(|session| {
