@@ -14,3 +14,9 @@ pub mod output;
 
 #[cfg(target_os = "macos")]
 pub mod io;
+
+#[cfg(target_os = "macos")]
+pub mod source_clock;
+
+#[cfg(target_os = "macos")]
+pub mod session;

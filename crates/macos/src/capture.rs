@@ -1,5 +1,8 @@
 //! Native input callback adapter. Registration and device lifecycle are separate.
-use crate::buffers::{CaptureLayout, InputBuffers};
+use crate::{
+    buffers::{CaptureLayout, InputBuffers},
+    source_clock::SourceClock,
+};
 use channelbridge_audio::{
     FramePosition,
     capture::{CaptureProcessor, CaptureTimestamp},
@@ -8,12 +11,16 @@ use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp};
 use std::{
     cell::UnsafeCell,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 /// Ownership is transferred here before IO starts. Control code may read only
 /// atomics; it cannot access the processor while callbacks can run.
 pub struct CaptureCallback {
+    source_clock: Arc<SourceClock>,
     layout: CaptureLayout,
     processor: UnsafeCell<CaptureProcessor>,
     busy: AtomicBool,
@@ -44,6 +51,7 @@ impl Drop for Gate<'_> {
 impl CaptureCallback {
     pub fn new(layout: CaptureLayout, processor: CaptureProcessor) -> Self {
         Self {
+            source_clock: Arc::new(SourceClock::default()),
             layout,
             processor: UnsafeCell::new(processor),
             busy: AtomicBool::new(false),
@@ -53,6 +61,9 @@ impl CaptureCallback {
             written: AtomicU64::new(0),
             overflow: AtomicU64::new(0),
         }
+    }
+    pub fn source_clock(&self) -> Arc<SourceClock> {
+        Arc::clone(&self.source_clock)
     }
     pub fn stats(&self) -> CaptureStats {
         CaptureStats {
@@ -120,6 +131,10 @@ impl CaptureCallback {
                 now.host_time,
                 timestamp,
                 |frame, channel| buffers.sample(frame, channel).unwrap_or(0.0),
+            );
+            self.source_clock.publish(
+                report.generation,
+                (!report.invalid_clock && !report.format_changed).then_some(report.speed),
             );
             self.written
                 .fetch_add(report.written as u64, Ordering::Relaxed);

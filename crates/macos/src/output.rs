@@ -1,5 +1,5 @@
 //! Native virtual-output buffer adapter; no device registration or rate changes.
-use crate::buffers::stereo_output;
+use crate::{buffers::stereo_output, source_clock::SourceClock};
 use channelbridge_audio::{StereoFrame, output::OutputProcessor, routing::AtomicRouting};
 use channelbridge_hal_abi::AudioBufferList;
 use std::{
@@ -17,6 +17,7 @@ struct State {
     gain: f32,
 }
 pub struct OutputCallback {
+    source_clock: Arc<SourceClock>,
     state: UnsafeCell<State>,
     routing: Arc<AtomicRouting>,
     busy: AtomicBool,
@@ -48,6 +49,7 @@ impl OutputCallback {
         scratch.try_reserve_exact(4096).ok()?;
         scratch.resize(4096, StereoFrame::SILENCE);
         Some(Self {
+            source_clock: Arc::new(SourceClock::default()),
             state: UnsafeCell::new(State {
                 processor,
                 scratch: scratch.into_boxed_slice(),
@@ -60,6 +62,10 @@ impl OutputCallback {
             rejected: AtomicU64::new(0),
             missing: AtomicU64::new(0),
         })
+    }
+    pub fn with_source_clock(mut self, clock: Arc<SourceClock>) -> Self {
+        self.source_clock = clock;
+        self
     }
     pub fn stats(&self) -> OutputStats {
         OutputStats {
@@ -102,7 +108,10 @@ impl OutputCallback {
                 return;
             }
             let frames = &mut state.scratch[..output.len()];
-            let report = state.processor.render(frames, source_speed);
+            let report = state.processor.render(
+                frames,
+                source_speed.or_else(|| self.source_clock.speed(route.generation)),
+            );
             // Muted callbacks still advance DSP and consume queued input.
             let target = if route.selection.muted() { 0.0 } else { 1.0 };
             for (destination, frame) in output.iter_mut().zip(frames.iter()) {
