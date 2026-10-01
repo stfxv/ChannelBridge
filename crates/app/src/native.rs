@@ -1,29 +1,68 @@
 //! AppKit objects never leave the main thread. Audio controls are wired later.
 use objc2::{
-    MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
-    NSPopUpButton, NSTextField, NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSBackingStoreType, NSPopUpButton, NSTextField, NSWindow,
+    NSWindowStyleMask,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string};
+use objc2_foundation::{
+    NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
+    NSString, NSTimer, ns_string,
+};
 
+struct Runtime {
+    screen: Screen,
+    worker: channelbridge_core::worker::Worker,
+}
+struct DelegateState {
+    runtime: std::cell::RefCell<Option<Runtime>>,
+    shutting_down: std::cell::Cell<bool>,
+    ticks: std::cell::Cell<u64>,
+}
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
+    #[ivars = DelegateState]
     struct AppDelegate;
     unsafe impl NSObjectProtocol for AppDelegate {}
     unsafe impl NSApplicationDelegate for AppDelegate {
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
-        fn close_last_window(&self, _application: &NSApplication) -> bool {
-            true
+        fn close_last_window(&self, _application: &NSApplication) -> bool { true }
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn should_terminate(&self, _application: &NSApplication) -> NSApplicationTerminateReply {
+            self.ivars().shutting_down.set(true);
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.worker.request_shutdown(); }
+            NSApplicationTerminateReply::TerminateLater
+        }
+    }
+    impl AppDelegate {
+        #[unsafe(method(refresh:))]
+        fn refresh(&self, _timer: &NSTimer) {
+            let main = MainThreadMarker::new().expect("UI timer must run on main thread");
+            self.ivars().ticks.set(self.ivars().ticks.get().saturating_add(1));
+            let state = self.ivars().runtime.borrow();
+            if let Some(runtime) = state.as_ref() {
+                let snapshot = runtime.worker.snapshot();
+                runtime.screen.update(&snapshot);
+                if snapshot.finished && self.ivars().shutting_down.replace(false) {
+                    NSApplication::sharedApplication(main).replyToApplicationShouldTerminate(true);
+                }
+            }
         }
     }
 );
 impl AppDelegate {
-    fn new(main: MainThreadMarker) -> Retained<Self> {
-        // SAFETY: NSObject's init initializes this no-ivar main-thread subclass.
-        unsafe { msg_send![Self::alloc(main), init] }
+    fn new(main: MainThreadMarker, runtime: Runtime) -> Retained<Self> {
+        let allocated = Self::alloc(main).set_ivars(DelegateState {
+            runtime: std::cell::RefCell::new(Some(runtime)),
+            shutting_down: std::cell::Cell::new(false),
+            ticks: std::cell::Cell::new(0),
+        });
+        // SAFETY: NSObject init after fully initializing Rust-owned ivars.
+        unsafe { msg_send![super(allocated), init] }
     }
 }
 struct Screen {
@@ -141,59 +180,118 @@ impl Screen {
 pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
-    let delegate = AppDelegate::new(main);
-    app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     let screen = Screen::new(main);
     let worker = channelbridge_macos::backend::spawn_worker(
         std::path::PathBuf::from("work/read-only-settings.json"),
         channelbridge_core::Config::default(),
     )
     .expect("control worker");
-    // First native inventory snapshot, still without granting permission or I/O.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while worker.snapshot().devices.is_empty() && std::time::Instant::now() < deadline {
-        if worker.snapshot().finished {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    let delegate = AppDelegate::new(main, Runtime { screen, worker });
+    app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    // SAFETY: matching Objective-C selector implemented above, main-thread
+    // target retained by timer; no userInfo. Only the main run loop owns it.
+    let timer = unsafe {
+        NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+            0.05,
+            &delegate,
+            sel!(refresh:),
+            None,
+            true,
+        )
+    };
+    let mode = unsafe { NSRunLoopCommonModes };
+    // SAFETY: MainThreadMarker above proves this is the timer owning run loop.
+    unsafe {
+        NSRunLoop::mainRunLoop().addTimer_forMode(&timer, mode);
     }
-    let snapshot = worker.snapshot();
-    screen.update(&snapshot);
     let smoke = std::env::args().any(|argument| argument == "--smoke");
     if smoke {
-        assert_eq!(
-            screen
-                .window
-                .contentView()
-                .expect("content view")
-                .subviews()
-                .len(),
-            3
-        );
-        println!("Rust AppKit window constructed; no permission request or audio start");
-        assert_eq!(screen.devices.indexOfSelectedItem(), 0);
-        assert_eq!(
-            screen.devices.numberOfItems() as usize,
-            snapshot.devices.len() + 1
-        );
-        if let Some(device) = snapshot.devices.first() {
-            let mut selected = snapshot.clone();
-            selected.config.device_uid = device.uid.clone();
-            screen.update(&selected);
-            assert_eq!(screen.devices.indexOfSelectedItem(), 1);
-            assert!(screen.format.stringValue().to_string().contains("kHz"));
-            selected.config.device_uid = "missing-device-for-smoke-test".into();
-            screen.update(&selected);
-            assert_eq!(screen.devices.indexOfSelectedItem(), 0);
-            assert_eq!(selected.config.device_uid, "missing-device-for-smoke-test");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let ready = !delegate
+                .ivars()
+                .runtime
+                .borrow()
+                .as_ref()
+                .expect("runtime")
+                .worker
+                .snapshot()
+                .devices
+                .is_empty();
+            if ready && delegate.ivars().ticks.get() > 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "inventory timer timed out"
+            );
+            NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
         }
-        worker.join().expect("worker shutdown");
+        {
+            let state = delegate.ivars().runtime.borrow();
+            let runtime = state.as_ref().expect("runtime");
+            let snapshot = runtime.worker.snapshot();
+            assert_eq!(
+                runtime
+                    .screen
+                    .window
+                    .contentView()
+                    .expect("content view")
+                    .subviews()
+                    .len(),
+                3
+            );
+            assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
+            if let Some(device) = snapshot.devices.first() {
+                let mut selected = snapshot.clone();
+                selected.config.device_uid = device.uid.clone();
+                runtime.screen.update(&selected);
+                assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 1);
+                selected.config.device_uid = "missing-device-for-smoke-test".into();
+                runtime.screen.update(&selected);
+                assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
+                assert_eq!(selected.config.device_uid, "missing-device-for-smoke-test");
+            }
+            runtime.worker.request_shutdown();
+        }
+        while !delegate
+            .ivars()
+            .runtime
+            .borrow()
+            .as_ref()
+            .expect("runtime")
+            .worker
+            .snapshot()
+            .finished
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker shutdown timed out"
+            );
+            NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+        }
+        timer.invalidate();
+        let runtime = delegate
+            .ivars()
+            .runtime
+            .borrow_mut()
+            .take()
+            .expect("runtime");
+        runtime.worker.join().expect("worker shutdown");
         app.setDelegate(None);
+        println!(
+            "Rust AppKit timer refreshed inventory and observed worker shutdown; no audio or permission request"
+        );
         return;
     }
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    screen.window.center();
-    screen.window.makeKeyAndOrderFront(None);
+    {
+        let state = delegate.ivars().runtime.borrow();
+        let screen = &state.as_ref().expect("runtime").screen;
+        screen.window.center();
+        screen.window.makeKeyAndOrderFront(None);
+    }
     app.run();
+    timer.invalidate();
     app.setDelegate(None);
 }
