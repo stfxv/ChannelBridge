@@ -8,6 +8,13 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifdef CHANNELBRIDGE_PRODUCTION
+#define EXPECTED_UID CFSTR("ChannelBridge_UID")
+#define EXPECTED_NAME CFSTR("ChannelBridge Mic")
+#else
+#define EXPECTED_UID CFSTR("ChannelBridge_Rust_Test_UID")
+#define EXPECTED_NAME CFSTR("ChannelBridge Mic (Rust Test)")
+#endif
 enum { Plugin = 1, Device = 2, Input = 3, Output = 4 };
 static _Atomic UInt64 pending_action;
 static OSStatus changed(AudioServerPlugInHostRef h, AudioObjectID id, UInt32 n, const AudioObjectPropertyAddress *a) { return 0; }
@@ -113,14 +120,14 @@ int main(int argc, char **argv) {
     a=address(custom[0].mSelector); UInt64 diagnostics[6]={0};
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(diagnostics),&bytes,diagnostics)==0 && bytes==48);
     UInt32 protocol=0; memcpy(&protocol,diagnostics,sizeof(protocol)); assert(protocol==1);
-    CFStringRef uid=CFSTR("ChannelBridge_Rust_Test_UID"); UInt32 id=0;
+    CFStringRef uid=EXPECTED_UID; UInt32 id=0;
     a=address(kAudioPlugInPropertyTranslateUIDToDevice);
     assert((*driver)->GetPropertyData(driver,Plugin,0,&a,sizeof(uid),&uid,sizeof(id),&bytes,&id)==0 && id==Device);
     assert((*driver)->GetPropertyData(driver,Plugin,0,&a,0,NULL,sizeof(id),&bytes,&id)!=0);
     assert((*driver)->GetPropertyData(driver,Plugin,0,&a,sizeof(uid),&uid,1,&bytes,&id)!=0);
     a=address(kAudioObjectPropertyName); CFStringRef name=NULL;
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(name),&bytes,&name)==0);
-    assert(CFEqual(name,CFSTR("ChannelBridge Mic (Rust Test)"))); CFRelease(name);
+    assert(CFEqual(name,EXPECTED_NAME)); CFRelease(name);
 
     AudioServerPlugInClientInfo client={1,1234,true,NULL};
     assert((*driver)->AddDeviceClient(driver,Device,&client)==0);

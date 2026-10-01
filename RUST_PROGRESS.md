@@ -346,3 +346,28 @@ Clippy、最低Rust全workspace全ターゲットcheck、全体スクリプト�
 17:17にInstaller/SecurityAgentの同じPIDが生存し、統合receipt未作成を再確認。認証を代行せず独立した移行実装を進めた。contractのDeploymentに機器UID/名前、driver/app Bundle ID、アプリ名、設定ディレクトリを集約。defaultは既存試験版、production featureは実際の通常版local.channelbridge.app/local.channelbridge.driver/ChannelBridge_UIDとChannelBridge設定先を選ぶ。app/macOS/driverへfeatureを伝播し、アプリの表示名/Bundle検証/保存先、HAL公開UID/名前/ID、セッション対象/交渉/健全性/診断の対象を統一した。通常版IDは設置済みplistと既存driver/Config.hの実値を確認した。
 
 試験用RateFollow::request_testとloopback/monitorは試験UIDを明示したままとし、製品経路はrequest_targetを使う。診断関数はread_target_driverへ改名した。旧Go形式の設定は両profileで読み込み、読出しによって原ファイルを書換えない。回帰試験で名前空間の分離/旧通常版ID維持と、両featureの設定先/チャンネル9・16維持/原ファイル不変を確認。通常/production contract試験、macos 19試験、default Clippy、最低Rust production全ターゲットcheck、Intel production全ターゲットcheck、default全体スクリプトが通過。通常版のplist/Universal配布ビルダー/移行と復帰の導入試験はまだ必要である。productionの実起動/インストール/設定更新はしておらず、認証待ちの既に生成済み0.5.2試験pkgは書き換えていない。長時間試験と署名/公証も未完了である。
+
+
+### 2026-10-01 production Universal build and installed test receipt
+
+Shared app/driver builders now accept --production and select dedicated plists,
+output paths and Cargo artifacts. Production plists retain the existing app/driver
+IDs, UID via the contract, and legacy factory UUID. Default test builds keep their
+separate namespace. Unknown/extra driver options fail rather than silently choosing
+a profile. Empty feature arrays work with Bash nounset. The source verifier accepts
+an explicit production profile and checks all workspace targets offline from its
+extracted archive with an empty Cargo cache.
+
+Production arm64/x86_64 builds, ad-hoc signature checks, bundle validation and
+non-audio AppKit smoke passed. The production driver passed its real C factory and
+property/audio/rate/epoch tests against fake HAL; the default test driver regression
+also passed. The final production app archive rebuilt offline with production
+features. No production installation, real production app launch or settings update
+was performed; pending test installer contents were not rewritten.
+
+At 20:30 local time, pkgutil reports local.channelbridge.rust.test.pkg version 0.5.2
+installed. coreaudiod and the test driver host still began at 12:00:42, before this
+installation. A fresh read-only probe --diagnostics still returns HAL error
+2003332927. Thus the installed receipt proves deployment, not live cbid/cbst loading;
+reload/reboot and actual-driver verification remain necessary. Long-call, real rate
+following, production migration/rollback and signing/notarization gates remain open.

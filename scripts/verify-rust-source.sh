@@ -4,6 +4,13 @@ set -euo pipefail
 source "$(dirname "$0")/rust-env.sh"
 cd "$CHANNELBRIDGE_ROOT"
 archive="${1:-$CHANNELBRIDGE_ROOT/work/rust-dist/ChannelBridgeRustTest.app/Contents/Resources/ChannelBridge-source.tar.gz}"
+features=()
+case "${2:-}" in
+    "") ;;
+    --production) features=(--features production) ;;
+    *) printf 'Unknown verification profile\n' >&2; exit 2 ;;
+esac
+if (( $# > 2 )); then printf 'Too many verification options\n' >&2; exit 2; fi
 if [[ "$archive" != /* ]]; then archive="$CHANNELBRIDGE_ROOT/$archive"; fi
 python3 - "$archive" <<'PY'
 import pathlib, sys, tarfile
@@ -34,5 +41,5 @@ mkdir -p "$stage/source" "$stage/empty-cargo"
 tar -xzf "$archive" -C "$stage/source"
 export CARGO_HOME="$stage/empty-cargo"
 cd "$stage/source"
-cargo check --offline --locked --workspace --all-targets
+cargo check --offline --locked --workspace --all-targets ${features[@]+"${features[@]}"}
 printf 'Archive rebuilt offline with an empty Cargo cache\n'

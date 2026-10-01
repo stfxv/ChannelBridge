@@ -43,3 +43,19 @@ Signing is ad-hoc; Developer ID signing and notarization are not verified.
 See RUST_APP_TEST.md, RUST_HAL_TEST.md, RUST_AUDIO_TEST.md and RUST_PROGRESS.md
 for test procedures and the distinction between simulated and real-device results.
 Real rate-following and long-call acceptance are not implied by this archive.
+
+## Production profile build (not installation)
+
+```sh
+bash scripts/build-rust-driver.sh --production
+bash scripts/build-rust-app.sh --production
+bash scripts/verify-rust-source.sh work/rust-production-dist/ChannelBridge.app/Contents/Resources/ChannelBridge-source.tar.gz --production
+```
+
+These commands generate ChannelBridge.app and ChannelBridge.driver under
+work/rust-production-dist using a separate Cargo target directory. The production
+feature selects the existing production IDs and settings directory. The default
+build continues to select the separate test namespace. Neither build installs
+anything. The app smoke test opens no audio and requests no microphone permission.
+The driver check uses a fake HAL, not the running audio service. Production
+installation, rollback, signing and real-device acceptance remain incomplete.
