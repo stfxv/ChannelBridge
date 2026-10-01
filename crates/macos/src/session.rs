@@ -144,6 +144,9 @@ impl TestSession {
         let source = find(source_uid)?;
         let target = find(channelbridge_contract::TEST_DEVICE_UID)?;
         let prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
+        if prepared.input_rate != prepared.output_rate {
+            return Err("virtual rate must follow source before starting preview".into());
+        }
         let mut capture = crate::io::Registration::new(source, prepared.capture)?;
         capture.disable_streams(crate::io::Direction::Output)?;
         let mut output = crate::io::Registration::new(target, prepared.output)?;

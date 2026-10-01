@@ -20,3 +20,6 @@ pub mod source_clock;
 
 #[cfg(target_os = "macos")]
 pub mod session;
+
+#[cfg(target_os = "macos")]
+pub mod rate;
