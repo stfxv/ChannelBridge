@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod controller;
 pub mod storage;
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
