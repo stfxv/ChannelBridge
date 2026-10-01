@@ -59,3 +59,8 @@ build continues to select the separate test namespace. Neither build installs
 anything. The app smoke test opens no audio and requests no microphone permission.
 The driver check uses a fake HAL, not the running audio service. Production
 installation, rollback, signing and real-device acceptance remain incomplete.
+
+Generate the production package (without installing it) with
+`bash scripts/package-rust-production.sh`. The verified output is
+`work/rust-production-dist/ChannelBridge-Rust.pkg`. See RUST_MIGRATION.md for
+replacement prerequisites, retained legacy artifacts and rollback acceptance.

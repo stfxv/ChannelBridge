@@ -371,3 +371,20 @@ installation. A fresh read-only probe --diagnostics still returns HAL error
 2003332927. Thus the installed receipt proves deployment, not live cbid/cbst loading;
 reload/reboot and actual-driver verification remain necessary. Long-call, real rate
 following, production migration/rollback and signing/notarization gates remain open.
+
+
+### 2026-10-01 production package preparation
+
+Added a dedicated production package builder and component plist. It rebuilds the
+production Universal app/driver, verifies the embedded archive offline with the
+production feature, then expands the package and verifies that all payload paths
+match the staged app/driver tree. Strict signatures, both executable bytes and the
+source archive are compared after expansion. No installer Scripts directory is
+allowed. This generates a local ad-hoc package only; no production replacement or
+audio-service restart is performed. RUST_MIGRATION.md records actual legacy backup,
+restoration and live-driver verification requirements. Actual migration, uninstall
+and rollback tests remain incomplete; real-device gates still require the newly
+installed test driver to load. Existing coreaudiod/test host start times remain
+12:00:42.
+
+Production package build/expand checks passed. pkgbuild still emits `write: Permission denied` warnings as in the test package build; their cause is unresolved and payload verification is not treated as resolution of those warnings.
