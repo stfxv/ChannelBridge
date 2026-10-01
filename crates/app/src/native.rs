@@ -5,8 +5,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply, NSBackingStoreType, NSMenu, NSMenuDelegate, NSPopUpButton,
-    NSTextField, NSWindow, NSWindowStyleMask,
+    NSApplicationTerminateReply, NSBackingStoreType, NSButton, NSMenu, NSMenuDelegate,
+    NSPopUpButton, NSTextField, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSDate, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
@@ -16,6 +16,7 @@ use objc2_foundation::{
 struct Runtime {
     screen: Screen,
     worker: channelbridge_core::worker::Worker,
+    permission_monitor: bool,
 }
 struct DelegateState {
     runtime: std::cell::RefCell<Option<Runtime>>,
@@ -49,6 +50,25 @@ define_class!(
         }
     }
     impl AppDelegate {
+        #[unsafe(method(requestMicrophone:))]
+        fn request_microphone(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                let main = MainThreadMarker::new().expect("permission action on main thread");
+                if let Err(error) = runtime.screen.permission.request(main) {
+                    *runtime.screen.action_error.borrow_mut() = Some(error.into());
+                }
+            }
+        }
+        #[unsafe(method(toggleSend:))]
+        fn toggle_send(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.toggle_send(&runtime.worker); }
+        }
+        #[unsafe(method(toggleMute:))]
+        fn toggle_mute(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                runtime.screen.toggle_mute(&runtime.worker);
+            }
+        }
         #[unsafe(method(selectRouting:))]
         fn select_routing(&self, sender: &NSPopUpButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
@@ -69,6 +89,9 @@ define_class!(
             let state = self.ivars().runtime.borrow();
             if let Some(runtime) = state.as_ref() {
                 let snapshot = runtime.worker.snapshot();
+                if runtime.permission_monitor && !snapshot.finished && self.ivars().ticks.get() % 20 == 1 {
+                    runtime.screen.sync_permission(&runtime.worker);
+                }
                 runtime.screen.update(&snapshot);
                 if snapshot.finished && self.ivars().shutting_down.replace(false) {
                     NSApplication::sharedApplication(main).replyToApplicationShouldTerminate(true);
@@ -89,6 +112,11 @@ impl AppDelegate {
     }
 }
 struct Screen {
+    permission: channelbridge_macos::permission::MicrophonePermission,
+    observed_permission: std::cell::Cell<Option<channelbridge_macos::permission::Permission>>,
+    permission_button: Retained<NSButton>,
+    send_button: Retained<NSButton>,
+    mute_button: Retained<NSButton>,
     meters: crate::input_meters::InputMeters,
     routing: crate::routing_controls::RoutingControls,
     window: Retained<NSWindow>,
@@ -104,7 +132,7 @@ struct Screen {
 }
 impl Screen {
     fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 330.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 400.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -144,7 +172,40 @@ impl Screen {
         view.addSubview(&devices);
         view.addSubview(&format);
         view.addSubview(&status);
+        let children = view.subviews();
+        for index in 0..children.len() {
+            let child = children.objectAtIndex(index);
+            let mut frame = child.frame();
+            frame.origin.y += 70.0;
+            child.setFrame(frame);
+        }
+        status.setFrame(NSRect::new(
+            NSPoint::new(20.0, 10.0),
+            NSSize::new(340.0, 25.0),
+        ));
+        let button = |title, x| {
+            // SAFETY: no target/action yet; main-thread construction only.
+            let button = unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str(title),
+                    None,
+                    None,
+                    main,
+                )
+            };
+            button.setFrame(NSRect::new(NSPoint::new(x, 55.0), NSSize::new(105.0, 32.0)));
+            view.addSubview(&button);
+            button
+        };
+        let permission_button = button("マイクを許可", 20.0);
+        let send_button = button("送出開始", 137.0);
+        let mute_button = button("ミュート", 255.0);
         Self {
+            permission: Default::default(),
+            observed_permission: Default::default(),
+            permission_button,
+            send_button,
+            mute_button,
             meters,
             routing,
             window,
@@ -185,6 +246,44 @@ impl Screen {
             .devices
             .iter()
             .position(|device| device.uid == snapshot.config.device_uid);
+        let permission = channelbridge_macos::permission::status();
+        let pending = self.permission.pending();
+        use channelbridge_macos::permission::Permission;
+        let permission_title = match permission {
+            Permission::NotDetermined if pending => "許可待ち",
+            Permission::NotDetermined => "マイクを許可",
+            Permission::Authorized => "マイク許可済み",
+            Permission::Denied => "マイク権限なし",
+            Permission::Restricted => "マイク利用制限",
+            Permission::Unavailable => "権限確認不可",
+        };
+        self.permission_button
+            .setTitle(&NSString::from_str(permission_title));
+        self.permission_button
+            .setEnabled(permission == Permission::NotDetermined && !pending && !snapshot.finished);
+        let valid = selected.is_some_and(|index| {
+            snapshot
+                .config
+                .validate_available(snapshot.devices[index].channels)
+                .is_ok()
+        });
+        self.send_button.setTitle(if snapshot.wanted_send {
+            ns_string!("停止")
+        } else {
+            ns_string!("送出開始")
+        });
+        self.send_button.setEnabled(
+            !snapshot.finished
+                && (snapshot.wanted_send
+                    || (valid && permission.allowed() && self.devices.isEnabled())),
+        );
+        self.mute_button.setTitle(if snapshot.config.muted {
+            ns_string!("ミュート解除")
+        } else {
+            ns_string!("ミュート")
+        });
+        self.mute_button
+            .setEnabled(self.devices.isEnabled() && !snapshot.config.device_uid.is_empty());
         self.routing.update(
             &snapshot.config,
             selected.map_or(0, |index| snapshot.devices[index].channels),
@@ -243,6 +342,8 @@ impl Screen {
             "設定を保存しています"
         } else if let Some(error) = snapshot.command_error.as_deref() {
             error
+        } else if let Some(error) = snapshot.error.as_deref() {
+            error
         } else if snapshot.device_error.is_some() {
             "入力機器を確認できません"
         } else if snapshot.config.device_uid.is_empty() {
@@ -250,12 +351,56 @@ impl Screen {
         } else if selected.is_none() {
             "選択した入力機器が接続されていません"
         } else {
-            "送出停止中"
+            match snapshot.state {
+                channelbridge_core::CaptureState::Idle if !permission.allowed() => {
+                    "マイク権限を確認してください"
+                }
+                channelbridge_core::CaptureState::Idle => "送出停止中",
+                channelbridge_core::CaptureState::Connecting => "音声を接続しています",
+                channelbridge_core::CaptureState::Previewing => "入力確認中 · 送出停止",
+                channelbridge_core::CaptureState::Sending => "送出中",
+                channelbridge_core::CaptureState::Recovering => "音声の再接続待ち",
+                channelbridge_core::CaptureState::Blocked => "音声を開始できません",
+            }
         };
         self.status.setStringValue(&NSString::from_str(status));
         if let Some(error) = self.action_error.borrow().as_deref() {
             self.status.setStringValue(&NSString::from_str(error));
         }
+    }
+    fn sync_permission(&self, worker: &channelbridge_core::worker::Worker) {
+        let current = channelbridge_macos::permission::status();
+        if self.observed_permission.get() != Some(current) {
+            match worker.send(channelbridge_core::Command::PermissionChanged(
+                current.allowed(),
+            )) {
+                Ok(()) => self.observed_permission.set(Some(current)),
+                Err(error) => *self.action_error.borrow_mut() = Some(error),
+            }
+        }
+    }
+    fn toggle_send(&self, worker: &channelbridge_core::worker::Worker) {
+        let snapshot = worker.snapshot();
+        let command = if snapshot.wanted_send {
+            channelbridge_core::Command::Stop
+        } else {
+            if !self.send_button.isEnabled() {
+                return;
+            }
+            channelbridge_core::Command::Start
+        };
+        if let Err(error) = worker.send(command) {
+            *self.action_error.borrow_mut() = Some(error);
+        }
+    }
+    fn toggle_mute(&self, worker: &channelbridge_core::worker::Worker) {
+        if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
+            return;
+        }
+        let snapshot = worker.snapshot();
+        let mut config = snapshot.config.clone();
+        config.muted = !config.muted;
+        self.submit_config(worker, &snapshot, config);
     }
     fn select_device(&self, worker: &channelbridge_core::worker::Worker) {
         if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
@@ -340,10 +485,29 @@ pub fn run() {
     let screen = Screen::new(main, settings.error);
     let worker = channelbridge_macos::backend::spawn_worker(settings.destination, settings.config)
         .expect("control worker");
-    let delegate = AppDelegate::new(main, Runtime { screen, worker });
+    let delegate = AppDelegate::new(
+        main,
+        Runtime {
+            screen,
+            worker,
+            permission_monitor: !smoke,
+        },
+    );
     {
         let state = delegate.ivars().runtime.borrow();
         let screen = &state.as_ref().expect("runtime").screen;
+        for (button, action) in [
+            (&screen.permission_button, sel!(requestMicrophone:)),
+            (&screen.send_button, sel!(toggleSend:)),
+            (&screen.mute_button, sel!(toggleMute:)),
+        ] {
+            // SAFETY: matching main-thread delegate selectors; delegate retained
+            // through the event loop, targets are weak.
+            unsafe {
+                button.setTarget(Some(&delegate));
+                button.setAction(Some(action));
+            }
+        }
         // SAFETY: main-thread delegate outlives the control and implements the
         // one-argument selector. AppKit target is weak, retained locally below.
         unsafe {
@@ -422,7 +586,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                11
+                14
             );
             assert_eq!(runtime.screen.devices.indexOfSelectedItem(), 0);
             if let Some(device) = snapshot.devices.first() {
@@ -569,6 +733,29 @@ fn smoke_device_save(main: MainThreadMarker) {
             selected.config
         );
     }
+    let before_mute = worker.snapshot();
+    screen.toggle_mute(&worker);
+    let muted =
+        wait(&|snapshot| snapshot.configuration_attempt > before_mute.configuration_attempt);
+    screen.update(&muted);
+    assert!(muted.config.muted);
+    assert_eq!(
+        channelbridge_core::storage::load(&destination).expect("mute config"),
+        muted.config
+    );
+    assert_eq!(screen.mute_button.title().to_string(), "ミュート解除");
+    let mut recovery = muted.clone();
+    recovery.wanted_send = true;
+    recovery.state = channelbridge_core::CaptureState::Recovering;
+    screen
+        .pending_attempt
+        .set(Some(recovery.configuration_attempt));
+    screen.update(&recovery);
+    assert!(screen.send_button.isEnabled());
+    assert_eq!(screen.send_button.title().to_string(), "停止");
+    recovery.finished = true;
+    screen.update(&recovery);
+    assert!(!screen.send_button.isEnabled());
     worker.request_shutdown();
     wait(&|snapshot| snapshot.finished);
     worker.join().expect("fixture worker shutdown");
