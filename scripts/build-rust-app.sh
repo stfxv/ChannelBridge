@@ -25,15 +25,10 @@ for size in 16 32 128 256 512; do
     sips -z "$double" "$double" packaging/assets/AppIcon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/AppIcon.icns"
-cp LICENSE THIRD_PARTY.md "$bundle/Contents/Resources/"
+cp LICENSE "$bundle/Contents/Resources/"
+cp THIRD_PARTY_RUST.md "$bundle/Contents/Resources/THIRD_PARTY.md"
 # Include locked dependency sources and their license files for offline rebuilds.
-mkdir -p "$stage/source/.cargo"
-(cd "$stage/source"; cargo vendor --locked --manifest-path "$CHANNELBRIDGE_ROOT/Cargo.toml" rust-vendor > .cargo/config.toml)
-tar -czf "$bundle/Contents/Resources/ChannelBridge-source.tar.gz" \
-    Cargo.toml Cargo.lock rust-toolchain.toml crates scripts packaging vendor \
-    cmd internal driver go.mod .github LICENSE THIRD_PARTY.md README.md \
-    ARCHITECTURE.md VERIFICATION.md RUST_*.md \
-    -C "$stage/source" rust-vendor .cargo
+bash scripts/package-rust-source.sh "$bundle/Contents/Resources/ChannelBridge-source.tar.gz"
 codesign --force --sign - "$bundle"
 codesign --verify --strict "$bundle"
 for architecture in arm64 x86_64; do

@@ -15,6 +15,8 @@ The application and changes are GPL-3.0-only. The complete corresponding source 
 The separate Rust test driver and audio implementation are new implementations;
 they do not compile or link the legacy BlackHole C source. The repository still
 includes that source for the existing production build described above.
+The Rust app uses its separate THIRD_PARTY_RUST.md notice and a Rust-only source
+archive; the legacy source and build scripts are excluded from that archive.
 
 Rust dependencies, versions and registry checksums are pinned in `Cargo.lock`.
 Platform access uses objc2 and its Foundation/AppKit/AVFoundation bindings;

@@ -204,3 +204,9 @@ E1x2入力48 kHz/24bit、試験アプリのステレオ設定で、実HALの読�
 | ミュート解除のまま送出停止 | 144384 | 0 / 0 | 0 / 0 |
 
 全検査で不正callback/非有限サンプルは0。Ch 3の無音とCh 2の信号は入力メーターでも確認し、左右の対応と二読み手の短時間利用を検証した。無音化/信号の到達は確認できたが、波形一致、位相、遅延、長時間ドロップアウト、Discordでの品質、全モード、機器切断や睡眠復帰の合格とは扱わない。ドライバホストは起動日時が更新前のままであり、これらを修正版0.5.1のロード証明ともしない。試験前のCh 1/2・stereo・muted=trueへ設定を戻し、送出停止後Command-Qで試験アプリを終了した。試験設定ファイルの復元と既存通常版のmono/muted=falseを確認。
+
+## Rust専用の対応ソース配布（2026-10-01）
+
+従来のRust試験アプリのソースarchiveには旧Go/BlackHole実装と旧ビルド手順も含まれていた。package-rust-source.shへ同梱処理を分離し、Rust crates/manifest/lock、Rustビルド・検証スクリプト、専用plist、ChannelBridgeアイコン、依存元ソースとライセンスだけを含める構成へ変更。旧Goのcmd/internal/go.mod、旧driver/vendor/BlackHoleと旧ビルド・音声試験のC/Objective-Cは除外する。Rust用C ABI/模擬HAL検証プログラムは対応ソースへ残すが、製品音声経路へリンクしない。THIRD_PARTY_RUST.mdとRUST_DISTRIBUTION.mdを追加し、試験アプリのnoticeも専用内容へ変更。旧版の原ソースとライセンスはリポジトリに保持する。
+
+Universalアプリの署名、bundle ID/マイク説明検証、非表示UI smokeが通過。verify-rust-source.shで同梱archiveの許容root/必須ファイルを確認し、展開先を作業ディレクトリとして空のCARGO_HOME・offline/lockedで全ワークスペース全ターゲットcheckが通過した。manifest-pathだけを元repoから指定する確認とは区別し、展開先の.cargo設定を実際に使用した。cargo vendorにもrespect-source-configを付け、展開先の依存置換設定を尊重する。検証をCIへ追加したが、GitHubの課金停止が解消したとは確認しておらずCI合格と扱わない。新helper初回のシェル構文ミスは検出・修正し、最終版の構文確認/アプリ再ビルド/空キャッシュ再検証が通過。再起動前の音声プロセスが続いており、実機レート追従ゲートは未達である。

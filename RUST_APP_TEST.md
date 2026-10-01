@@ -20,7 +20,9 @@ without audio devices, `--build-only` skips inventory-dependent UI smoke but
 still verifies bundle metadata. CI uses this explicit build-only mode.
 
 The app reuses the existing C monochrome icon. Its source archive includes
-project sources, locked dependencies and their original license files. Extract
+only Rust project sources/build scripts, locked dependencies and their original
+license files. It excludes the legacy Go/BlackHole implementations and uses
+THIRD_PARTY_RUST.md as the app's notice. Extract
 it and run `cargo check --offline --locked -p channelbridge-app` to check the
 vendored dependency configuration; Rust and Apple's SDK must already exist.
 The macOS deployment target is 13.0, but this is not proof of execution on macOS
