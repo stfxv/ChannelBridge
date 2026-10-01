@@ -39,6 +39,14 @@ impl NativeBackend {
         })
     }
 }
+/// UI entry point. The native backend is constructed inside the control thread.
+pub fn spawn_worker(
+    settings: PathBuf,
+    config: Config,
+) -> std::io::Result<channelbridge_core::worker::Worker> {
+    channelbridge_core::worker::Worker::spawn(config, move || NativeBackend::new(settings))
+}
+
 fn selection(config: &Config) -> Result<Selection, String> {
     let mode = match config.mode {
         channelbridge_core::Mode::Mono => Mode::Mono,

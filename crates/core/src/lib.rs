@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod controller;
 pub mod storage;
+pub mod worker;
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
