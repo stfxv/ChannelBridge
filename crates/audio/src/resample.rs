@@ -227,6 +227,66 @@ impl StreamingResampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A reproducible dense diagnostic; intentionally excluded from fast tests.
+    /// Run in release mode and retain the printed extrema and grid definition.
+    #[test]
+    #[ignore = "dense response sweep; use release mode explicitly"]
+    fn response_grid_meets_declared_passband_and_stopband_targets() {
+        println!("maximum_step\tmax_gain_error_db\tmax_phase_component_error\tmax_stopband_db");
+        for step in [0.501, 1.002, 2.004, 4.008, 16.032, 96.192] {
+            let kernel = SincKernel::new(step).unwrap();
+            let mut gain_error = 0_f64;
+            let mut phase_error = 0_f64;
+            let mut stop_amplitude = 0_f64;
+            for phase_index in 0..16 {
+                let fraction = f64::from(phase_index) / 16.0;
+                for frequency_index in 1..=32 {
+                    let frequency =
+                        f64::from(frequency_index) / 32.0 * (5.0 / 12.0) / step.max(1.0);
+                    let omega = frequency * std::f64::consts::TAU;
+                    let tone = kernel.interpolate(fraction, |index| {
+                        let phase = omega * (index as f64 - kernel.radius as f64);
+                        StereoFrame::new(phase.cos() as f32, phase.sin() as f32)
+                    });
+                    let amplitude = f64::from(tone.left).hypot(f64::from(tone.right));
+                    gain_error = gain_error.max((20.0 * amplitude.log10()).abs());
+                    phase_error = phase_error.max(
+                        (f64::from(tone.left) - (omega * fraction).cos())
+                            .abs()
+                            .max((f64::from(tone.right) - (omega * fraction).sin()).abs()),
+                    );
+                }
+                if step > 1.0 {
+                    for frequency_index in 0..=32 {
+                        let lower = 0.5 / step;
+                        let frequency = lower + (0.5 - lower) * f64::from(frequency_index) / 32.0;
+                        let tone = kernel.interpolate(fraction, |index| {
+                            let phase = std::f64::consts::TAU
+                                * frequency
+                                * (index as f64 - kernel.radius as f64);
+                            StereoFrame::new(phase.cos() as f32, phase.sin() as f32)
+                        });
+                        stop_amplitude =
+                            stop_amplitude.max(f64::from(tone.left).hypot(f64::from(tone.right)));
+                    }
+                }
+            }
+            let stop_db = if step > 1.0 {
+                20.0 * stop_amplitude.log10()
+            } else {
+                f64::NEG_INFINITY
+            };
+            println!("{step}\t{gain_error:.8}\t{phase_error:.8}\t{stop_db:.4}");
+            assert!(gain_error <= 0.1, "step={step} gain={gain_error} dB");
+            assert!(
+                phase_error <= 0.001,
+                "step={step} phase component error={phase_error}"
+            );
+            if step > 1.0 {
+                assert!(stop_db <= -90.0, "step={step} stop={stop_db} dB");
+            }
+        }
+    }
     #[test]
     fn phase_table_preserves_dc_and_passband() {
         for step in [0.501, 1.002, 2.004, 4.008, 96.192] {
