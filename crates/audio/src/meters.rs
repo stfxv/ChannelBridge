@@ -2,10 +2,11 @@
 //! keeps a three-second peak even if the UI skips a refresh. Readers never clear
 //! shared peaks. All fields are atomic and all retry/work bounds are finite.
 use crate::frame::finite;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, AtomicU64, Ordering},
-};
+#[cfg(feature = "model-check")]
+use loom::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+#[cfg(not(feature = "model-check"))]
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 const BUCKETS: usize = 64;
 const BUCKETS_PER_SECOND: u64 = 20;
@@ -13,6 +14,33 @@ struct Slot {
     sequence: AtomicU64,
     bucket: AtomicU64,
     peak: AtomicU32,
+}
+impl Slot {
+    fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(0),
+            bucket: AtomicU64::new(u64::MAX),
+            peak: AtomicU32::new(0),
+        }
+    }
+    fn publish(&self, sequence: u64, bucket: u64, peak: f32) {
+        // Each Release publication prevents a reader accepting a new field
+        // while its final sequence check still observes the old sequence.
+        self.sequence.store(sequence - 1, Ordering::Release);
+        self.bucket.store(bucket, Ordering::Release);
+        self.peak.store(peak.to_bits(), Ordering::Release);
+        self.sequence.store(sequence, Ordering::Release);
+    }
+    fn read(&self, expected: u64) -> Option<f32> {
+        let before = self.sequence.load(Ordering::Acquire);
+        if before & 1 != 0 {
+            return None;
+        }
+        let stored = self.bucket.load(Ordering::Acquire);
+        let value = self.peak.load(Ordering::Acquire);
+        let after = self.sequence.load(Ordering::Acquire);
+        (before == after && stored == expected).then(|| f32::from_bits(value))
+    }
 }
 struct Shared {
     ticks_per_second: u64,
@@ -55,11 +83,7 @@ pub fn meter_bank(channels: usize, ticks_per_second: u64) -> Option<(MeterWriter
     }
     let levels = allocated(channels, || AtomicU32::new(0))?;
     let updated = allocated(channels, || AtomicU64::new(u64::MAX))?;
-    let history = allocated(channels * BUCKETS, || Slot {
-        sequence: AtomicU64::new(0),
-        bucket: AtomicU64::new(u64::MAX),
-        peak: AtomicU32::new(0),
-    })?;
+    let history = allocated(channels * BUCKETS, Slot::new)?;
     let current = allocated(channels, || Current {
         bucket: u64::MAX,
         peak: 0.0,
@@ -116,12 +140,7 @@ impl MeterWriter {
         let Some(slot) = self.shared.history.get(index) else {
             return false;
         };
-        // Release on each field lets any reader seeing a new field also see
-        // the preceding odd sequence; it cannot accept mixed bucket/peak data.
-        slot.sequence.store(sequence - 1, Ordering::Release);
-        slot.bucket.store(bucket, Ordering::Release);
-        slot.peak.store(held.to_bits(), Ordering::Release);
-        slot.sequence.store(sequence, Ordering::Release);
+        slot.publish(sequence, bucket, held);
         if let Some(level) = self.shared.levels.get(channel) {
             level.store(peak.to_bits(), Ordering::Release);
         }
@@ -166,15 +185,8 @@ impl MeterReader {
             let Some(slot) = self.shared.history.get(index) else {
                 break;
             };
-            let before = slot.sequence.load(Ordering::Acquire);
-            if before & 1 != 0 {
-                continue;
-            }
-            let stored = slot.bucket.load(Ordering::Acquire);
-            let value = slot.peak.load(Ordering::Acquire);
-            let after = slot.sequence.load(Ordering::Acquire);
-            if before == after && stored == expected {
-                peak = peak.max(f32::from_bits(value));
+            if let Some(value) = slot.read(expected) {
+                peak = peak.max(value);
             }
         }
         Level {
@@ -184,7 +196,7 @@ impl MeterReader {
         }
     }
 }
-#[cfg(test)]
+#[cfg(all(test, not(feature = "model-check")))]
 mod tests {
     use super::*;
     #[test]
@@ -213,5 +225,35 @@ mod tests {
         assert_eq!(reader.level(9, 3300).held_peak, 0.1);
         assert!(!writer.record(9, 0.9, 3000));
         assert_eq!(reader.level(9, 3300).held_peak, 0.1);
+    }
+}
+
+#[cfg(all(test, feature = "model-check"))]
+mod model_tests {
+    use super::*;
+    use loom::{sync::Arc, thread};
+    #[test]
+    fn overwritten_history_never_attributes_a_peak_to_the_wrong_bucket() {
+        let mut model = loom::model::Builder::new();
+        model.preemption_bound = Some(2);
+        model.check(|| {
+            let slot = Arc::new(Slot::new());
+            slot.publish(2, 3, 0.25);
+            let updating = Arc::clone(&slot);
+            let writer = thread::spawn(move || updating.publish(4, 67, 0.75));
+            let reading = Arc::clone(&slot);
+            let reader = thread::spawn(move || {
+                if let Some(peak) = reading.read(3) {
+                    assert_eq!(peak, 0.25);
+                }
+                if let Some(peak) = reading.read(67) {
+                    assert_eq!(peak, 0.75);
+                }
+            });
+            writer.join().unwrap();
+            reader.join().unwrap();
+            assert_eq!(slot.read(3), None);
+            assert_eq!(slot.read(67), Some(0.75));
+        });
     }
 }

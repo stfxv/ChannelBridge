@@ -8,7 +8,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo run --locked --quiet -p channelbridge-audio --example realtime_allocations
 cargo run --locked --quiet -p channelbridge-macos --example native_realtime_allocations
-cargo test --locked -p channelbridge-audio --features model-check ring::model_tests
+cargo test --locked -p channelbridge-audio --features model-check model_tests
 clang -Wall -Wextra -Werror scripts/test_rust_abi.c -framework CoreAudio -o work/test/rust/abi
 work/test/rust/abi > work/test/rust/apple-layout.txt
 cargo run --locked --quiet -p channelbridge-hal-abi --example layout > work/test/rust/rust-layout.txt
