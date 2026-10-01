@@ -360,6 +360,14 @@ impl Screen {
                 channelbridge_core::CaptureState::Previewing => "入力確認中 · 送出停止",
                 channelbridge_core::CaptureState::Sending => "送出中",
                 channelbridge_core::CaptureState::Recovering => "音声の再接続待ち",
+                channelbridge_core::CaptureState::Blocked if !permission.allowed() => {
+                    match permission {
+                        Permission::NotDetermined => "入力確認にはマイクの許可が必要です",
+                        Permission::Denied => "システム設定でマイクの許可を確認してください",
+                        Permission::Restricted => "マイクの利用が制限されています",
+                        _ => "マイク権限を確認できません",
+                    }
+                }
                 channelbridge_core::CaptureState::Blocked => "音声を開始できません",
             }
         };
@@ -472,6 +480,26 @@ impl Screen {
 pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(main), ns_string!(""));
+    let app_menu =
+        NSMenu::initWithTitle(NSMenu::alloc(main), ns_string!("ChannelBridge Rust Test"));
+    // SAFETY: nil root action; quit explicitly targets NSApplication's public
+    // terminate: selector, with the standard Command-Q key equivalent.
+    unsafe {
+        let root = menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("ChannelBridge Rust Test"),
+            None,
+            ns_string!(""),
+        );
+        root.setSubmenu(Some(&app_menu));
+        let quit = app_menu.addItemWithTitle_action_keyEquivalent(
+            ns_string!("ChannelBridge Rust Testを終了"),
+            Some(sel!(terminate:)),
+            ns_string!("q"),
+        );
+        quit.setTarget(Some(&app));
+    }
+    app.setMainMenu(Some(&menu));
     let smoke = std::env::args().any(|argument| argument == "--smoke");
     let check_bundle = std::env::args().any(|argument| argument == "--check-bundle");
     if check_bundle || std::env::args().any(|argument| argument == "--require-bundle") {

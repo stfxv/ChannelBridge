@@ -130,3 +130,7 @@ AppKitへマイク許可要求、送出開始/停止、ミュート操作を追�
 ## 独立したUniversal試験アプリ（2026-10-01）
 
 build-rust-app.shと専用Info.plistを追加。macOS 13を最低バージョンとしてApple Silicon/Intelをビルドし、既存Cアイコン・マイク使用説明・別bundle ID・GPLと依存ライセンスを含むソースを同梱。依存ソースはCargo.lockに固定してrust-vendorへ同梱し、展開先でoffline/lockedのappコンパイルが通過。既存通常アプリは置換しない。両Mach-OのminOS 13.0と両アーキテクチャ、ad-hoc署名を確認。Universalアプリ内の実行ファイルからNSBundle ID/非空マイク説明を検証し、非表示UI smokeも通過。CIには実機器一覧を必要としない明示的build-onlyとmetadata検証を追加。詳細はRUST_APP_TEST.md。これはDeveloper ID署名/公証、macOS 13/Intel実行、Dock表示、通常UI/権限画面や実HALを検証したものではない。
+
+## 通常画面の実操作確認（2026-10-01）
+
+Universal試験アプリを通常のウィンドウで起動し、CUAによる実際のモードメニュー選択、Ch 9選択、ミュートを確認。試験版保存ファイルのステレオ/Ch 9/ミュートと表示が一致し、再起動後も復元した。既存通常版の保存内容はmono/Ch 1/muted=falseのままである。マイク許可は要求していない。通常画面の配置を画像で確認し、権限未許可のBlocked表示を「入力確認にはマイクの許可が必要です」へ修正。標準終了メニューとCommand-Qのキー対応を追加。ウィンドウの閉じる操作と終了メニューの実操作後、CUAの終了結果とプロセス不在を確認。Command-Qのキー入力自体、音声稼働中の終了、TCCダイアログは未検証。修正版bundleの非表示smoke、Clippy、最低Rustコンパイルも通過。試験アプリは終了済み。メニューバー常駐アイコン、実HAL、長時間通話は引き続き未完了。
