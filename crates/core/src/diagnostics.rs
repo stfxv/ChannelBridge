@@ -23,8 +23,18 @@ struct Report<'a> {
     muted: bool,
     session_counters: &'a Option<crate::view::AudioDiagnostics>,
     driver: &'a Option<crate::view::DriverDiagnostics>,
+    /// Active-session formats and dry levels; null without a session.
+    audio: &'a Option<crate::view::AudioView>,
+    /// Most recent device inventory, distinct from active-session evidence.
+    selected_input_inventory: Option<InputInventory<'a>>,
     error: &'a Option<String>,
     command_error: &'a Option<String>,
+}
+#[derive(Serialize)]
+struct InputInventory<'a> {
+    nominal_rate: f64,
+    physical_inputs: &'a [crate::view::InputFormat],
+    format_error: &'a Option<String>,
 }
 struct LimitedBuffer(Vec<u8>);
 impl Write for LimitedBuffer {
@@ -61,6 +71,16 @@ pub fn save_new(path: &Path, snapshot: &Snapshot) -> io::Result<()> {
         muted: snapshot.config.muted,
         session_counters: &snapshot.diagnostics,
         driver: &snapshot.driver_diagnostics,
+        audio: &snapshot.audio,
+        selected_input_inventory: snapshot
+            .devices
+            .iter()
+            .find(|device| device.uid == snapshot.config.device_uid)
+            .map(|device| InputInventory {
+                nominal_rate: device.rate,
+                physical_inputs: &device.physical_inputs,
+                format_error: &device.format_error,
+            }),
         error: &snapshot.error,
         command_error: &snapshot.command_error,
     };
@@ -152,11 +172,46 @@ mod tests {
                 error: "unsupported property".into(),
             },
         });
+        let physical = crate::view::InputFormat {
+            channels: 10,
+            rate: 48000.0,
+            bits: 24,
+            float: false,
+        };
+        snapshot.devices = vec![crate::view::DeviceChoice {
+            uid: snapshot.config.device_uid.clone(),
+            name: "private-device-name".into(),
+            channels: 10,
+            rate: 48000.0,
+            physical_inputs: vec![physical.clone()],
+            format_error: None,
+        }]
+        .into();
+        snapshot.audio = Some(crate::view::AudioView {
+            physical_inputs: vec![physical],
+            virtual_rate: 48000,
+            virtual_bits: 32,
+            levels: vec![crate::view::InputLevel {
+                channel: 1,
+                fresh: true,
+                current_dbfs: None,
+                held_dbfs: None,
+            }],
+        });
         let destination = directory.join("report.json");
         save_new(&destination, &snapshot).unwrap();
         let bytes = fs::read(&destination).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json["session_counters"].is_null());
+        assert_eq!(json["audio"]["physical_inputs"][0]["bits"], 24);
+        assert_eq!(json["audio"]["virtual_bits"], 32);
+        assert_eq!(
+            json["selected_input_inventory"]["physical_inputs"][0]["float"],
+            false
+        );
+        assert_eq!(json["audio"]["levels"][0]["fresh"], true);
+        assert!(json["audio"]["levels"][0]["current_dbfs"].is_null());
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-device-name"));
         assert_eq!(json["driver"]["reading"]["status"], "unavailable");
         assert_eq!(json["driver"]["reading"]["error"], "unsupported property");
         assert!(json["driver"]["reading"].get("written_frames").is_none());
@@ -174,9 +229,17 @@ mod tests {
                 0o600
             );
         }
+        snapshot.audio = None;
+        snapshot.devices = Vec::new().into();
+        let unavailable_path = directory.join("unavailable.json");
+        save_new(&unavailable_path, &snapshot).unwrap();
+        let unknown: serde_json::Value =
+            serde_json::from_slice(&fs::read(unavailable_path).unwrap()).unwrap();
+        assert!(unknown["audio"].is_null());
+        assert!(unknown["selected_input_inventory"].is_null());
         snapshot.error = Some("x".repeat(MAX_REPORT_BYTES));
         assert!(save_new(&directory.join("oversize.json"), &snapshot).is_err());
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
         fs::remove_dir_all(directory).unwrap();
     }
 }

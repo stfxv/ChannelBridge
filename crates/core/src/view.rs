@@ -55,21 +55,21 @@ pub struct DeviceChoice {
     pub physical_inputs: Vec<InputFormat>,
     pub format_error: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct InputFormat {
     pub channels: u32,
     pub rate: f64,
     pub bits: u32,
     pub float: bool,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct InputLevel {
     pub channel: u32,
     pub fresh: bool,
     pub current_dbfs: Option<f32>,
     pub held_dbfs: Option<f32>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AudioView {
     pub physical_inputs: Vec<InputFormat>,
     pub virtual_rate: u32,
