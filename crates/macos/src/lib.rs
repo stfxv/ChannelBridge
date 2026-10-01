@@ -8,3 +8,6 @@ pub mod loopback;
 
 #[cfg(target_os = "macos")]
 pub mod capture;
+
+#[cfg(target_os = "macos")]
+pub mod output;
