@@ -9,3 +9,4 @@ rust-version.workspace = true
 channelbridge-hal-abi = { path = "../hal-abi" }
 channelbridge-contract = { path = "../contract" }
 channelbridge-audio = { path = "../audio" }
+channelbridge-core = { path = "../core" }

@@ -23,3 +23,6 @@ pub mod session;
 
 #[cfg(target_os = "macos")]
 pub mod rate;
+
+#[cfg(target_os = "macos")]
+pub mod backend;

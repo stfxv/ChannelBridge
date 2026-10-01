@@ -16,6 +16,9 @@ pub trait Backend {
         sending: bool,
         overview: bool,
     ) -> Result<(), String>;
+    fn open_failure_requires_stop(&self) -> bool {
+        false
+    }
     fn close(&mut self, session: Self::Session) -> Result<(), String>;
 }
 /// `now_ms` is monotonic worker time, not a wall clock. Only the worker owns
@@ -186,7 +189,15 @@ impl<B: Backend> Controller<B> {
             Ok(true) => {
                 self.pending = None;
                 match self.backend.open(&self.config) {
-                    Err(error) => self.retry(now_ms, error),
+                    Err(error) => {
+                        if self.backend.open_failure_requires_stop() {
+                            self.teardown_failed = true;
+                            self.error = Some(error);
+                            self.state = CaptureState::Blocked;
+                        } else {
+                            self.retry(now_ms, error);
+                        }
+                    }
                     Ok(session) => {
                         self.session = Some(session);
                         let result = self.backend.route(

@@ -117,6 +117,10 @@ impl PreparedSession {
 /// Development session, restricted to the separate Rust test device UID.
 /// Both IOProcs keep running for preview/stop; sending is controlled atomically.
 pub struct TestSession {
+    pub(crate) source_id: ObjectId,
+    pub(crate) target_id: ObjectId,
+    pub(crate) rate: u32,
+    pub(crate) virtual_streams: Vec<Stream>,
     capture: crate::io::Registration<CaptureCallback>,
     output: crate::io::Registration<OutputCallback>,
     pub routing: Arc<AtomicRouting>,
@@ -147,6 +151,8 @@ impl TestSession {
         if prepared.input_rate != prepared.output_rate {
             return Err("virtual rate must follow source before starting preview".into());
         }
+        let mut virtual_streams = devices::streams(target, fourcc(b"inpt"))?;
+        virtual_streams.extend(devices::streams(target, fourcc(b"outp"))?);
         let mut capture = crate::io::Registration::new(source, prepared.capture)?;
         capture.disable_streams(crate::io::Direction::Output)?;
         let mut output = crate::io::Registration::new(target, prepared.output)?;
@@ -156,6 +162,10 @@ impl TestSession {
         output.start()?;
         capture.start()?;
         Ok(Self {
+            virtual_streams,
+            source_id: source,
+            target_id: target,
+            rate: prepared.input_rate,
             capture,
             output,
             routing: prepared.routing,

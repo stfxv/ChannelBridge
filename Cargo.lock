@@ -65,6 +65,7 @@ version = "0.5.0-alpha.1"
 dependencies = [
  "channelbridge-audio",
  "channelbridge-contract",
+ "channelbridge-core",
  "channelbridge-hal-abi",
 ]
 
