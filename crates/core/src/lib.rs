@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod controller;
+pub mod diagnostics;
 pub mod storage;
 pub mod view;
 pub mod worker;
@@ -66,7 +67,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum CaptureState {
     #[default]
     Idle,
