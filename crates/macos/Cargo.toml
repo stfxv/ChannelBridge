@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+production = ["channelbridge-contract/production"]
+
 [dependencies]
 channelbridge-hal-abi = { path = "../hal-abi" }
 channelbridge-contract = { path = "../contract" }

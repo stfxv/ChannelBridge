@@ -41,7 +41,7 @@ impl RateFollow {
         self.desired
     }
     pub fn request_for_source(source_uid: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::request_test(Self::source_rate(source_uid)?)
+        Self::request_target(Self::source_rate(source_uid)?)
     }
     /// Read the physical source's nominal rate without changing either device.
     pub fn source_rate(source_uid: &str) -> Result<u32, Box<dyn std::error::Error>> {
@@ -64,6 +64,12 @@ impl RateFollow {
     /// Call before starting either output IOProc. Changing a physical source's
     /// rate is deliberately outside this API. Poll from the control worker.
     pub fn request_test(desired: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::request_uid(desired, channelbridge_contract::TEST_DEVICE_UID)
+    }
+    pub fn request_target(desired: u32) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::request_uid(desired, channelbridge_contract::DEPLOYMENT.device_uid)
+    }
+    fn request_uid(desired: u32, target_uid: &str) -> Result<Self, Box<dyn std::error::Error>> {
         if !channelbridge_contract::SUPPORTED_RATES.contains(&desired) {
             return Err("unsupported virtual rate".into());
         }
@@ -71,10 +77,12 @@ impl RateFollow {
         let mut matching = devices
             .iter()
             .filter_map(|entry| entry.as_ref().ok())
-            .filter(|device| device.uid == channelbridge_contract::TEST_DEVICE_UID);
-        let device = matching.next().ok_or("Rust test driver is not loaded")?;
+            .filter(|device| device.uid == target_uid);
+        let device = matching
+            .next()
+            .ok_or("virtual microphone driver is not loaded")?;
         if matching.next().is_some() {
-            return Err("duplicate Rust test UID".into());
+            return Err("duplicate virtual microphone UID".into());
         }
         if nominal_rate(device.id)? != f64::from(desired) {
             let address = PropertyAddress {

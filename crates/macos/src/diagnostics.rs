@@ -1,14 +1,14 @@
 //! Read-only control-path diagnostic access. Never opens a device or clears totals.
 use crate::devices;
-use channelbridge_contract::{DIAGNOSTICS_SELECTOR, DriverCounters, TEST_DEVICE_UID};
+use channelbridge_contract::{DIAGNOSTICS_SELECTOR, DriverCounters};
 use channelbridge_hal_abi::fourcc;
 
-pub fn read_test_driver() -> Result<DriverCounters, Box<dyn std::error::Error>> {
+pub fn read_target_driver() -> Result<DriverCounters, Box<dyn std::error::Error>> {
     Ok(DriverCounters::decode(&read_property(
         DIAGNOSTICS_SELECTOR,
     )?)?)
 }
-pub fn read_test_driver_identity() -> Result<String, Box<dyn std::error::Error>> {
+pub fn read_target_driver_identity() -> Result<String, Box<dyn std::error::Error>> {
     decode_identity(&read_property(
         channelbridge_contract::DRIVER_IDENTITY_SELECTOR,
     )?)
@@ -27,10 +27,12 @@ fn read_property(selector: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut selected = inventory
         .iter()
         .filter_map(|entry| entry.as_ref().ok())
-        .filter(|device| device.uid == TEST_DEVICE_UID);
-    let device = selected.next().ok_or("Rust test driver is not loaded")?;
+        .filter(|device| device.uid == channelbridge_contract::DEPLOYMENT.device_uid);
+    let device = selected
+        .next()
+        .ok_or("virtual microphone driver is not loaded")?;
     if selected.next().is_some() {
-        return Err("duplicate Rust test UID".into());
+        return Err("duplicate virtual microphone UID".into());
     }
     Ok(devices::property(device.id, selector, fourcc(b"glob"))?)
 }

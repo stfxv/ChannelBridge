@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().nth(1).as_deref() == Some("--diagnostics") {
         println!(
             "{:?}",
-            channelbridge_macos::diagnostics::read_test_driver()?
+            channelbridge_macos::diagnostics::read_target_driver()?
         );
         return Ok(());
     }

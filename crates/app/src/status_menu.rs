@@ -28,7 +28,10 @@ impl StatusMenu {
             );
             state.setEnabled(false);
             let open = menu.addItemWithTitle_action_keyEquivalent(
-                ns_string!("ChannelBridge Rust Testを開く"),
+                &NSString::from_str(&format!(
+                    "{}を開く",
+                    channelbridge_contract::DEPLOYMENT.app_name
+                )),
                 Some(sel!(showWindow:)),
                 ns_string!(""),
             );
@@ -57,7 +60,9 @@ impl StatusMenu {
         let image = |name| {
             let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str(name),
-                Some(ns_string!("ChannelBridge Rust Test")),
+                Some(&NSString::from_str(
+                    channelbridge_contract::DEPLOYMENT.app_name,
+                )),
             );
             if let Some(image) = image.as_ref() {
                 image.setTemplate(true);
@@ -117,7 +122,9 @@ impl StatusMenu {
             } else {
                 ns_string!("")
             });
-            button.setToolTip(Some(ns_string!("ChannelBridge Rust Test")));
+            button.setToolTip(Some(&NSString::from_str(
+                channelbridge_contract::DEPLOYMENT.app_name,
+            )));
         }
     }
 }

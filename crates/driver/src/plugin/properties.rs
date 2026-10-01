@@ -1,9 +1,7 @@
 //! Property descriptions are shared by HasProperty, size, getter and setter.
 //! Allocations here run on the HAL control path, not its I/O callbacks.
 use super::*;
-use channelbridge_contract::{
-    SUPPORTED_RATES, TEST_DEVICE_NAME, TEST_DEVICE_UID, TEST_DRIVER_BUNDLE_ID,
-};
+use channelbridge_contract::{DEPLOYMENT, SUPPORTED_RATES};
 use std::mem::size_of;
 
 const GLOBAL: u32 = fourcc(b"glob");
@@ -87,7 +85,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
         } else if object == OUTPUT {
             "Send"
         } else {
-            TEST_DEVICE_NAME
+            DEPLOYMENT.device_name
         }));
     }
     if selector == fourcc(b"lmak") {
@@ -107,7 +105,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
             return Err(UNKNOWN_PROPERTY);
         }
         return match selector {
-            s if s == fourcc(b"piid") => Ok(Value::Text(TEST_DRIVER_BUNDLE_ID)),
+            s if s == fourcc(b"piid") => Ok(Value::Text(DEPLOYMENT.driver_bundle_id)),
             s if s == fourcc(b"dev#") => Ok(Value::Objects(&[DEVICE])),
             s if [fourcc(b"box#"), fourcc(b"clk#")].contains(&s) => Ok(Value::Objects(&[])),
             s if s == fourcc(b"uidd") => Ok(Value::TranslateUid),
@@ -132,7 +130,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
         };
     }
     match selector {
-        s if s == fourcc(b"uid ") => Ok(Value::Text(TEST_DEVICE_UID)),
+        s if s == fourcc(b"uid ") => Ok(Value::Text(DEPLOYMENT.device_uid)),
         s if s == fourcc(b"muid") => Ok(Value::Text("ChannelBridge_Rust_2ch")),
         s if s == fourcc(b"tran") => Ok(Value::Integer(fourcc(b"virt"))),
         s if s == fourcc(b"akin") => Ok(Value::Objects(&[DEVICE])),
@@ -393,7 +391,7 @@ pub(super) unsafe extern "C" fn get_data(
                     return BAD_SIZE;
                 }
                 let uid = unsafe { qualifier.cast::<CfRef>().read_unaligned() };
-                let device = if unsafe { system::string_equals(uid, TEST_DEVICE_UID) } {
+                let device = if unsafe { system::string_equals(uid, DEPLOYMENT.device_uid) } {
                     DEVICE
                 } else {
                     0

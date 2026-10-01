@@ -1,4 +1,4 @@
-//! Native control backend for the separate development virtual microphone.
+//! Native control backend for the selected deployment virtual microphone.
 use crate::{
     devices,
     rate::{RateFollow, Status},
@@ -68,7 +68,7 @@ fn same_format(a: &StreamFormat, b: &StreamFormat) -> bool {
         && a.bits_per_channel == b.bits_per_channel
 }
 fn compatible_driver() -> Result<(), String> {
-    let counters = crate::diagnostics::read_test_driver()
+    let counters = crate::diagnostics::read_target_driver()
         .map_err(|error| format!("仮想マイクの互換性を確認できません: {error}"))?;
     initialized_driver(counters)
 }
@@ -89,9 +89,9 @@ impl Backend for NativeBackend {
     }
     fn driver_diagnostics(&self) -> Option<channelbridge_core::view::DriverReading> {
         use channelbridge_core::view::DriverReading;
-        Some(match crate::diagnostics::read_test_driver() {
+        Some(match crate::diagnostics::read_target_driver() {
             Ok(counters) => {
-                let identity = crate::diagnostics::read_test_driver_identity();
+                let identity = crate::diagnostics::read_target_driver_identity();
                 let (version, identity_error) = match identity {
                     Ok(version) => (Some(version), None),
                     Err(error) => (None, Some(error.to_string())),
@@ -258,7 +258,7 @@ impl Backend for NativeBackend {
         compatible_driver()?;
         let desired =
             RateFollow::source_rate(&config.device_uid).map_err(|error| error.to_string())?;
-        RateFollow::request_test(desired)
+        RateFollow::request_target(desired)
             .map_err(|error| format!("仮想マイクの{desired} Hzへの交渉に失敗しました: {error}"))
     }
     fn ready(&mut self, pending: &RateFollow) -> Result<bool, String> {
@@ -305,7 +305,7 @@ impl Backend for NativeBackend {
         let target = devices
             .iter()
             .filter_map(|entry| entry.as_ref().ok())
-            .find(|device| device.uid == channelbridge_contract::TEST_DEVICE_UID);
+            .find(|device| device.uid == channelbridge_contract::DEPLOYMENT.device_uid);
         let (Some(source), Some(target)) = (source, target) else {
             return Ok(false);
         };

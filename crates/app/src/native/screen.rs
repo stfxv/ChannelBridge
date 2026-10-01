@@ -46,7 +46,9 @@ impl Screen {
         unsafe {
             window.setReleasedWhenClosed(false);
         }
-        window.setTitle(ns_string!("ChannelBridge Rust Test"));
+        window.setTitle(&NSString::from_str(
+            channelbridge_contract::DEPLOYMENT.app_name,
+        ));
         let devices = NSPopUpButton::initWithFrame_pullsDown(
             NSPopUpButton::alloc(main),
             NSRect::new(NSPoint::new(20.0, 275.0), NSSize::new(340.0, 32.0)),

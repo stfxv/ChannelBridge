@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+production = ["channelbridge-contract/production", "channelbridge-macos/production"]
+
 [dependencies]
 channelbridge-core = { path = "../core" }
+channelbridge-contract = { path = "../contract" }
 channelbridge-macos = { path = "../macos" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

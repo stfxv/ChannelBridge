@@ -146,7 +146,7 @@ impl TestSession {
             Ok(device.id)
         };
         let source = find(source_uid)?;
-        let target = find(channelbridge_contract::TEST_DEVICE_UID)?;
+        let target = find(channelbridge_contract::DEPLOYMENT.device_uid)?;
         let prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
         if prepared.input_rate != prepared.output_rate {
             return Err("virtual rate must follow source before starting preview".into());

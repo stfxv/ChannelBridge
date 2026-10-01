@@ -154,19 +154,24 @@ pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
     let menu = NSMenu::initWithTitle(NSMenu::alloc(main), ns_string!(""));
-    let app_menu =
-        NSMenu::initWithTitle(NSMenu::alloc(main), ns_string!("ChannelBridge Rust Test"));
+    let app_menu = NSMenu::initWithTitle(
+        NSMenu::alloc(main),
+        &NSString::from_str(channelbridge_contract::DEPLOYMENT.app_name),
+    );
     // SAFETY: nil root action; quit explicitly targets NSApplication's public
     // terminate: selector, with the standard Command-Q key equivalent.
     unsafe {
         let root = menu.addItemWithTitle_action_keyEquivalent(
-            ns_string!("ChannelBridge Rust Test"),
+            &NSString::from_str(channelbridge_contract::DEPLOYMENT.app_name),
             None,
             ns_string!(""),
         );
         root.setSubmenu(Some(&app_menu));
         let quit = app_menu.addItemWithTitle_action_keyEquivalent(
-            ns_string!("ChannelBridge Rust Testを終了"),
+            &NSString::from_str(&format!(
+                "{}を終了",
+                channelbridge_contract::DEPLOYMENT.app_name
+            )),
             Some(sel!(terminate:)),
             ns_string!("q"),
         );
@@ -182,7 +187,7 @@ pub fn run() {
                 .bundleIdentifier()
                 .expect("bundle identifier")
                 .to_string(),
-            "local.channelbridge.rust.app.test"
+            channelbridge_contract::DEPLOYMENT.app_bundle_id
         );
         let description = bundle
             .objectForInfoDictionaryKey(ns_string!("NSMicrophoneUsageDescription"))

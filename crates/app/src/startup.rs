@@ -15,7 +15,9 @@ impl Settings {
     pub fn for_home(home: &Path) -> Self {
         let support = home.join("Library/Application Support");
         Self::read(
-            support.join("ChannelBridge Rust Test/settings.json"),
+            support
+                .join(channelbridge_contract::DEPLOYMENT.settings_directory)
+                .join("settings.json"),
             &support.join("ChannelBridge/settings.json"),
         )
     }
@@ -62,6 +64,29 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deployment_settings_location_preserves_existing_policy_without_rewriting() {
+        let home = std::env::temp_dir().join(format!(
+            "channelbridge-profile-settings-{}",
+            std::process::id()
+        ));
+        let support = home.join("Library/Application Support/ChannelBridge");
+        std::fs::create_dir_all(&support).unwrap();
+        let path = support.join("settings.json");
+        let bytes = br#"{"device_uid":"RME","left":9,"right":16,"mode":"stereo","muted":true}"#;
+        std::fs::write(&path, bytes).unwrap();
+        let settings = Settings::for_home(&home);
+        assert_eq!(
+            settings.destination,
+            home.join("Library/Application Support")
+                .join(channelbridge_contract::DEPLOYMENT.settings_directory)
+                .join("settings.json")
+        );
+        assert_eq!((settings.config.left, settings.config.right), (9, 16));
+        assert!(settings.error.is_none());
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        std::fs::remove_dir_all(home).unwrap();
+    }
     #[test]
     fn migration_preserves_source_and_never_falls_back_from_corrupt_destination() {
         let directory =

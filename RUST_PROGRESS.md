@@ -340,3 +340,9 @@ Clippy、最低Rust全workspace全ターゲットcheck、全体スクリプト�
 ## 0.5.2統合インストーラの開始（2026-10-01）
 
 既存の試験導入許可に沿ってFinderから検証済みChannelBridge-Rust-Test.pkgを開き、InstallerのURLが同パッケージであることを確認した。標準インストール先Macintosh HD/14.7 MBを確認後、インストールを押した。主ウインドウは暗くなり、17:15:40にSecurityAgent PID29984が起動した。17:16時点で統合receipt local.channelbridge.rust.test.pkgは未作成であり、導入完了とは扱わず管理者認証待ちと判断する。パスワードを取得/入力せず、ユーザーがシステムの認証画面へ直接入力するよう案内した。認証後にreceipt/bundle/署名/実行ファイル一致を確認し、設置とliveロードを別に検証する必要がある。
+
+## 通常版と試験版のビルド識別（2026-10-01）
+
+17:17にInstaller/SecurityAgentの同じPIDが生存し、統合receipt未作成を再確認。認証を代行せず独立した移行実装を進めた。contractのDeploymentに機器UID/名前、driver/app Bundle ID、アプリ名、設定ディレクトリを集約。defaultは既存試験版、production featureは実際の通常版local.channelbridge.app/local.channelbridge.driver/ChannelBridge_UIDとChannelBridge設定先を選ぶ。app/macOS/driverへfeatureを伝播し、アプリの表示名/Bundle検証/保存先、HAL公開UID/名前/ID、セッション対象/交渉/健全性/診断の対象を統一した。通常版IDは設置済みplistと既存driver/Config.hの実値を確認した。
+
+試験用RateFollow::request_testとloopback/monitorは試験UIDを明示したままとし、製品経路はrequest_targetを使う。診断関数はread_target_driverへ改名した。旧Go形式の設定は両profileで読み込み、読出しによって原ファイルを書換えない。回帰試験で名前空間の分離/旧通常版ID維持と、両featureの設定先/チャンネル9・16維持/原ファイル不変を確認。通常/production contract試験、macos 19試験、default Clippy、最低Rust production全ターゲットcheck、Intel production全ターゲットcheck、default全体スクリプトが通過。通常版のplist/Universal配布ビルダー/移行と復帰の導入試験はまだ必要である。productionの実起動/インストール/設定更新はしておらず、認証待ちの既に生成済み0.5.2試験pkgは書き換えていない。長時間試験と署名/公証も未完了である。

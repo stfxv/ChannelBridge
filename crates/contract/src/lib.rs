@@ -11,7 +11,69 @@ pub const TEST_DEVICE_UID: &str = "ChannelBridge_Rust_Test_UID";
 pub const TEST_DEVICE_NAME: &str = "ChannelBridge Mic (Rust Test)";
 pub const TEST_DRIVER_BUNDLE_ID: &str = "local.channelbridge.rust.driver.test";
 pub const PRODUCTION_DEVICE_UID: &str = "ChannelBridge_UID";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deployment {
+    pub device_uid: &'static str,
+    pub device_name: &'static str,
+    pub driver_bundle_id: &'static str,
+    pub app_bundle_id: &'static str,
+    pub app_name: &'static str,
+    pub settings_directory: &'static str,
+}
+pub const TEST_DEPLOYMENT: Deployment = Deployment {
+    device_uid: TEST_DEVICE_UID,
+    device_name: TEST_DEVICE_NAME,
+    driver_bundle_id: TEST_DRIVER_BUNDLE_ID,
+    app_bundle_id: "local.channelbridge.rust.app.test",
+    app_name: "ChannelBridge Rust Test",
+    settings_directory: "ChannelBridge Rust Test",
+};
+pub const PRODUCTION_DEPLOYMENT: Deployment = Deployment {
+    device_uid: PRODUCTION_DEVICE_UID,
+    device_name: "ChannelBridge Mic",
+    driver_bundle_id: "local.channelbridge.driver",
+    app_bundle_id: "local.channelbridge.app",
+    app_name: "ChannelBridge",
+    settings_directory: "ChannelBridge",
+};
+#[cfg(not(feature = "production"))]
+pub const DEPLOYMENT: Deployment = TEST_DEPLOYMENT;
+#[cfg(feature = "production")]
+pub const DEPLOYMENT: Deployment = PRODUCTION_DEPLOYMENT;
 pub const CHANNELS: u32 = 2;
+#[cfg(test)]
+mod deployment_tests {
+    use super::*;
+    #[test]
+    fn namespaces_are_distinct_and_production_preserves_existing_identity() {
+        assert_ne!(TEST_DEPLOYMENT.device_uid, PRODUCTION_DEPLOYMENT.device_uid);
+        assert_ne!(
+            TEST_DEPLOYMENT.driver_bundle_id,
+            PRODUCTION_DEPLOYMENT.driver_bundle_id
+        );
+        assert_ne!(
+            TEST_DEPLOYMENT.app_bundle_id,
+            PRODUCTION_DEPLOYMENT.app_bundle_id
+        );
+        assert_ne!(
+            TEST_DEPLOYMENT.settings_directory,
+            PRODUCTION_DEPLOYMENT.settings_directory
+        );
+        assert_eq!(PRODUCTION_DEPLOYMENT.device_uid, "ChannelBridge_UID");
+        assert_eq!(
+            PRODUCTION_DEPLOYMENT.driver_bundle_id,
+            "local.channelbridge.driver"
+        );
+        assert_eq!(
+            PRODUCTION_DEPLOYMENT.app_bundle_id,
+            "local.channelbridge.app"
+        );
+        #[cfg(feature = "production")]
+        assert_eq!(DEPLOYMENT, PRODUCTION_DEPLOYMENT);
+        #[cfg(not(feature = "production"))]
+        assert_eq!(DEPLOYMENT, TEST_DEPLOYMENT);
+    }
+}
 pub const SUPPORTED_RATES: &[u32] = &[
     8_000, 16_000, 24_000, 32_000, 44_100, 48_000, 64_000, 88_200, 96_000, 128_000, 176_400,
     192_000, 352_800, 384_000, 705_600, 768_000,
