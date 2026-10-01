@@ -67,6 +67,20 @@ fn same_format(a: &StreamFormat, b: &StreamFormat) -> bool {
         && a.channels_per_frame == b.channels_per_frame
         && a.bits_per_channel == b.bits_per_channel
 }
+fn compatible_driver() -> Result<(), String> {
+    let counters = crate::diagnostics::read_test_driver()
+        .map_err(|error| format!("仮想マイクの互換性を確認できません: {error}"))?;
+    initialized_driver(counters)
+}
+fn initialized_driver(counters: channelbridge_contract::DriverCounters) -> Result<(), String> {
+    // Decoding already rejects unsupported protocol/size/reserved fields.
+    // Generation zero is the driver's uninitialized diagnostic fallback.
+    if counters.generation == 0 {
+        Err("仮想マイクの初期化が完了していません".into())
+    } else {
+        Ok(())
+    }
+}
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
@@ -178,6 +192,7 @@ impl Backend for NativeBackend {
             return Err("microphone permission is not authorized".into());
         }
         selection(config)?;
+        compatible_driver()?;
         RateFollow::request_for_source(&config.device_uid).map_err(|error| error.to_string())
     }
     fn ready(&mut self, pending: &RateFollow) -> Result<bool, String> {
@@ -191,6 +206,8 @@ impl Backend for NativeBackend {
         if !crate::permission::status().allowed() {
             return Err("microphone permission is not authorized".into());
         }
+        // Check again after negotiation, before registering either IOProc.
+        compatible_driver()?;
         let session = match TestSession::preview(
             &config.device_uid,
             selection(config)?,
@@ -316,6 +333,28 @@ impl Backend for NativeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn driver_initialization_requires_a_nonzero_generation_not_audio_activity() {
+        use channelbridge_contract::DriverCounters;
+        let counters = DriverCounters {
+            generation: 0,
+            written_frames: 0,
+            missing_read_frames: 0,
+            rejected_write_frames: 0,
+            invalid_timestamps: 0,
+        };
+        assert!(initialized_driver(counters).is_err());
+        // A newly initialized device with no writer is compatible. Silence
+        // and cumulative missing reads must not prevent recovery or startup.
+        assert!(
+            initialized_driver(DriverCounters {
+                generation: 1,
+                missing_read_frames: u64::MAX,
+                ..counters
+            })
+            .is_ok()
+        );
+    }
     #[test]
     fn native_policy_keeps_saved_mono_right_and_detects_same_rate_format_changes() {
         let config = Config {
