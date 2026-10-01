@@ -470,3 +470,15 @@ production installation or settings change was performed. Installed test driver
 remains 0.5.2; action-time approval for opening the prepared 0.5.3 test installer
 is pending. Actual host-marshalled property retrieval and long-call gates remain
 unverified. The existing pkgbuild write warnings still occur and are not resolved.
+
+
+### 2026-10-01 actual 0.5.3 test installation
+
+The test installer was opened following user authorization. pkgutil now reports
+local.channelbridge.rust.test.pkg 0.5.3; installed test app/driver executables match
+the prepared 0.5.3 binaries byte-for-byte and strict signatures verify. The audio
+service and test host still began at 20:44:12, before the new install, and --ready
+still fails with HAL 2003332927. Installation success therefore does not establish
+that the corrected custom-property transport has been loaded. A normal reboot
+after this 0.5.3 update and live --ready verification are required before actual
+audio acceptance. The production app/driver were not replaced.
