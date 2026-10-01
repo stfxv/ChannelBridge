@@ -84,6 +84,28 @@ fn initialized_driver(counters: channelbridge_contract::DriverCounters) -> Resul
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
+    fn diagnostics(
+        &self,
+        session: &TestSession,
+    ) -> Option<channelbridge_core::view::AudioDiagnostics> {
+        let (capture, output) = session.stats();
+        Some(channelbridge_core::view::AudioDiagnostics {
+            capture_callbacks: capture.callbacks,
+            capture_rejected: capture.rejected,
+            capture_written_frames: capture.written,
+            capture_overflow_frames: capture.overflow,
+            capture_invalid_clock: capture.invalid_clock,
+            capture_discontinuities: capture.discontinuities,
+            capture_unavailable_channel: capture.unavailable_channel,
+            capture_failed: capture.failed,
+            output_callbacks: output.callbacks,
+            output_rejected: output.rejected,
+            output_missing_frames: output.missing,
+            output_priming_callbacks: output.priming_callbacks,
+            output_dropped_lookahead_frames: output.dropped_lookahead,
+            output_failed: output.failed,
+        })
+    }
     fn devices(&mut self) -> Result<Vec<channelbridge_core::view::DeviceChoice>, String> {
         use channelbridge_core::view::{DeviceChoice, InputFormat};
         let entries = devices::list().map_err(|error| error.to_string())?;

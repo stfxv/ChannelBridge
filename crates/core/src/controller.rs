@@ -7,6 +7,9 @@ pub trait Backend {
     }
     type Pending;
     type Session;
+    fn diagnostics(&self, _session: &Self::Session) -> Option<crate::view::AudioDiagnostics> {
+        None
+    }
     fn audio_view(
         &self,
         _session: &Self::Session,
@@ -78,6 +81,11 @@ impl<B: Backend> Controller<B> {
     }
     pub fn state(&self) -> CaptureState {
         self.state
+    }
+    pub fn diagnostics(&self) -> Option<crate::view::AudioDiagnostics> {
+        self.session
+            .as_ref()
+            .and_then(|session| self.backend.diagnostics(session))
     }
     pub fn config(&self) -> &Config {
         &self.config

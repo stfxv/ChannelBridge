@@ -23,6 +23,7 @@ pub struct Snapshot {
     pub configuration_attempt: u64,
     pub finished: bool,
     pub audio: Option<crate::view::AudioView>,
+    pub diagnostics: Option<crate::view::AudioDiagnostics>,
     pub devices: Arc<[crate::view::DeviceChoice]>,
     pub device_error: Option<String>,
 }
@@ -49,6 +50,7 @@ impl Drop for WorkerExit {
             snapshot.state = CaptureState::Blocked;
             snapshot.wanted_send = false;
             snapshot.audio = None;
+            snapshot.diagnostics = None;
             snapshot.error = Some("control worker terminated unexpectedly".into());
         }
     }
@@ -89,6 +91,7 @@ impl Worker {
             configuration_attempt: 0,
             finished: false,
             audio: None,
+            diagnostics: None,
             devices: Arc::from([]),
             device_error: None,
         }));
@@ -116,6 +119,7 @@ impl Worker {
                             configuration_attempt: 0,
                             finished: true,
                             audio: None,
+                            diagnostics: None,
                             devices: Arc::from([]),
                             device_error: None,
                         });
@@ -205,6 +209,7 @@ impl Worker {
                         configuration_attempt,
                         finished: false,
                         audio: controller.audio_view(),
+                        diagnostics: controller.diagnostics(),
                         devices: Arc::clone(&devices),
                         device_error: device_error.clone(),
                     });
@@ -219,6 +224,7 @@ impl Worker {
                     configuration_attempt,
                     finished: true,
                     audio: None,
+                    diagnostics: None,
                     devices,
                     device_error,
                 });
@@ -299,6 +305,13 @@ mod tests {
     impl Backend for LocalBackend {
         type Pending = ();
         type Session = ();
+        fn diagnostics(&self, _: &()) -> Option<crate::view::AudioDiagnostics> {
+            Some(crate::view::AudioDiagnostics {
+                capture_written_frames: (1_u64 << 54) + 3,
+                output_missing_frames: 7,
+                ..Default::default()
+            })
+        }
         fn save(&mut self, _: &Config) -> Result<(), String> {
             assert!(!self.panic_on_save, "fixture save panic");
             Ok(())
@@ -361,8 +374,28 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(!worker.snapshot().wanted_send);
+        let diagnostics = worker.snapshot().diagnostics.unwrap();
+        assert_eq!(diagnostics.capture_written_frames, (1_u64 << 54) + 3);
+        let json: serde_json::Value = serde_json::to_value(&diagnostics).unwrap();
+        assert_eq!(
+            json["capture_written_frames"].as_u64(),
+            Some((1_u64 << 54) + 3)
+        );
+        assert_eq!(diagnostics.output_missing_frames, 7);
+        worker.send(Command::PermissionChanged(false)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while worker.snapshot().state != CaptureState::Blocked {
+            assert!(
+                Instant::now() < deadline,
+                "permission revocation not processed"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(worker.snapshot().diagnostics.is_none());
         worker.send(Command::Quit).unwrap();
+        let shared_snapshot = Arc::clone(&worker.snapshot);
         worker.join().unwrap();
+        assert!(shared_snapshot.lock().unwrap().diagnostics.is_none());
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
     #[test]

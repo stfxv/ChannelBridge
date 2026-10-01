@@ -1,4 +1,23 @@
 //! Owned display data, with no HAL objects or callback pointers.
+/// Session-local cumulative counters, read independently rather than as one
+/// synchronized audio epoch. No samples, device UID or user paths are included.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AudioDiagnostics {
+    pub capture_callbacks: u64,
+    pub capture_rejected: u64,
+    pub capture_written_frames: u64,
+    pub capture_overflow_frames: u64,
+    pub capture_invalid_clock: u64,
+    pub capture_discontinuities: u64,
+    pub capture_unavailable_channel: u64,
+    pub capture_failed: bool,
+    pub output_callbacks: u64,
+    pub output_rejected: u64,
+    pub output_missing_frames: u64,
+    pub output_priming_callbacks: u64,
+    pub output_dropped_lookahead_frames: u64,
+    pub output_failed: bool,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceChoice {
     pub uid: String,
