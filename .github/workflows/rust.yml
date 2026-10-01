@@ -33,12 +33,6 @@ jobs:
         run: |
           cargo check --workspace --locked --target aarch64-apple-darwin
           cargo check --workspace --locked --target x86_64-apple-darwin
-      - name: Universal test driver bundle and signature
+      - name: Combined universal test installer, signatures and offline sources
         if: matrix.rust == '1.98.1'
-        run: bash scripts/package-rust-test-driver.sh
-      - name: Universal test app bundle and metadata (no audio inventory required)
-        if: matrix.rust == '1.98.1'
-        run: bash scripts/build-rust-app.sh --build-only
-      - name: Rust-only corresponding source and offline rebuild
-        if: matrix.rust == '1.98.1'
-        run: bash scripts/verify-rust-source.sh
+        run: bash scripts/package-rust-test-app.sh

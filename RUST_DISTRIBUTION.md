@@ -17,6 +17,7 @@ cargo check --offline --locked -p channelbridge-app
 bash scripts/test-rust.sh
 bash scripts/build-rust-app.sh --build-only
 bash scripts/package-rust-test-driver.sh
+bash scripts/package-rust-test-app.sh
 ```
 
 Run Cargo from the extracted directory so it discovers the included .cargo
@@ -32,6 +33,11 @@ named development artifacts with test bundle IDs and a test device UID. Building
 does not replace the existing application, install a driver or request microphone
 access. Opening the installer requires the user's macOS administrator approval.
 The driver may require a normal Mac restart before CoreAudio loads an update.
+
+The combined ChannelBridge-Rust-Test.pkg contains the separately named test app
+under /Applications and the test driver under /Library/Audio/Plug-Ins/HAL.
+It preserves the production app/driver namespaces. See RUST_APP_TEST.md for the
+build and payload checks, installation status and remaining acceptance tests.
 
 Signing is ad-hoc; Developer ID signing and notarization are not verified.
 See RUST_APP_TEST.md, RUST_HAL_TEST.md, RUST_AUDIO_TEST.md and RUST_PROGRESS.md

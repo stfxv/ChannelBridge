@@ -28,6 +28,27 @@ vendored dependency configuration; Rust and Apple's SDK must already exist.
 The macOS deployment target is 13.0, but this is not proof of execution on macOS
 13 or an Intel Mac. Developer ID signing/notarization is not completed.
 
+For one installer containing both the app and test driver:
+
+```sh
+bash scripts/package-rust-test-app.sh
+```
+
+The output is `work/rust-dist/ChannelBridge-Rust-Test.pkg`. It installs only
+`/Applications/ChannelBridge Rust Test.app` and the separate
+`/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`. Bundle versions must
+agree before packaging; both are currently 0.5.1/build 2. Building checks universal
+bundles, the driver through a mock HAL, bundle metadata, offline source rebuild,
+expanded payload signatures and byte identity. It does not launch the normal UI,
+install, request permission or restart audio. CI uses this combined procedure.
+The original driver-only installer remains available for development updates.
+
+Actual combined installation, uninstall/rollback and reloaded driver recognition
+still require acceptance testing. The package itself is unsigned; the two bundles
+have ad-hoc signatures. Running the installed app may require macOS microphone
+authorization. Quit any workspace copy before starting the installed copy to
+avoid simultaneous senders to the same test microphone.
+
 To open the test UI manually:
 
 ```sh

@@ -224,3 +224,11 @@ Universalアプリの署名、bundle ID/マイク説明検証、非表示UI smok
 単純な数点の応答試験に加え、最大step 0.501/1.002/2.004/4.008/16.032/96.192、補間位置の小数位相16点、帯域内32点、downsample時の帯域外33点を実際のSincKernel::interpolateで検査するignore付きrelease試験を追加。合計5712応答で単位cos/sin入力から利得と理想位相成分との差を測定した。Rust 1.98.1の最大帯域内利得誤差0.00003232 dB、最大位相成分誤差0.00000359、測定帯域外最大−117.0785 dB。既定の0.1 dB/−90 dB目標と位相成分誤差0.001以内を格子内で満たした。生データをRUST_RESPONSE_GRID.tsv、周波数/位相/除外帯域と制限をRUST_AUDIO_TEST.mdへ記録。
 
 最低Rust 1.85.0でも同じrelease試験が通過。test-rust.shへ明示release実行を追加し、全体スクリプト（通常61試験、Loom 2、格子1、模擬HAL/ABI/確保検査）が通過した。通常の高速試験では格子は1件ignoreされ、別途実行される。これは固定フィルターの離散応答格子であり、全周波数/全補間位相、ASRC時間変動、群遅延/総合ノイズ、アップサンプルimage、全レート組合せ、実HALやDiscord長時間の合格とは扱わない。製品の係数や音声形式は変更していない。再起動前のドライバホストが継続しており、実機レート追従ゲートは未達である。
+
+## アプリ・ドライバ統合試験インストーラ（2026-10-01）
+
+package-rust-test-app.shで一つのpkgにUniversal試験アプリと試験ドライバを同梱する構成を追加。アプリ0.5.1/build 2とドライバ0.5.1/build 2の版一致を要求し、別のreceipt ID local.channelbridge.rust.test.pkgで生成する。導入先は/Applications/ChannelBridge Rust Test.appと/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driverだけ。component plistで再配置を禁止し、厳密ID/版検査/upgradeを設定。通常版の名前/UID/配置先へは書かない。ビルドだけを実行し、統合pkgの実インストールはしていない。
+
+両アーキテクチャのビルド、ドライバCFPlugInの模擬HAL、署名、bundle metadata、空キャッシュの対応ソースoffline/locked check、pkg展開後の両署名/両実行ファイルとソースarchiveのバイト一致が通過。PackageInfoに二bundleの専用ID、0.5.1/build 2、postinstall-action=none、relocatable=falseを確認。新bundleの非表示UI smokeも通過。12 MB程度のChannelBridge-Rust-Test.pkgを生成した。CIも一つの統合ビルド手順へまとめたが、CIの課金停止解除や実行合格は確認していない。
+
+pkgbuildのwrite: Permission denied警告4件は継続しており、ペイロード確認の成功と警告原因の解決は区別する。実際の統合導入/更新/削除/復帰、ロードし直したドライバでのレート追従、Developer ID署名/公証、長時間通話は未完了。生成物は試験用途であり通常版への切替とはしない。
