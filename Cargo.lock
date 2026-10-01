@@ -44,7 +44,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "channelbridge-app"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 dependencies = [
  "channelbridge-core",
  "channelbridge-macos",
@@ -55,18 +55,18 @@ dependencies = [
 
 [[package]]
 name = "channelbridge-audio"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 dependencies = [
  "loom",
 ]
 
 [[package]]
 name = "channelbridge-contract"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 
 [[package]]
 name = "channelbridge-core"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "channelbridge-driver"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 dependencies = [
  "channelbridge-audio",
  "channelbridge-contract",
@@ -83,11 +83,11 @@ dependencies = [
 
 [[package]]
 name = "channelbridge-hal-abi"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 
 [[package]]
 name = "channelbridge-macos"
-version = "0.5.0-alpha.1"
+version = "0.5.2-alpha.1"
 dependencies = [
  "block2",
  "channelbridge-audio",

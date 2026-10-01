@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
     a=address('cbid'); char identity[64]={0};
     assert((*driver)->GetPropertyDataSize(driver,Device,0,&a,0,NULL,&bytes)==0 && bytes>0 && bytes<sizeof(identity));
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(identity),&bytes,identity)==0);
-    assert(bytes==strlen("0.5.0-alpha.1") && memcmp(identity,"0.5.0-alpha.1",bytes)==0);
+    assert(bytes==strlen("0.5.2-alpha.1") && memcmp(identity,"0.5.2-alpha.1",bytes)==0);
     a=address(custom[0].mSelector); UInt64 diagnostics[6]={0};
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(diagnostics),&bytes,diagnostics)==0 && bytes==48);
     UInt32 protocol=0; memcpy(&protocol,diagnostics,sizeof(protocol)); assert(protocol==1);

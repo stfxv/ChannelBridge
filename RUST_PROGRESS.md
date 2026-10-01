@@ -330,3 +330,9 @@ DriverReading::Availableには実際にdecoderが検証したdiagnostic_protocol
 driverのDEVICEにread-only cbidを追加。生ASCII/non-NULのCARGO_PKG_VERSION（1..64 bytes）を返し、custの記述子をcbstとcbidの2件に拡張した。既存統計wire/protocol 1は変更しない。コンパイル時に版文字列長の上限を確認する。制御側は試験UIDだけで取得し、空/上限超過/非ASCII/改行/NULを拒否する。統計取得成功時に版取得を試み、JSONのloaded_driver_package_versionとidentity_errorへ結果を保存する。版だけ取得失敗しても統計をゼロや全体失敗へ置換しない。
 
 これはHALが読んだlive codeのCargo版であり、設置済みplistを参照しない。一方、Cargo版を上げない修正間を識別するcommit/build hashではなく、Bundle 0.5.1との同一性や最新コミットのロード証明にはならない。旧loaded_driver_versionフィールドを意味の明確なloaded_driver_package_versionへ変更した。decoder試験でpre-release/build文字列保持と不正入力拒否を確認。Apple C ABIの模擬HALでcustの2件/各raw descriptor、cbidのsizeと正確な0.5.0-alpha.1 bytes、従来cbstの48 bytes/protocol 1を確認。最低Rust全workspace全ターゲットcheckと全体スクリプトが通過。実際の設置/再読み込み後のcbid取得は未完了であり、通常版移行と長時間ゲートも継続する。
+
+## 診断改修をまとめた試験版0.5.2（2026-10-01）
+
+全Rust cratesを0.5.2-alpha.1、試験アプリ/ドライバのBundleを0.5.2/build 3へ更新。模擬HALのlive identity期待値も0.5.2-alpha.1へ更新した。この版には互換性ゲート、入力/出力/FIFO/時計診断、再接続・要求レート履歴、診断保存GUI、live cbidを含む。通常Go版とproduction HALのID/ファイルは変更しない。
+
+Clippy、最低Rust全workspace全ターゲットcheck、全体スクリプト、Universal driver/Appビルド、C模擬HAL、署名/metadata、空Cargoキャッシュで同梱ソースoffline/locked check、統合pkg展開後の両署名と実行ファイル/ソースarchive一致が通過。PackageInfoの実bundle2件が0.5.2/build 3、receiptがlocal.channelbridge.rust.test.pkg/0.5.2であることも確認した。初回XML検査はupgrade参照用のbundle要素まで版を要求して失敗したため、path属性を持つ実bundle2件を対象に検証した。pkgbuildのPermission denied警告は残っており、ペイロード一致検証の成功と原因解決を区別する。work/rust-dist/ChannelBridge-Rust-Test.pkgを生成したが、この時点では実導入/再読み込み/長時間通話の合格とは扱わない。
