@@ -4,33 +4,9 @@ use crate::devices::{self, Error};
 use channelbridge_contract::TEST_DEVICE_UID;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, StreamFormat, fourcc};
 use std::{
-    ffi::c_void,
-    panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-
-type IoProc = unsafe extern "C" fn(
-    ObjectId,
-    *const AudioTimestamp,
-    *const AudioBufferList,
-    *const AudioTimestamp,
-    *mut AudioBufferList,
-    *const AudioTimestamp,
-    *mut c_void,
-) -> i32;
-#[link(name = "CoreAudio", kind = "framework")]
-unsafe extern "C" {
-    fn AudioDeviceCreateIOProcID(
-        device: ObjectId,
-        callback: IoProc,
-        context: *mut c_void,
-        id: *mut *mut c_void,
-    ) -> i32;
-    fn AudioDeviceDestroyIOProcID(device: ObjectId, id: *mut c_void) -> i32;
-    fn AudioDeviceStart(device: ObjectId, id: *mut c_void) -> i32;
-    fn AudioDeviceStop(device: ObjectId, id: *mut c_void) -> i32;
-}
 
 #[derive(Debug)]
 pub struct Report {
@@ -78,30 +54,17 @@ fn tone(frame: f64, rate: f64) -> [f32; 2] {
     [(0.25 * phase.sin()) as f32, (0.125 * phase.cos()) as f32]
 }
 
-unsafe extern "C" fn callback(
-    _device: ObjectId,
-    _now: *const AudioTimestamp,
-    input: *const AudioBufferList,
-    input_time: *const AudioTimestamp,
-    output: *mut AudioBufferList,
-    output_time: *const AudioTimestamp,
-    context: *mut c_void,
-) -> i32 {
-    if context.is_null() {
-        return 0;
-    }
-    // SAFETY: Context remains immutable and alive until HAL stops this IOProc.
-    let context = unsafe { &*context.cast::<Context>() };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: HAL supplies callback buffers/timestamps for this invocation.
-        unsafe { process(context, input, input_time, output, output_time) }
-    }));
-    match result {
-        Ok(true) => 0,
-        _ => {
-            context.invalid.fetch_add(1, Ordering::Relaxed);
-            // CoreAudio ignores IOProc return values; diagnostics live in counters.
-            0
+impl crate::io::Handler for Context {
+    unsafe fn process(
+        &self,
+        _now: *const AudioTimestamp,
+        input: *const AudioBufferList,
+        input_time: *const AudioTimestamp,
+        output: *mut AudioBufferList,
+        output_time: *const AudioTimestamp,
+    ) {
+        if !unsafe { process(self, input, input_time, output, output_time) } {
+            self.invalid.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -249,41 +212,13 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
     let device = selected.ok_or("Rust test driver is not loaded")?;
     verify_format(device.id, fourcc(b"inpt"))?;
     verify_format(device.id, fourcc(b"outp"))?;
-    let context = Box::new(Context::new(device.rate));
-    let pointer = Box::into_raw(context);
-    let mut id = std::ptr::null_mut();
-    // SAFETY: context is heap-stable, callback matches the Apple SDK declaration.
-    let status = unsafe { AudioDeviceCreateIOProcID(device.id, callback, pointer.cast(), &mut id) };
-    if status != 0 {
-        // SAFETY: failed registration cannot invoke this callback.
-        drop(unsafe { Box::from_raw(pointer) });
-        return Err(Error::Hal(status).into());
-    }
-    // SAFETY: id is a successfully registered IOProc for this device.
-    let status = unsafe { AudioDeviceStart(device.id, id) };
-    if status == 0 {
+    let mut registration = crate::io::Registration::new(device.id, Context::new(device.rate))?;
+    let started = registration.start();
+    if started.is_ok() {
         std::thread::sleep(duration);
     }
-    // Stop even after a failed Start to ensure any partial startup is quiesced.
-    // SAFETY: same registered device/id; called on the control thread.
-    let stop = unsafe { AudioDeviceStop(device.id, id) };
-    if stop != 0 {
-        // Deliberately retain callback storage if HAL cannot confirm stopping.
-        // Freeing it could turn an OS error into a callback use-after-free.
-        return Err(
-            format!("HAL stop failed ({stop}); callback context retained for safety").into(),
-        );
-    }
-    // SAFETY: Stop has returned successfully; HAL no longer invokes this IOProc.
-    let destroy = unsafe { AudioDeviceDestroyIOProcID(device.id, id) };
-    if destroy != 0 {
-        return Err(Error::Hal(destroy).into());
-    }
-    // SAFETY: callback deregistered and context has exactly one owner.
-    let context = unsafe { Box::from_raw(pointer) };
-    if status != 0 {
-        return Err(Error::Hal(status).into());
-    }
+    let context = registration.close()?;
+    started?;
     Ok(Report {
         callbacks: context.callbacks.load(Ordering::Acquire),
         compared_frames: context.compared.load(Ordering::Acquire),

@@ -11,3 +11,6 @@ pub mod capture;
 
 #[cfg(target_os = "macos")]
 pub mod output;
+
+#[cfg(target_os = "macos")]
+pub mod io;
