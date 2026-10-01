@@ -70,9 +70,10 @@ struct Screen {
     devices: Retained<NSPopUpButton>,
     format: Retained<NSTextField>,
     status: Retained<NSTextField>,
+    settings_error: Option<String>,
 }
 impl Screen {
-    fn new(main: MainThreadMarker) -> Self {
+    fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 180.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
@@ -116,6 +117,7 @@ impl Screen {
             devices,
             format,
             status,
+            settings_error,
         }
     }
     fn update(&self, snapshot: &channelbridge_core::worker::Snapshot) {
@@ -165,7 +167,9 @@ impl Screen {
             })
             .unwrap_or_else(|| "—".into());
         self.format.setStringValue(&NSString::from_str(&format));
-        let status = if snapshot.device_error.is_some() {
+        let status = if let Some(error) = self.settings_error.as_deref() {
+            error
+        } else if snapshot.device_error.is_some() {
             "入力機器を確認できません"
         } else if snapshot.config.device_uid.is_empty() {
             "入力機器を選択してください"
@@ -180,12 +184,19 @@ impl Screen {
 pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
-    let screen = Screen::new(main);
-    let worker = channelbridge_macos::backend::spawn_worker(
-        std::path::PathBuf::from("work/read-only-settings.json"),
-        channelbridge_core::Config::default(),
-    )
-    .expect("control worker");
+    let smoke = std::env::args().any(|argument| argument == "--smoke");
+    let settings = if smoke {
+        crate::startup::Settings::smoke()
+    } else {
+        let Some(home) = std::env::var_os("HOME") else {
+            eprintln!("設定保存先を取得できません: HOMEがありません");
+            return;
+        };
+        crate::startup::Settings::for_home(std::path::Path::new(&home))
+    };
+    let screen = Screen::new(main, settings.error);
+    let worker = channelbridge_macos::backend::spawn_worker(settings.destination, settings.config)
+        .expect("control worker");
     let delegate = AppDelegate::new(main, Runtime { screen, worker });
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     // SAFETY: matching Objective-C selector implemented above, main-thread
@@ -204,7 +215,6 @@ pub fn run() {
     unsafe {
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, mode);
     }
-    let smoke = std::env::args().any(|argument| argument == "--smoke");
     if smoke {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {

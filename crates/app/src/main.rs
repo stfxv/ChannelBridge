@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 mod native;
+mod startup;
 
 fn main() {
     #[cfg(target_os = "macos")]

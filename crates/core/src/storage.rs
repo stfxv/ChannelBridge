@@ -10,10 +10,16 @@ use std::{
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn load(path: &Path) -> io::Result<Config> {
+    Ok(load_existing(path)?.unwrap_or_default())
+}
+
+/// Absence permits migration; malformed or unreadable settings never do.
+pub fn load_existing(path: &Path) -> io::Result<Option<Config>> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
 }
