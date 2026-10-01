@@ -84,6 +84,9 @@ fn initialized_driver(counters: channelbridge_contract::DriverCounters) -> Resul
 impl Backend for NativeBackend {
     type Pending = RateFollow;
     type Session = TestSession;
+    fn requested_rate(&self, pending: &RateFollow) -> Option<u32> {
+        Some(pending.desired_rate())
+    }
     fn driver_diagnostics(&self) -> Option<channelbridge_core::view::DriverReading> {
         use channelbridge_core::view::DriverReading;
         Some(match crate::diagnostics::read_test_driver() {
@@ -243,7 +246,10 @@ impl Backend for NativeBackend {
         }
         selection(config)?;
         compatible_driver()?;
-        RateFollow::request_for_source(&config.device_uid).map_err(|error| error.to_string())
+        let desired =
+            RateFollow::source_rate(&config.device_uid).map_err(|error| error.to_string())?;
+        RateFollow::request_test(desired)
+            .map_err(|error| format!("仮想マイクの{desired} Hzへの交渉に失敗しました: {error}"))
     }
     fn ready(&mut self, pending: &RateFollow) -> Result<bool, String> {
         pending

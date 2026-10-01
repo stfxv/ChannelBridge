@@ -10,6 +10,9 @@ pub trait Backend {
     }
     type Pending;
     type Session;
+    fn requested_rate(&self, _pending: &Self::Pending) -> Option<u32> {
+        None
+    }
     fn diagnostics(&self, _session: &Self::Session) -> Option<crate::view::AudioDiagnostics> {
         None
     }
@@ -105,6 +108,10 @@ impl<B: Backend> Controller<B> {
             worker_ms,
             kind,
             detail,
+            requested_rate_hz: self
+                .pending
+                .as_ref()
+                .and_then(|pending| self.backend.requested_rate(pending)),
         });
         self.history = events.into();
     }
@@ -262,6 +269,11 @@ impl<B: Backend> Controller<B> {
             match self.backend.negotiate(&self.config) {
                 Ok(pending) => {
                     self.pending = Some(pending);
+                    self.record(
+                        Some(now_ms),
+                        crate::view::ControlEventKind::NegotiationRequested,
+                        None,
+                    );
                     self.state = CaptureState::Connecting;
                 }
                 Err(error) => {
@@ -350,6 +362,9 @@ mod tests {
     impl Backend for Fake {
         type Pending = ();
         type Session = ();
+        fn requested_rate(&self, _: &()) -> Option<u32> {
+            Some(48000)
+        }
         fn save(&mut self, _: &Config) -> Result<(), String> {
             if self.save_fail {
                 Err("save failed".into())
@@ -403,6 +418,20 @@ mod tests {
         )
     }
     #[test]
+    fn pending_rate_is_preserved_in_failure_history_before_disconnect() {
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.tick(0);
+        assert_eq!(worker.state(), CaptureState::Connecting);
+        worker.retry(100, "format follow timed out".into());
+        assert!(worker.pending.is_none());
+        let history = worker.history();
+        let failed = history.last().unwrap();
+        assert_eq!(failed.kind, crate::view::ControlEventKind::RetryScheduled);
+        assert_eq!(failed.requested_rate_hz, Some(48000));
+        assert_eq!(failed.detail.as_deref(), Some("format follow timed out"));
+    }
+    #[test]
     fn history_keeps_recovery_reason_after_success_and_bounds_utf8_details() {
         use crate::view::ControlEventKind;
         let mut worker = controller();
@@ -422,6 +451,20 @@ mod tests {
         worker.backend.open_fail = false;
         worker.tick(1000);
         assert_eq!(worker.error(), None);
+        assert!(
+            worker
+                .history()
+                .iter()
+                .any(|event| event.kind == ControlEventKind::NegotiationRequested
+                    && event.requested_rate_hz == Some(48000))
+        );
+        assert!(
+            worker
+                .history()
+                .iter()
+                .any(|event| event.kind == ControlEventKind::NegotiationReady
+                    && event.requested_rate_hz == Some(48000))
+        );
         assert_eq!(
             worker.history().last().unwrap().kind,
             ControlEventKind::SessionOpened

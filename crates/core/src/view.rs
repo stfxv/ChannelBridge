@@ -5,11 +5,13 @@ pub struct ControlEvent {
     pub worker_ms: Option<u64>,
     pub kind: ControlEventKind,
     pub detail: Option<String>,
+    pub requested_rate_hz: Option<u32>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlEventKind {
     NegotiationStarted,
+    NegotiationRequested,
     NegotiationReady,
     SessionOpened,
     RetryScheduled,

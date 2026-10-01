@@ -37,7 +37,14 @@ fn nominal_rate(device: ObjectId) -> Result<f64, Error> {
     Ok(rate)
 }
 impl RateFollow {
+    pub fn desired_rate(&self) -> u32 {
+        self.desired
+    }
     pub fn request_for_source(source_uid: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::request_test(Self::source_rate(source_uid)?)
+    }
+    /// Read the physical source's nominal rate without changing either device.
+    pub fn source_rate(source_uid: &str) -> Result<u32, Box<dyn std::error::Error>> {
         let devices = devices::list()?;
         let mut matching = devices
             .iter()
@@ -51,7 +58,7 @@ impl RateFollow {
         if rate.fract() != 0.0 || !(8000.0..=768000.0).contains(&rate) {
             return Err("unsupported source rate".into());
         }
-        Self::request_test(rate as u32)
+        Ok(rate as u32)
     }
 
     /// Call before starting either output IOProc. Changing a physical source's
