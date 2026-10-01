@@ -482,3 +482,27 @@ still fails with HAL 2003332927. Installation success therefore does not establi
 that the corrected custom-property transport has been loaded. A normal reboot
 after this 0.5.3 update and live --ready verification are required before actual
 audio acceptance. The production app/driver were not replaced.
+
+
+### 2026-10-01 actual 0.5.3 live transport and rate loopbacks
+
+After reboot, coreaudiod/test host began at 20:55:00. --ready succeeded: live
+package 0.5.3-alpha.1, diagnostic protocol 1, generation 2. This is actual host
+marshalling success for cbid/cbst, resolving the earlier unknown-property retrieval
+failure. It proves package identity, not exact source revision or general quality.
+
+Initial 48 kHz synthetic virtual loopback: callbacks 751, compared 143680 frames,
+startup silence 512, missing after startup 0, mismatches 0, invalid callbacks 0.
+The test app was running with authorized input preview, stereo Ch1/2, muted and
+send stopped. Quit it via UI before isolated test-device rate sweep; no permission
+change was requested. The sweep 44.1/48/88.2/96/176.4/192/48 kHz, each 3 seconds,
+passed with startup silence 512 each and zero post-start missing/mismatches/invalid
+callbacks. Original 48 kHz was restored. Post-sweep cumulative driver diagnostics:
+generation 16, written 5378496, missing 3584 (= seven startup 512 blocks), rejected
+writes 0, invalid timestamps 0. Missing lifetime count is not zero; it must not be
+misreported as uninterrupted startup. Logs remain under ignored work/test/rust.
+
+This tests the virtual driver with generated known samples; it is not the physical
+E1x2/RME -> DSP -> Discord route, concurrent clients, latency or long-call acceptance.
+Physical-source rate following, sleep/disconnect, two-hour mono/stereo Discord,
+eight-hour stereo, production migration/rollback and signing gates remain open.
