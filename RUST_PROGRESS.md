@@ -152,3 +152,7 @@ overviewモジュールへスクロール可能な全入力一覧を追加。メ
 現在のAppKit/overviewまで含む全体検証を再実行し、通常58テスト、Loomモデル、Apple SDK ABI比較、模擬HALのfactory/clients/audio/rate/epoch、二つの音声処理確保検査（確保/解放0）が通過。実HALや8時間の実音声を確認したものではない。メニューバー用objc2-core-foundation featureの依存辺をCargo.lockへ反映し、test-rust.shのCargo解決操作へ--lockedを追加。依存関係が検証中に暗黙変更されないようにする。
 
 [GitHub run 36806987421](https://github.com/stfxv/ChannelBridge/actions/runs/36806987421)は両Rustジョブともstepsなしで失敗。Checks APIのannotationは「recent account payments have failed or your spending limit needs to be increased」と報告。従ってCI上でコードが検証されたとは扱わない。課金/利用上限の変更は実施していない。実機ゲートには試験ドライバの認識が必要であり、音声サービス再起動は通話等を中断し得るため、既存のインストール許可とは分けて確認を依頼した。
+
+## 制御ワーカー異常終了の通知（2026-10-01）
+
+WorkerExitガードをバックエンド生成前に登録し、制御スレッドがpanicでunwindした場合もfinished/Blocked/送出意図解除/音声表示解除を公開する。これによりAppKitがfinishedを待ち続ける状態を避ける。ガードはバックエンド等のスタック所有者が破棄された後に通知し、joinのpanic結果は成功へ変換しない。最後の公開設定を保持して新たなStartを拒否する。起動factoryのpanicと、模擬バックエンドの保存中panicの二試験で、終了通知・バックエンドDrop・旧スナップショット・join失敗を確認。最低Rustのcore 15試験、workspace locked Clippy、非表示AppKit smokeが通過。これは実HAL稼働中のpanic後始末、二重panicやプロセス強制終了の試験ではない。再起動に関する回答は未受領であり、音声サービスは変更していない。

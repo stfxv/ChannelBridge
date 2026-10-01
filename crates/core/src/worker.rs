@@ -33,6 +33,26 @@ pub struct Worker {
     snapshot: Arc<Mutex<Snapshot>>,
     thread: Option<JoinHandle<()>>,
 }
+/// Declared before the backend so it publishes only after stack unwinding has
+/// dropped the backend/session owners. Preserve join's panic result as well.
+struct WorkerExit {
+    snapshot: Arc<Mutex<Snapshot>>,
+}
+impl Drop for WorkerExit {
+    fn drop(&mut self) {
+        let mut snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !snapshot.finished {
+            snapshot.finished = true;
+            snapshot.state = CaptureState::Blocked;
+            snapshot.wanted_send = false;
+            snapshot.audio = None;
+            snapshot.error = Some("control worker terminated unexpectedly".into());
+        }
+    }
+}
 fn apply_command<B: Backend>(
     controller: &mut Controller<B>,
     command: Command,
@@ -78,6 +98,9 @@ impl Worker {
         let thread = thread::Builder::new()
             .name("channelbridge-control".into())
             .spawn(move || {
+                let _exit = WorkerExit {
+                    snapshot: Arc::clone(&shared),
+                };
                 let publish = |value: Snapshot| {
                     *shared.lock().unwrap_or_else(|error| error.into_inner()) = value;
                 };
@@ -266,6 +289,7 @@ mod tests {
     struct LocalBackend {
         _local: Rc<()>,
         drops: Arc<AtomicUsize>,
+        panic_on_save: bool,
     }
     impl Drop for LocalBackend {
         fn drop(&mut self) {
@@ -276,6 +300,7 @@ mod tests {
         type Pending = ();
         type Session = ();
         fn save(&mut self, _: &Config) -> Result<(), String> {
+            assert!(!self.panic_on_save, "fixture save panic");
             Ok(())
         }
         fn negotiate(&mut self, _: &Config) -> Result<(), String> {
@@ -314,6 +339,7 @@ mod tests {
                 Ok(LocalBackend {
                     _local: Rc::new(()),
                     drops: backend_drops,
+                    panic_on_save: false,
                 })
             },
         )
@@ -338,5 +364,60 @@ mod tests {
         worker.send(Command::Quit).unwrap();
         worker.join().unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+    #[test]
+    fn panicked_worker_publishes_completion_after_backend_drop() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let backend_drops = Arc::clone(&drops);
+        let original = Config {
+            device_uid: "source".into(),
+            ..Config::default()
+        };
+        let worker = Worker::spawn(original.clone(), move || {
+            Ok(LocalBackend {
+                _local: Rc::new(()),
+                drops: backend_drops,
+                panic_on_save: true,
+            })
+        })
+        .unwrap();
+        worker
+            .send(Command::Configure(Config {
+                left: 2,
+                ..original.clone()
+            }))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.snapshot().finished {
+            assert!(
+                Instant::now() < deadline,
+                "panic did not publish completion"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let snapshot = worker.snapshot();
+        assert_eq!(snapshot.config, original);
+        assert_eq!(snapshot.state, CaptureState::Blocked);
+        assert!(!snapshot.wanted_send);
+        assert!(snapshot.error.is_some());
+        assert!(worker.send(Command::Start).is_err());
+        assert!(worker.join().is_err());
+    }
+    #[test]
+    fn factory_panic_also_publishes_completion() {
+        let worker =
+            Worker::spawn::<LocalBackend>(Config::default(), || panic!("fixture factory panic"))
+                .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.snapshot().finished {
+            assert!(
+                Instant::now() < deadline,
+                "factory panic did not publish completion"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(worker.snapshot().state, CaptureState::Blocked);
+        assert!(worker.join().is_err());
     }
 }
