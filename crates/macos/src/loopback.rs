@@ -88,7 +88,7 @@ unsafe extern "C" fn callback(
     context: *mut c_void,
 ) -> i32 {
     if context.is_null() {
-        return fourcc(b"nope") as i32;
+        return 0;
     }
     // SAFETY: Context remains immutable and alive until HAL stops this IOProc.
     let context = unsafe { &*context.cast::<Context>() };
@@ -100,7 +100,8 @@ unsafe extern "C" fn callback(
         Ok(true) => 0,
         _ => {
             context.invalid.fetch_add(1, Ordering::Relaxed);
-            fourcc(b"nope") as i32
+            // CoreAudio ignores IOProc return values; diagnostics live in counters.
+            0
         }
     }
 }
@@ -113,6 +114,13 @@ unsafe fn process(
     output_time: *const AudioTimestamp,
 ) -> bool {
     if input.is_null() || output.is_null() || input_time.is_null() || output_time.is_null() {
+        return false;
+    }
+    // An empty C buffer-list header is smaller than the Rust one-buffer type.
+    // Check the count before constructing a reference to the complete structure.
+    if unsafe { input.cast::<u32>().read_unaligned() } != 1
+        || unsafe { output.cast::<u32>().read_unaligned() } != 1
+    {
         return false;
     }
     // SAFETY: pointers are supplied by HAL; only the first buffer is used after

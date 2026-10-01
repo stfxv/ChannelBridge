@@ -32,6 +32,11 @@ impl ClockEstimator {
     pub fn speed(&self) -> f64 {
         self.speed
     }
+    pub fn reset(&mut self) {
+        self.anchor = None;
+        self.last = None;
+        self.speed = 1.0;
+    }
 
     fn reanchor(&mut self, frame: u64, tick: u64) {
         self.anchor = Some((frame, tick));
@@ -106,6 +111,12 @@ impl DriftController {
 
     pub fn correction_ppm(&self) -> f64 {
         self.correction * 1_000_000.0
+    }
+    pub fn reset(&mut self) {
+        self.filtered_queue = self.target;
+        self.integrator = 0.0;
+        self.correction = 0.0;
+        self.measured_speed = 1.0;
     }
     pub fn step(&self) -> f64 {
         self.nominal_step * (1.0 + self.correction)

@@ -1,5 +1,5 @@
 //! Bounded property reads on the control thread, outside audio callbacks.
-use channelbridge_hal_abi::{ObjectId, PropertyAddress, fourcc};
+use channelbridge_hal_abi::{ObjectId, PropertyAddress, StreamFormat, fourcc};
 use std::{ffi::c_void, fmt};
 
 const GLOBAL: u32 = fourcc(b"glob");
@@ -32,6 +32,35 @@ pub struct Device {
     pub rate: f64,
     pub input_channels: u32,
     pub output_channels: u32,
+}
+
+#[derive(Debug)]
+pub struct Stream {
+    pub id: ObjectId,
+    pub virtual_format: StreamFormat,
+    pub physical_format: StreamFormat,
+}
+
+pub fn streams(device: ObjectId, scope: u32) -> Result<Vec<Stream>, Error> {
+    ids(&property(device, fourcc(b"stm#"), scope)?)?
+        .into_iter()
+        .map(|id| {
+            let read = |selector| -> Result<StreamFormat, Error> {
+                let bytes = property(id, selector, GLOBAL)?;
+                if bytes.len() != size_of::<StreamFormat>() {
+                    return Err(Error::MalformedProperty);
+                }
+                // SAFETY: exact initialized C layout; all integer/f64 bit patterns
+                // are valid. This read occurs on the control thread.
+                Ok(unsafe { bytes.as_ptr().cast::<StreamFormat>().read_unaligned() })
+            };
+            Ok(Stream {
+                id,
+                virtual_format: read(fourcc(b"sfmt"))?,
+                physical_format: read(fourcc(b"pft "))?,
+            })
+        })
+        .collect()
 }
 
 #[link(name = "CoreAudio", kind = "framework")]

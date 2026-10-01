@@ -22,6 +22,8 @@ pub struct OutputProcessor {
     maximum_step: f64,
     active: bool,
     fade_position: usize,
+    generation: u64,
+    stale_discarded: u64,
 }
 impl OutputProcessor {
     pub fn new(input: Consumer, input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
@@ -43,11 +45,32 @@ impl OutputProcessor {
             maximum_step,
             active: false,
             fade_position: 0,
+            generation: 1,
+            stale_discarded: 0,
         })
     }
 
     pub fn correction_ppm(&self) -> f64 {
         self.controller.correction_ppm()
+    }
+    pub fn stale_discarded(&self) -> u64 {
+        self.stale_discarded
+    }
+    /// Called by the output callback after reading the atomic route generation.
+    /// Old FIFO samples and interpolation history cannot cross Stop/Start or a
+    /// source-clock discontinuity. Mode/mute edits do not change this generation.
+    pub fn set_generation(&mut self, generation: u64) -> usize {
+        if generation <= self.generation {
+            return 0;
+        }
+        self.generation = generation;
+        self.resampler.reset();
+        self.controller.reset();
+        self.active = false;
+        self.fade_position = 0;
+        let discarded = self.input.pop_generation(&mut [], generation).discarded;
+        self.stale_discarded = self.stale_discarded.saturating_add(discarded as u64);
+        discarded
     }
 
     fn queued(&self) -> usize {
@@ -69,7 +92,13 @@ impl OutputProcessor {
             if count == 0 {
                 break;
             }
-            let received = self.input.pop(&mut self.scratch[..count]);
+            let transferred = self
+                .input
+                .pop_generation(&mut self.scratch[..count], self.generation);
+            self.stale_discarded = self
+                .stale_discarded
+                .saturating_add(transferred.discarded as u64);
+            let received = transferred.received;
             if received == 0 {
                 break;
             }
@@ -161,6 +190,31 @@ mod tests {
     use super::*;
     use crate::drift::ClockEstimator;
     use crate::fifo::stereo_queue;
+    #[test]
+    fn restart_retires_interpolation_history_and_late_old_packets() {
+        let (mut producer, consumer) = stereo_queue(8192).unwrap();
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
+        let old = [StereoFrame::new(0.8, 0.8); 2048];
+        producer.push_generation(&old, 1);
+        let mut output = [StereoFrame::SILENCE; 512];
+        assert_eq!(processor.render(&mut output, None).missing, 0);
+        assert!(output[511].left > 0.79);
+        processor.set_generation(2);
+        producer.push_generation(&old[..64], 1);
+        let fresh = [StereoFrame::new(-0.25, -0.25); 2048];
+        producer.push_generation(&fresh, 2);
+        assert_eq!(processor.render(&mut output, None).missing, 0);
+        assert!(
+            output
+                .iter()
+                .all(|frame| frame.left <= 0.0 && frame.right <= 0.0)
+        );
+        assert!((output[511].left + 0.25).abs() < 0.0001);
+        assert!(processor.stale_discarded() >= 64);
+        assert_eq!(processor.set_generation(1), 0);
+        assert_eq!(processor.render(&mut output, None).missing, 0);
+        assert!((output[511].left + 0.25).abs() < 0.0001);
+    }
     #[test]
     fn pcm_pipeline_survives_clock_drift_variable_blocks_and_arrival_jitter() {
         // Four seconds of actual PCM per case, advanced without real-time waits.
