@@ -458,3 +458,15 @@ The prior direct-C run against the installed test bundle used a production-built
 oracle and failed its namespace expectation; it is not evidence of a broken UID.
 
 0.5.3 Universal test app/driver build, C fake-HAL CF transport checks, ad-hoc signatures and embedded-source offline workspace rebuild passed. Combined test package payload executable/archive comparisons passed. Production-feature Clippy passed. Actual installation and CoreAudio transport success remain pending; requested action-time authorization to open the rebuilt installer.
+
+
+### 2026-10-01 corrected transport production distribution verification
+
+Rebuilt the production-profile 0.5.3 Universal app and driver with the CF transport
+correction. Production C fake-HAL checks, signatures, embedded-source offline
+production workspace rebuild and expanded package path/type/mode/SHA-256 checks
+passed. Minimum Rust 1.85 default workspace/all-target check also passed. No
+production installation or settings change was performed. Installed test driver
+remains 0.5.2; action-time approval for opening the prepared 0.5.3 test installer
+is pending. Actual host-marshalled property retrieval and long-call gates remain
+unverified. The existing pkgbuild write warnings still occur and are not resolved.
