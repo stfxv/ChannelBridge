@@ -252,3 +252,9 @@ macosの17試験、workspace Clippy、書式検査が通過。先行する同改
 OutputStatsにpriming_callbacksとdropped_lookaheadを追加。既存missingは実際に処理を開始した後の不足フレームであり、初期/復旧バッファ待ちは含まなかった。今回それらを別の累積値として公開し、復旧時に破棄した補間先読みフレームも記録する。音声callbackは既存の所有状態から報告を受け、固定数のatomic更新だけを追加する。制御側はatomicsのみ読み、個別値の取得を同時刻の整合snapshotとは扱わない。停止中はDSPを実行しないためprimingとして数えず、ミュート中は従来どおり消費・診断を続ける。音声の処理/バッファ/復旧方針は変更しない。
 
 実バッファを用いる回帰試験で、空の初期入力では無音・priming=1・missing=0、信号を供給してから供給停止した場合はmissing/先読み破棄/再primingが増え、callback拒否やpanicはないことを確認。workspace Clippy、最低Rustの全macosターゲットcheck、全体test-rust.sh（Loom/応答格子/C ABI/模擬HAL/確保検証を含む）が通過。最初の直接script実行は実行権限なしで失敗し、bashによる本来の実行方式で完了した。これは診断採取の基盤であり、画面の「診断を保存」、FIFO範囲/補正量/入力時計、実機長時間試験は未完了である。
+
+## 入力側の時計と経路異常の診断（2026-10-01）
+
+CaptureStatsにDSPが検出したinvalid_clock、discontinuities、unavailable_channelの累積callback数を追加。これまでrejectedへまとめられた原因の一部を区別できる。discontinuitiesは時計の連続性喪失だけでなくFIFO overflow等の世代破棄も含み、時計だけのカウンタとは扱わない。DSPに届く前の不正native buffer/now descriptorや競合はrejectedのみに計上し、新カウンタへ誤分類しない。複数理由が同一callbackで成立するため足し合わせてcallback総数にはできない。診断追加は固定数のatomic更新であり、音声の経路/時計復旧方針を変更しない。
+
+既存のnative buffer→DSP→FIFO試験へ、保存済みだが存在しないCh 3の経路と、input timestamp欠落による時計喪失を追加。前者はunavailable_channel=1/discontinuities=0、後者はinvalid_clock=1/discontinuities=1、panicなしを確認した。画面/保存ファイルでの公開、実機原因の確定、全診断要件の完成とは扱わない。

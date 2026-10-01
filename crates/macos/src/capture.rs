@@ -29,6 +29,9 @@ pub struct CaptureCallback {
     rejected: AtomicU64,
     written: AtomicU64,
     overflow: AtomicU64,
+    invalid_clock: AtomicU64,
+    discontinuities: AtomicU64,
+    unavailable_channel: AtomicU64,
 }
 // SAFETY: CaptureProcessor is Send. The only access to its UnsafeCell requires
 // the exclusive atomic gate. All other shared fields are immutable or atomic.
@@ -40,6 +43,9 @@ pub struct CaptureStats {
     pub rejected: u64,
     pub written: u64,
     pub overflow: u64,
+    pub invalid_clock: u64,
+    pub discontinuities: u64,
+    pub unavailable_channel: u64,
     pub failed: bool,
 }
 struct Gate<'a>(&'a AtomicBool);
@@ -60,6 +66,9 @@ impl CaptureCallback {
             rejected: AtomicU64::new(0),
             written: AtomicU64::new(0),
             overflow: AtomicU64::new(0),
+            invalid_clock: AtomicU64::new(0),
+            discontinuities: AtomicU64::new(0),
+            unavailable_channel: AtomicU64::new(0),
         }
     }
     pub fn source_clock(&self) -> Arc<SourceClock> {
@@ -71,6 +80,9 @@ impl CaptureCallback {
             rejected: self.rejected.load(Ordering::Acquire),
             written: self.written.load(Ordering::Acquire),
             overflow: self.overflow.load(Ordering::Acquire),
+            invalid_clock: self.invalid_clock.load(Ordering::Acquire),
+            discontinuities: self.discontinuities.load(Ordering::Acquire),
+            unavailable_channel: self.unavailable_channel.load(Ordering::Acquire),
             failed: self.failed.load(Ordering::Acquire),
         }
     }
@@ -140,6 +152,15 @@ impl CaptureCallback {
                 .fetch_add(report.written as u64, Ordering::Relaxed);
             self.overflow
                 .fetch_add(report.overflow as u64, Ordering::Relaxed);
+            if report.invalid_clock {
+                self.invalid_clock.fetch_add(1, Ordering::Relaxed);
+            }
+            if report.discontinuity {
+                self.discontinuities.fetch_add(1, Ordering::Relaxed);
+            }
+            if report.unavailable_channel {
+                self.unavailable_channel.fetch_add(1, Ordering::Relaxed);
+            }
             !report.format_changed && !report.invalid_clock && !report.unavailable_channel
         }));
         match result {
@@ -246,5 +267,25 @@ mod tests {
         assert_eq!(callback.stats().rejected, 2);
         assert!(!callback.stats().failed);
         assert!(!callback.busy.load(Ordering::Acquire));
+        // An unavailable saved channel is distinct from malformed callbacks.
+        routing
+            .configure(
+                Selection::new(3, 1, Mode::Stereo, false).unwrap(),
+                true,
+                false,
+            )
+            .unwrap();
+        stamp.sample_time = 128.0;
+        stamp.host_time = 128;
+        unsafe { callback.process(&input, &now, &stamp) };
+        assert_eq!(callback.stats().unavailable_channel, 1);
+        assert_eq!(callback.stats().discontinuities, 0);
+        routing.configure(selection, true, false).unwrap();
+        // A missing input timestamp reaches DSP clock validation, unlike a
+        // null callback host-time descriptor rejected by the native adapter.
+        unsafe { callback.process(&input, &now, std::ptr::null()) };
+        assert_eq!(callback.stats().invalid_clock, 1);
+        assert_eq!(callback.stats().discontinuities, 1);
+        assert!(!callback.stats().failed);
     }
 }
