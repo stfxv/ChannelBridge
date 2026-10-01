@@ -336,3 +336,7 @@ driverのDEVICEにread-only cbidを追加。生ASCII/non-NULのCARGO_PKG_VERSION
 全Rust cratesを0.5.2-alpha.1、試験アプリ/ドライバのBundleを0.5.2/build 3へ更新。模擬HALのlive identity期待値も0.5.2-alpha.1へ更新した。この版には互換性ゲート、入力/出力/FIFO/時計診断、再接続・要求レート履歴、診断保存GUI、live cbidを含む。通常Go版とproduction HALのID/ファイルは変更しない。
 
 Clippy、最低Rust全workspace全ターゲットcheck、全体スクリプト、Universal driver/Appビルド、C模擬HAL、署名/metadata、空Cargoキャッシュで同梱ソースoffline/locked check、統合pkg展開後の両署名と実行ファイル/ソースarchive一致が通過。PackageInfoの実bundle2件が0.5.2/build 3、receiptがlocal.channelbridge.rust.test.pkg/0.5.2であることも確認した。初回XML検査はupgrade参照用のbundle要素まで版を要求して失敗したため、path属性を持つ実bundle2件を対象に検証した。pkgbuildのPermission denied警告は残っており、ペイロード一致検証の成功と原因解決を区別する。work/rust-dist/ChannelBridge-Rust-Test.pkgを生成したが、この時点では実導入/再読み込み/長時間通話の合格とは扱わない。
+
+## 0.5.2統合インストーラの開始（2026-10-01）
+
+既存の試験導入許可に沿ってFinderから検証済みChannelBridge-Rust-Test.pkgを開き、InstallerのURLが同パッケージであることを確認した。標準インストール先Macintosh HD/14.7 MBを確認後、インストールを押した。主ウインドウは暗くなり、17:15:40にSecurityAgent PID29984が起動した。17:16時点で統合receipt local.channelbridge.rust.test.pkgは未作成であり、導入完了とは扱わず管理者認証待ちと判断する。パスワードを取得/入力せず、ユーザーがシステムの認証画面へ直接入力するよう案内した。認証後にreceipt/bundle/署名/実行ファイル一致を確認し、設置とliveロードを別に検証する必要がある。
