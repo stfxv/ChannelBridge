@@ -556,3 +556,43 @@ Values exceeding unity were observed and must not be described as guaranteed
 clipping to +/-1. No sample waveforms were retained.
 
 Official 0.5.3 full Rust test script, production workspace tests/Clippy and production Universal package build passed. Expanded payload path/type/mode/all-file hashes, signatures and offline production source rebuild passed. dist/ contains the official app and package. Actual production installation/reload remains separate from release promotion; pkgbuild environment warnings remain unresolved.
+
+### 2026-10-05 sleep/wake recovery, 0.5.4
+
+The user reports no automatic physical-input stream reacquisition and no virtual
+microphone audio after system sleep followed by screen wake. A fake-audio AppKit
+test posted the real NSWorkspace sleep notification to the workspace center. On
+0.5.3 it failed with `state=Sending, opens=1, closes=0`: the application did not
+release or reacquire a session in response to power notifications. Native adapter
+tests also reproduced health false positives with invalid input timestamps,
+rejected/empty output buffers and perpetual output priming while callbacks kept
+arriving. These reproduce code-level recovery gaps, not an actual hardware sleep.
+
+0.5.4 adds a retained workspace observer whose selectors only signal atomics.
+The worker receives power signals independently of the bounded settings queue.
+System sleep suspends negotiation and closes the current session; wake retires
+any remaining session, clears retry/pending state and negotiates fresh devices.
+Send/stop intent, mute and channel selection survive. Screen wake alone refreshes
+inventory/health without interrupting a healthy route or lifting system suspension.
+An unsafe teardown failure remains blocked, and wake never grants permission.
+
+Native stream health is now a separate time-injected module. Capture and output
+adapters publish accepted nonzero frame counts, including preview and mute. These
+are watched independently for two-second stalls. Sending additionally watches
+rendered frames so permanent priming cannot count as successful output. Silence
+does not trigger recovery, and Stop/Start receives fresh buffering grace.
+
+`bash scripts/test.sh` passed after all edits: 80 unit tests in each test and
+production profile, formatting/Clippy, fake-audio AppKit notifications in both
+profiles, zero allocations/deallocations in DSP/native callback examples, two
+finite Loom models, release response sweep, SDK ABI comparison and ASan/UBSan
+fake HAL driver checks. The production Universal app/driver and installer build
+passed, including empty-cache offline source rebuild and expanded payload checks.
+The standard iconutil needed to run outside the execution sandbox. pkgbuild's
+existing environment warnings remain; payload verification completed successfully.
+
+Actual Mac sleep, receiver-app audio after wake, device reconnect delays and
+Intel hardware execution remain unverified for this change. The async sleep
+signal does not guarantee HAL close completes before the OS suspends the worker;
+wake-only handling also closes stale sessions. No installed application, driver,
+audio-service state, receiver settings or microphone authorization was changed.

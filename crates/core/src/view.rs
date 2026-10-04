@@ -19,6 +19,9 @@ pub enum ControlEventKind {
     PermissionRevoked,
     DeviceChanged,
     RouteFailed,
+    SystemSleep,
+    SystemWake,
+    ScreensWake,
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct DriverDiagnostics {

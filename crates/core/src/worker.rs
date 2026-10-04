@@ -1,6 +1,6 @@
 //! UI-facing bounded commands and a control-thread-owned backend.
 use crate::{
-    CaptureState, Command, Config,
+    CaptureState, Command, Config, SystemEvent,
     controller::{Backend, Controller},
 };
 use std::{
@@ -33,8 +33,46 @@ pub struct Worker {
     commands: SyncSender<Command>,
     intent: Arc<AtomicU8>,
     quit: Arc<AtomicBool>,
+    system_events: SystemEvents,
     snapshot: Arc<Mutex<Snapshot>>,
     thread: Option<JoinHandle<()>>,
+}
+/// Notification callbacks only publish atomics; they never access UI or HAL.
+/// The latest sleep/wake state wins if notifications arrive before a worker turn.
+/// A coalesced wake still retires the old session, including a missed sleep.
+#[derive(Clone)]
+pub struct SystemEvents {
+    pending: Arc<AtomicU8>,
+    quit: Arc<AtomicBool>,
+}
+impl SystemEvents {
+    pub fn notify(&self, event: SystemEvent) {
+        if self.quit.load(Ordering::Acquire) {
+            return;
+        }
+        match event {
+            SystemEvent::Sleep | SystemEvent::Wake => {
+                let state = if event == SystemEvent::Sleep { 1 } else { 2 };
+                let _ = self
+                    .pending
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+                        Some(state | (old & 4))
+                    });
+            }
+            SystemEvent::ScreensWake => {
+                self.pending.fetch_or(4, Ordering::Release);
+            }
+        }
+    }
+    fn take(&self) -> (Option<SystemEvent>, bool) {
+        let pending = self.pending.swap(0, Ordering::AcqRel);
+        let state = match pending & 3 {
+            1 => Some(SystemEvent::Sleep),
+            2 => Some(SystemEvent::Wake),
+            _ => None,
+        };
+        (state, pending & 4 != 0)
+    }
 }
 /// Declared before the backend so it publishes only after stack unwinding has
 /// dropped the backend/session owners. Preserve join's panic result as well.
@@ -75,6 +113,26 @@ fn apply_command<B: Backend>(
         *configuration_attempt = configuration_attempt.saturating_add(1);
     }
 }
+fn apply_system_events<B: Backend>(
+    events: &SystemEvents,
+    controller: &mut Controller<B>,
+    error: &mut Option<String>,
+    configuration_attempt: &mut u64,
+) -> bool {
+    let (power, screens_woke) = events.take();
+    for event in power
+        .into_iter()
+        .chain(screens_woke.then_some(SystemEvent::ScreensWake))
+    {
+        apply_command(
+            controller,
+            Command::System(event),
+            error,
+            configuration_attempt,
+        );
+    }
+    power.is_some() || screens_woke
+}
 impl Worker {
     /// Construct the backend inside its owning thread, allowing thread-confined
     /// HAL registrations. The factory must not touch AppKit.
@@ -85,6 +143,10 @@ impl Worker {
         let (commands, receiver) = mpsc::sync_channel(32);
         let intent = Arc::new(AtomicU8::new(0));
         let quit = Arc::new(AtomicBool::new(false));
+        let system_events = SystemEvents {
+            pending: Arc::new(AtomicU8::new(0)),
+            quit: Arc::clone(&quit),
+        };
         let snapshot = Arc::new(Mutex::new(Snapshot {
             state: CaptureState::Idle,
             config: config.clone(),
@@ -103,6 +165,7 @@ impl Worker {
         let shared = Arc::clone(&snapshot);
         let requested = Arc::clone(&intent);
         let exiting = Arc::clone(&quit);
+        let lifecycle = system_events.clone();
         let thread = thread::Builder::new()
             .name("channelbridge-control".into())
             .spawn(move || {
@@ -146,6 +209,15 @@ impl Worker {
                     if exiting.load(Ordering::Acquire) {
                         break;
                     }
+                    if apply_system_events(
+                        &lifecycle,
+                        &mut controller,
+                        &mut command_error,
+                        &mut configuration_attempt,
+                    ) {
+                        next_tick = Instant::now();
+                        next_inventory = Instant::now();
+                    }
                     match receiver.recv_timeout(Duration::from_millis(20)) {
                         Ok(command) => {
                             apply_command(
@@ -174,6 +246,15 @@ impl Worker {
                     }
                     if exiting.load(Ordering::Acquire) {
                         break;
+                    }
+                    if apply_system_events(
+                        &lifecycle,
+                        &mut controller,
+                        &mut command_error,
+                        &mut configuration_attempt,
+                    ) {
+                        next_tick = Instant::now();
+                        next_inventory = Instant::now();
                     }
                     match requested.swap(0, Ordering::AcqRel) {
                         1 => {
@@ -255,6 +336,7 @@ impl Worker {
             commands,
             intent,
             quit,
+            system_events,
             snapshot,
             thread: Some(thread),
         })
@@ -266,6 +348,10 @@ impl Worker {
         // Stop and Quit do not depend on free queue capacity. Last send intent
         // supersedes earlier intent while settings retain their queue order.
         match command {
+            Command::System(event) => {
+                self.system_events.notify(event);
+                Ok(())
+            }
             Command::Start => {
                 self.intent.store(1, Ordering::Release);
                 Ok(())
@@ -286,6 +372,9 @@ impl Worker {
                     TrySendError::Disconnected(_) => "control worker has stopped".into(),
                 }),
         }
+    }
+    pub fn system_events(&self) -> SystemEvents {
+        self.system_events.clone()
     }
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot
@@ -384,6 +473,13 @@ mod tests {
             worker.send(Command::Overview(true)).unwrap();
         }
         assert!(worker.send(Command::Refresh).is_err());
+        // OS lifecycle must remain deliverable even during a full UI queue.
+        worker
+            .send(Command::System(crate::SystemEvent::Sleep))
+            .unwrap();
+        worker
+            .send(Command::System(crate::SystemEvent::Wake))
+            .unwrap();
         worker.send(Command::Start).unwrap();
         worker.send(Command::Stop).unwrap();
         release.send(()).unwrap();
@@ -396,6 +492,13 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(!worker.snapshot().wanted_send);
+        assert!(
+            worker
+                .snapshot()
+                .control_history
+                .iter()
+                .any(|event| event.kind == crate::view::ControlEventKind::SystemWake)
+        );
         assert_eq!(
             worker.snapshot().control_history.last().unwrap().kind,
             crate::view::ControlEventKind::SessionOpened

@@ -285,6 +285,7 @@ impl Screen {
                 channelbridge_core::CaptureState::Previewing => "入力確認中 · 送出停止",
                 channelbridge_core::CaptureState::Sending => "送出中",
                 channelbridge_core::CaptureState::Recovering => "音声の再接続待ち",
+                channelbridge_core::CaptureState::Suspended => "スリープ中 · 復帰を待っています",
                 channelbridge_core::CaptureState::Blocked if !permission.allowed() => {
                     match permission {
                         Permission::NotDetermined => "入力確認にはマイクの許可が必要です",

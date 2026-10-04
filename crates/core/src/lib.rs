@@ -75,7 +75,15 @@ pub enum CaptureState {
     Previewing,
     Sending,
     Recovering,
+    Suspended,
     Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemEvent {
+    Sleep,
+    Wake,
+    ScreensWake,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +95,7 @@ pub enum Command {
     Configure(Config),
     Overview(bool),
     PermissionChanged(bool),
+    System(SystemEvent),
 }
 
 #[cfg(test)]

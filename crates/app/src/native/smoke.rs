@@ -1,7 +1,187 @@
 //! Isolated non-visible checks; never request permission or open audio.
-use super::screen::Screen;
-use objc2::MainThreadMarker;
-use objc2_foundation::{NSDate, NSRunLoop};
+use super::{AppDelegate, Runtime, screen::Screen};
+use channelbridge_core::{CaptureState, Command, Config, controller::Backend, worker::Worker};
+use objc2::{DefinedClass, MainThreadMarker};
+use objc2_app_kit::{
+    NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceScreensDidWakeNotification,
+    NSWorkspaceWillSleepNotification,
+};
+use objc2_foundation::{NSDate, NSNotificationName, NSRunLoop};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+#[derive(Default)]
+struct AudioLifecycle {
+    opens: AtomicUsize,
+    closes: AtomicUsize,
+    sending: AtomicBool,
+}
+/// Keeps all notification checks independent of microphones, HAL and permission.
+struct FakeAudio(Arc<AudioLifecycle>);
+impl Backend for FakeAudio {
+    type Pending = ();
+    type Session = ();
+    fn save(&mut self, _: &Config) -> Result<(), String> {
+        Ok(())
+    }
+    fn negotiate(&mut self, _: &Config) -> Result<(), String> {
+        Ok(())
+    }
+    fn ready(&mut self, _: &()) -> Result<bool, String> {
+        Ok(true)
+    }
+    fn open(&mut self, _: &Config) -> Result<(), String> {
+        self.0.opens.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+    fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
+        Ok(true)
+    }
+    fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
+        self.0.sending.store(sending, Ordering::Release);
+        Ok(())
+    }
+    fn close(&mut self, _: ()) -> Result<(), String> {
+        self.0.sending.store(false, Ordering::Release);
+        self.0.closes.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+}
+
+/// Post through the same NSWorkspace center as macOS, without sleeping the Mac.
+/// A fake backend makes every release, reopen and send intent observable.
+pub(super) fn sleep_wake(main: MainThreadMarker) {
+    let lifecycle = Arc::new(AudioLifecycle::default());
+    let backend_lifecycle = Arc::clone(&lifecycle);
+    let worker = Worker::spawn(
+        Config {
+            device_uid: "sleep-wake-fixture".into(),
+            ..Config::default()
+        },
+        move || Ok(FakeAudio(backend_lifecycle)),
+    )
+    .expect("sleep fixture worker");
+    let delegate = AppDelegate::new(
+        main,
+        Runtime {
+            menu: None,
+            screen: Screen::new(main, None),
+            worker,
+            permission_monitor: false,
+        },
+    );
+    let send = |command| {
+        delegate
+            .ivars()
+            .runtime
+            .borrow()
+            .as_ref()
+            .expect("sleep fixture")
+            .worker
+            .send(command)
+            .expect("sleep fixture command");
+    };
+    let wait = |label: &str, predicate: &dyn Fn(&channelbridge_core::worker::Snapshot) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let snapshot = delegate
+                .ivars()
+                .runtime
+                .borrow()
+                .as_ref()
+                .expect("sleep fixture")
+                .worker
+                .snapshot();
+            if predicate(&snapshot) {
+                return snapshot;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{label}: state={:?}, opens={}, closes={}, error={:?}",
+                snapshot.state,
+                lifecycle.opens.load(Ordering::Acquire),
+                lifecycle.closes.load(Ordering::Acquire),
+                snapshot.error,
+            );
+            NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+        }
+    };
+    let workspace = NSWorkspace::sharedWorkspace();
+    let center = workspace.notificationCenter();
+    let post = |name: &NSNotificationName| {
+        // SAFETY: this isolated main-thread fixture posts only NSWorkspace's
+        // power notifications, with their documented workspace object and no
+        // userInfo. It never invokes an
+        // OS power operation or opens native audio.
+        unsafe { center.postNotificationName_object(name, Some(&workspace)) };
+    };
+    send(Command::PermissionChanged(true));
+    send(Command::Start);
+    wait("initial sending", &|snapshot| {
+        snapshot.state == CaptureState::Sending
+    });
+    assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
+    assert!(lifecycle.sending.load(Ordering::Acquire));
+
+    post(unsafe { NSWorkspaceWillSleepNotification });
+    let asleep = wait("sleep must release the audio session", &|_| {
+        lifecycle.closes.load(Ordering::Acquire) == 1
+    });
+    assert!(asleep.wanted_send);
+    // Screen notifications alone must not undo system-sleep suspension.
+    post(unsafe { NSWorkspaceScreensDidWakeNotification });
+    // Leave several controller ticks available: sleep must suppress reopening.
+    NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.35));
+    assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
+    assert!(!lifecycle.sending.load(Ordering::Acquire));
+    post(unsafe { NSWorkspaceDidWakeNotification });
+    wait("wake must reopen and restore sending", &|snapshot| {
+        lifecycle.opens.load(Ordering::Acquire) == 2 && snapshot.state == CaptureState::Sending
+    });
+    assert!(lifecycle.sending.load(Ordering::Acquire));
+
+    post(unsafe { NSWorkspaceWillSleepNotification });
+    wait("second sleep must release the new session", &|_| {
+        lifecycle.closes.load(Ordering::Acquire) == 2
+    });
+    send(Command::Stop);
+    wait("stop while asleep must update intent", &|snapshot| {
+        !snapshot.wanted_send
+    });
+    post(unsafe { NSWorkspaceDidWakeNotification });
+    wait("wake after stop must restore preview only", &|snapshot| {
+        lifecycle.opens.load(Ordering::Acquire) == 3 && snapshot.state == CaptureState::Previewing
+    });
+    assert!(!lifecycle.sending.load(Ordering::Acquire));
+
+    // A missed will-sleep notification must still retire an old HAL session.
+    send(Command::Start);
+    wait("sending before wake-only", &|snapshot| {
+        snapshot.state == CaptureState::Sending
+    });
+    post(unsafe { NSWorkspaceDidWakeNotification });
+    wait("wake-only must replace the stale session", &|snapshot| {
+        lifecycle.opens.load(Ordering::Acquire) == 4 && snapshot.state == CaptureState::Sending
+    });
+    assert_eq!(lifecycle.closes.load(Ordering::Acquire), 3);
+    assert!(lifecycle.sending.load(Ordering::Acquire));
+
+    send(Command::Quit);
+    wait("sleep fixture shutdown", &|snapshot| snapshot.finished);
+    let runtime = delegate
+        .ivars()
+        .runtime
+        .borrow_mut()
+        .take()
+        .expect("sleep fixture runtime");
+    runtime.worker.join().expect("sleep fixture shutdown");
+    assert_eq!(lifecycle.closes.load(Ordering::Acquire), 4);
+    println!(
+        "Rust AppKit sleep/wake notifications released and reopened fake audio, preserved send intent and respected stop while asleep; no native audio or system sleep"
+    );
+}
 
 /// Exercise real settings I/O and native control inventory, without granting
 /// permission or opening audio. Uses an isolated, disposable destination.

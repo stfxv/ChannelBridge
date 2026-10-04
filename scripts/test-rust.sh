@@ -6,6 +6,7 @@ mkdir -p work/test/rust
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
+cargo run --locked --quiet -p channelbridge-app -- --sleep-wake-smoke
 cargo run --locked --quiet -p channelbridge-audio --example realtime_allocations
 cargo run --locked --quiet -p channelbridge-macos --example native_realtime_allocations
 cargo test --locked -p channelbridge-audio --features model-check model_tests

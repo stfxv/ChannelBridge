@@ -52,6 +52,7 @@ pub struct Controller<B: Backend> {
     overview: bool,
     permission: bool,
     quitting: bool,
+    suspended: bool,
     teardown_failed: bool,
     retry_at: u64,
     retry_delay: u64,
@@ -70,6 +71,7 @@ impl<B: Backend> Controller<B> {
             overview: false,
             permission: false,
             quitting: false,
+            suspended: false,
             teardown_failed: false,
             retry_at: 0,
             retry_delay: 1000,
@@ -173,6 +175,42 @@ impl<B: Backend> Controller<B> {
                 return Ok(());
             }
             Command::Overview(value) => self.overview = value,
+            Command::System(event) => {
+                use crate::{SystemEvent, view::ControlEventKind};
+                match event {
+                    SystemEvent::Sleep => {
+                        if !self.suspended {
+                            self.record(None, ControlEventKind::SystemSleep, None);
+                            self.suspended = true;
+                            self.disconnect()?;
+                        }
+                        if !self.teardown_failed {
+                            self.error = None;
+                            self.state = CaptureState::Suspended;
+                        }
+                    }
+                    SystemEvent::Wake => {
+                        self.record(None, ControlEventKind::SystemWake, None);
+                        self.suspended = false;
+                        // Also retire a stale session when will-sleep was missed.
+                        // A wake never clears an unsafe teardown failure.
+                        self.disconnect()?;
+                        if !self.teardown_failed {
+                            self.retry_at = 0;
+                            self.retry_delay = 1000;
+                            self.error = None;
+                            self.state = CaptureState::Recovering;
+                        }
+                    }
+                    SystemEvent::ScreensWake => {
+                        self.record(None, ControlEventKind::ScreensWake, None);
+                        // Display sleep alone does not invalidate a working route.
+                        // The worker immediately checks health and refreshes inventory.
+                        self.retry_at = 0;
+                    }
+                }
+                return Ok(());
+            }
             Command::PermissionChanged(value) => {
                 self.permission = value;
                 if !value {
@@ -238,7 +276,7 @@ impl<B: Backend> Controller<B> {
         self.retry_delay = (self.retry_delay * 2).min(30000);
     }
     pub fn tick(&mut self, now_ms: u64) {
-        if self.quitting || self.teardown_failed {
+        if self.quitting || self.teardown_failed || self.suspended {
             return;
         }
         if !self.permission {
@@ -355,6 +393,8 @@ mod tests {
         close_fail: bool,
         open_fail: bool,
         retained_on_open_failure: bool,
+        negotiate_fail: bool,
+        negotiations: usize,
         opens: usize,
         closes: usize,
         sends: Vec<bool>,
@@ -373,7 +413,12 @@ mod tests {
             }
         }
         fn negotiate(&mut self, _: &Config) -> Result<(), String> {
-            Ok(())
+            self.negotiations += 1;
+            if self.negotiate_fail {
+                Err("device not ready after wake".into())
+            } else {
+                Ok(())
+            }
         }
         fn ready(&mut self, _: &()) -> Result<bool, String> {
             Ok(self.ready)
@@ -416,6 +461,114 @@ mod tests {
                 ..Config::default()
             },
         )
+    }
+    #[test]
+    fn sleep_releases_streams_and_wake_preserves_stop_mute_and_selection() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        let config = Config {
+            left: 3,
+            right: 4,
+            mode: crate::Mode::Stereo,
+            muted: true,
+            ..worker.config().clone()
+        };
+        worker.command(Command::Configure(config.clone())).unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        assert_eq!(worker.state(), CaptureState::Suspended);
+        assert_eq!(worker.backend.closes, 1);
+        assert!(worker.wanted_send());
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        worker
+            .command(Command::System(SystemEvent::ScreensWake))
+            .unwrap();
+        worker.tick(10000);
+        assert_eq!((worker.backend.opens, worker.backend.closes), (1, 1));
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10001);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert_eq!(worker.backend.sends, [true, false]);
+        assert_eq!(worker.config(), &config);
+        worker.command(Command::Start).unwrap();
+        worker
+            .command(Command::System(SystemEvent::ScreensWake))
+            .unwrap();
+        worker.tick(10002);
+        assert_eq!(
+            worker.backend.opens, 2,
+            "display wake must preserve a healthy route"
+        );
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10003);
+        assert_eq!(
+            worker.backend.opens, 3,
+            "wake-only must retire a stale session"
+        );
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.config(), &config);
+    }
+    #[test]
+    fn wake_restarts_pending_negotiation_and_retries_devices_still_unavailable() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.tick(0);
+        assert!(worker.pending.is_some());
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        assert!(worker.pending.is_none());
+        worker.tick(10000);
+        assert_eq!(worker.backend.negotiations, 1);
+        worker.backend.negotiate_fail = true;
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10001);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        worker.tick(11000);
+        assert_eq!(worker.backend.negotiations, 2);
+        worker.backend.negotiate_fail = false;
+        worker.backend.ready = true;
+        worker.tick(11001);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.backend.negotiations, 3);
+        // A new wake discards even a long retry accumulated before sleep.
+        worker.retry_delay = 30000;
+        worker.retry(12000, "fixture disconnected".into());
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(12001);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.retry_delay, 1000);
+    }
+    #[test]
+    fn wake_never_bypasses_revoked_permission_or_unsafe_teardown() {
+        use crate::SystemEvent;
+        for failed_teardown in [false, true] {
+            let mut worker = controller();
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.command(Command::Start).unwrap();
+            worker.backend.ready = true;
+            worker.tick(0);
+            worker.backend.close_fail = failed_teardown;
+            assert_eq!(
+                worker.command(Command::System(SystemEvent::Sleep)).is_err(),
+                failed_teardown
+            );
+            worker.command(Command::PermissionChanged(false)).unwrap();
+            worker.command(Command::System(SystemEvent::Wake)).unwrap();
+            worker.tick(10000);
+            assert_eq!(worker.state(), CaptureState::Blocked);
+            assert_eq!(worker.backend.opens, 1);
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.tick(10001);
+            assert_eq!(worker.backend.opens, if failed_teardown { 1 } else { 2 });
+            if failed_teardown {
+                assert_eq!(worker.error(), Some("close failed"));
+            }
+        }
     }
     #[test]
     fn pending_rate_is_preserved_in_failure_history_before_disconnect() {

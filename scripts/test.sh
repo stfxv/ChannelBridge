@@ -5,3 +5,4 @@ bash scripts/test-rust.sh
 source scripts/rust-env.sh
 cargo test --workspace --locked --features production
 cargo clippy --workspace --all-targets --locked --features production -- -D warnings
+cargo run --locked --quiet -p channelbridge-app --features production -- --sleep-wake-smoke

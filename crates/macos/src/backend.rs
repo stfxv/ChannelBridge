@@ -1,16 +1,14 @@
 //! Native control backend for the selected deployment virtual microphone.
 use crate::{
     devices,
+    health::StreamHealth,
     rate::{RateFollow, Status},
     session::TestSession,
 };
 use channelbridge_audio::routing::{Mode, Selection};
 use channelbridge_core::{Config, controller::Backend, storage};
 use channelbridge_hal_abi::{StreamFormat, fourcc};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Instant};
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioGetHostClockFrequency() -> f64;
@@ -20,7 +18,7 @@ pub struct NativeBackend {
     startup_failed: bool,
     settings: PathBuf,
     ticks_per_second: u64,
-    activity: Option<((u64, u64), Instant)>,
+    stream_health: StreamHealth,
 }
 impl NativeBackend {
     pub fn new(settings: PathBuf) -> Result<Self, String> {
@@ -36,7 +34,7 @@ impl NativeBackend {
             startup_failed: false,
             settings,
             ticks_per_second: frequency as u64,
-            activity: None,
+            stream_health: StreamHealth::default(),
         })
     }
 }
@@ -290,7 +288,7 @@ impl Backend for NativeBackend {
                 return Err(error.to_string());
             }
         };
-        self.activity = Some(((0, 0), Instant::now()));
+        self.stream_health.started(Instant::now());
         Ok(session)
     }
     fn healthy(&mut self, session: &TestSession, config: &Config) -> Result<bool, String> {
@@ -348,23 +346,12 @@ impl Backend for NativeBackend {
             return Ok(false);
         }
         let (capture, output) = session.stats();
-        if capture.failed || output.failed {
-            return Err("audio callback failed".into());
-        }
-        let counts = (capture.callbacks, output.callbacks);
-        if let Some((previous, time)) = self.activity {
-            if (counts.0 == previous.0 || counts.1 == previous.1)
-                && time.elapsed() >= Duration::from_secs(2)
-            {
-                return Ok(false);
-            }
-            if counts.0 != previous.0 && counts.1 != previous.1 {
-                self.activity = Some((counts, Instant::now()));
-            }
-        } else {
-            self.activity = Some((counts, Instant::now()));
-        }
-        Ok(true)
+        self.stream_health.check(
+            capture,
+            output,
+            session.routing.load().sending,
+            Instant::now(),
+        )
     }
     fn route(
         &mut self,
@@ -385,13 +372,15 @@ impl Backend for NativeBackend {
             .routing
             .configure(selection(config)?, sending, overview)
             .ok_or("routing generation changed concurrently")?;
+        self.stream_health
+            .routed(sending, session.stats().1.rendered_frames, Instant::now());
         Ok(())
     }
     fn open_failure_requires_stop(&self) -> bool {
         self.startup_failed
     }
     fn close(&mut self, session: TestSession) -> Result<(), String> {
-        self.activity = None;
+        self.stream_health.reset();
         session.close().map_err(|error| error.to_string())
     }
 }

@@ -93,6 +93,7 @@ impl StatusMenu {
                 CaptureState::Previewing => "入力確認中 · 送出停止",
                 CaptureState::Sending => "送出中",
                 CaptureState::Recovering => "再接続待ち",
+                CaptureState::Suspended => "スリープ中 · 復帰待ち",
                 CaptureState::Blocked => "入力確認を開始できません",
             }));
         self.send.setTitle(if snapshot.wanted_send {
