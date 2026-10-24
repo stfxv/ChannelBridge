@@ -49,16 +49,26 @@ pub fn spawn_worker(
 }
 
 fn project_inventory(
-    entries: Vec<Result<devices::Device, devices::Error>>,
+    entries: Result<Vec<Result<devices::Device, devices::Error>>, devices::Error>,
     mut read_streams: impl FnMut(
         channelbridge_hal_abi::ObjectId,
     ) -> Result<Vec<devices::Stream>, devices::Error>,
 ) -> Result<channelbridge_core::view::DeviceInventory, String> {
     use channelbridge_core::view::{DeviceChoice, InputFormat};
 
+    let entries = entries.map_err(|error| error.to_string())?;
     let mut choices = Vec::new();
+    let mut failed_entries = 0usize;
+    let mut first_error = None;
     for entry in entries {
-        let device = entry.map_err(|error| error.to_string())?;
+        let device = match entry {
+            Ok(device) => device,
+            Err(error) => {
+                failed_entries += 1;
+                first_error.get_or_insert_with(|| error.to_string());
+                continue;
+            }
+        };
         if device.input_channels == 0
             || [
                 channelbridge_contract::TEST_DEVICE_UID,
@@ -97,7 +107,12 @@ fn project_inventory(
     }
     Ok(channelbridge_core::view::DeviceInventory {
         choices,
-        completeness: channelbridge_core::view::InventoryCompleteness::Complete,
+        completeness: match first_error {
+            Some(error) => channelbridge_core::view::InventoryCompleteness::Partial {
+                warning: format!("{failed_entries} device entries could not be read: {error}"),
+            },
+            None => channelbridge_core::view::InventoryCompleteness::Complete,
+        },
     })
 }
 
@@ -201,9 +216,7 @@ impl Backend for NativeBackend {
         })
     }
     fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
-        project_inventory(devices::list().map_err(|error| error.to_string())?, |id| {
-            devices::streams(id, fourcc(b"inpt"))
-        })
+        project_inventory(devices::list(), |id| devices::streams(id, fourcc(b"inpt")))
     }
 
     fn audio_view(
@@ -444,7 +457,7 @@ mod tests {
             vec![Ok(input("input")), Err(devices::Error::Hal(-1))],
             vec![Err(devices::Error::Hal(-1)), Ok(input("input"))],
         ] {
-            let inventory = project_inventory(entries, |_| Ok(Vec::new())).unwrap();
+            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).unwrap();
             assert_eq!(inventory.choices.len(), 1);
             assert_eq!(inventory.choices[0].uid, "input");
             assert!(matches!(
@@ -457,7 +470,7 @@ mod tests {
     fn inventory_all_entry_failures_have_one_bounded_warning() {
         use channelbridge_core::view::InventoryCompleteness;
         let inventory = project_inventory(
-            (0..100).map(|_| Err(devices::Error::Hal(-7))).collect(),
+            Ok((0..100).map(|_| Err(devices::Error::Hal(-7))).collect()),
             |_| panic!("failed entries have no stream query"),
         )
         .unwrap();
@@ -470,10 +483,20 @@ mod tests {
         assert!(warning.len() < 200);
     }
     #[test]
+    fn inventory_whole_list_failure_remains_an_error() {
+        let error = project_inventory(Err(devices::Error::Hal(-8)), |_| {
+            panic!("failed list has no stream query")
+        })
+        .unwrap_err();
+        assert_eq!(error, "CoreAudio status -8");
+    }
+    #[test]
     fn inventory_stream_failure_keeps_definite_input_presence() {
         use channelbridge_core::view::InventoryCompleteness;
-        let inventory =
-            project_inventory(vec![Ok(input("input"))], |_| Err(devices::Error::Hal(-9))).unwrap();
+        let inventory = project_inventory(Ok(vec![Ok(input("input"))]), |_| {
+            Err(devices::Error::Hal(-9))
+        })
+        .unwrap();
         assert_eq!(inventory.completeness, InventoryCompleteness::Complete);
         assert_eq!(inventory.choices[0].uid, "input");
         assert!(inventory.choices[0].physical_inputs.is_empty());

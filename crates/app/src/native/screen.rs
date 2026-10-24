@@ -229,7 +229,8 @@ impl Screen {
             .setEnabled(self.devices.isEnabled() && !snapshot.config.device_uid.is_empty());
         self.auto_send_button
             .setState(isize::from(snapshot.config.auto_send_on_resume));
-        self.auto_send_button.setEnabled(self.devices.isEnabled());
+        self.auto_send_button
+            .setEnabled(self.devices.isEnabled() && !snapshot.config.device_uid.is_empty());
         self.overview_button
             .setEnabled(selected.is_some() && !snapshot.finished);
         self.routing.update(
