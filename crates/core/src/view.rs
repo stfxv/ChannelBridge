@@ -90,7 +90,9 @@ pub struct DeviceInventory {
 pub enum InventoryCompleteness {
     #[default]
     Complete,
-    Partial { warning: String },
+    Partial {
+        warning: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceChoice {

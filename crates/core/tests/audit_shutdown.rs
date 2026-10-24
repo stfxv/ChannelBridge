@@ -20,10 +20,17 @@ struct Fake {
     saving: Option<mpsc::Sender<()>>,
     save_gate: Option<mpsc::Receiver<()>>,
     close_fail: bool,
+    inventory: Option<Arc<Mutex<Result<channelbridge_core::view::DeviceInventory, String>>>>,
 }
 impl Backend for Fake {
     type Pending = ();
     type Session = ();
+    fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
+        self.inventory.as_ref().map_or_else(
+            || Ok(channelbridge_core::view::DeviceInventory::default()),
+            |inventory| inventory.lock().unwrap().clone(),
+        )
+    }
     fn save(&mut self, config: &Config) -> Result<(), String> {
         self.events
             .lock()
@@ -136,6 +143,7 @@ fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
                 saving: Some(saving),
                 save_gate: Some(gate),
                 close_fail,
+                ..Fake::default()
             })
         })
         .unwrap();
@@ -267,6 +275,58 @@ fn racing_seal_and_senders_accounts_for_every_accepted_configuration() {
     assert_eq!(
         events.lock().unwrap().len(),
         accepted.load(Ordering::Relaxed)
+    );
+    worker.join().unwrap();
+}
+
+#[test]
+fn whole_inventory_failure_retains_choices_and_presence_history() {
+    use channelbridge_core::view::{
+        ControlEventKind, DeviceChoice, DeviceInventory, InventoryCompleteness,
+    };
+    let complete = DeviceInventory {
+        choices: vec![DeviceChoice {
+            uid: "source".into(),
+            name: "Input".into(),
+            channels: 2,
+            rate: 48000.0,
+            physical_inputs: Vec::new(),
+            format_error: None,
+        }],
+        completeness: InventoryCompleteness::Complete,
+    };
+    let inventory = Arc::new(Mutex::new(Ok(complete.clone())));
+    let readings = inventory.clone();
+    let worker = Worker::spawn(config("source"), move || {
+        Ok(Fake {
+            inventory: Some(readings),
+            ..Fake::default()
+        })
+    })
+    .unwrap();
+    wait(&worker, |snapshot| snapshot.devices.len() == 1);
+    *inventory.lock().unwrap() = Err("whole list failed".into());
+    worker
+        .send(Command::System(
+            channelbridge_core::SystemEvent::ScreensWake,
+        ))
+        .unwrap();
+    let failed = wait(&worker, |snapshot| {
+        snapshot.device_error.as_deref() == Some("whole list failed")
+    });
+    assert_eq!(&*failed.devices, &complete.choices);
+    *inventory.lock().unwrap() = Ok(complete);
+    worker
+        .send(Command::System(
+            channelbridge_core::SystemEvent::ScreensWake,
+        ))
+        .unwrap();
+    let recovered = wait(&worker, |snapshot| snapshot.device_error.is_none());
+    assert!(
+        !recovered
+            .control_history
+            .iter()
+            .any(|event| event.kind == ControlEventKind::InputReconnected)
     );
     worker.join().unwrap();
 }

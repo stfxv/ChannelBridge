@@ -121,6 +121,21 @@ fn apply_command<B: Backend>(
     }
     previous_uid != controller.config().device_uid
 }
+fn finish_shutdown<B: Backend>(
+    controller: &mut Controller<B>,
+    commands: impl Iterator<Item = Command>,
+    command_error: &mut Option<String>,
+    configuration_attempt: &mut u64,
+) -> Option<String> {
+    let shutdown_error = controller.command(Command::Quit).err();
+    for command in commands {
+        if let Command::Configure(config) = command {
+            *configuration_attempt = configuration_attempt.saturating_add(1);
+            *command_error = controller.persist_configuration(config).err();
+        }
+    }
+    shutdown_error
+}
 fn apply_system_events<B: Backend>(
     events: &SystemEvents,
     quit: &AtomicBool,
@@ -440,13 +455,12 @@ impl Worker {
                     });
                 }
                 seal(&admission, &exiting);
-                let shutdown_error = controller.command(Command::Quit).err();
-                for command in held_command.into_iter().chain(receiver.iter()) {
-                    if let Command::Configure(config) = command {
-                        configuration_attempt = configuration_attempt.saturating_add(1);
-                        command_error = controller.persist_configuration(config).err();
-                    }
-                }
+                let shutdown_error = finish_shutdown(
+                    &mut controller,
+                    held_command.into_iter().chain(receiver.iter()),
+                    &mut command_error,
+                    &mut configuration_attempt,
+                );
                 publish(Snapshot {
                     state: controller.state(),
                     config: controller.config().clone(),
@@ -589,6 +603,91 @@ mod tests {
         fn close(&mut self, _: ()) -> Result<(), String> {
             Ok(())
         }
+    }
+    #[test]
+    fn shutdown_includes_the_command_held_outside_the_receiver_before_its_fifo_tail() {
+        let mut controller = Controller::new(
+            LocalBackend {
+                _local: Rc::new(()),
+                drops: Arc::new(AtomicUsize::new(0)),
+                panic_on_save: false,
+            },
+            Config {
+                device_uid: "source".into(),
+                ..Config::default()
+            },
+        );
+        let (sender, receiver) = mpsc::sync_channel(2);
+        for uid in ["held", "queued"] {
+            sender
+                .send(Command::Configure(Config {
+                    device_uid: uid.into(),
+                    ..Config::default()
+                }))
+                .unwrap();
+        }
+        let held = receiver.try_recv().unwrap();
+        drop(sender);
+        let mut error = Some("prior error".into());
+        let mut attempts = 0;
+        assert_eq!(
+            finish_shutdown(
+                &mut controller,
+                std::iter::once(held).chain(receiver.iter()),
+                &mut error,
+                &mut attempts,
+            ),
+            None
+        );
+        assert_eq!(controller.config().device_uid, "queued");
+        assert_eq!(attempts, 2);
+        assert_eq!(error, None);
+        assert!(!controller.wanted_send());
+        assert!(controller.command(Command::Start).is_err());
+        assert!(
+            controller
+                .command(Command::Configure(Config {
+                    device_uid: "late".into(),
+                    ..Config::default()
+                }))
+                .is_err()
+        );
+        assert_eq!(controller.config().device_uid, "queued");
+    }
+    #[test]
+    fn partial_inventory_preserves_definite_evidence_and_positive_return_is_usable() {
+        let device = crate::view::DeviceChoice {
+            uid: "source".into(),
+            name: "Input".into(),
+            channels: 2,
+            rate: 48000.0,
+            physical_inputs: Vec::new(),
+            format_error: Some("format unavailable".into()),
+        };
+        let partial_missing = crate::view::DeviceInventory {
+            choices: Vec::new(),
+            completeness: crate::view::InventoryCompleteness::Partial {
+                warning: "entry failed".into(),
+            },
+        };
+        let partial_present = crate::view::DeviceInventory {
+            choices: vec![device.clone()],
+            ..partial_missing.clone()
+        };
+        let mut presence = InputPresence::default();
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&device))));
+        assert!(!presence.observe("source", &partial_missing));
+        assert_eq!(presence.observed, Some(("source".into(), true)));
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&device))));
+        assert!(!presence.observe("source", &complete(&[])));
+        assert!(!presence.observe("source", &partial_missing));
+        assert_eq!(presence.observed, Some(("source".into(), false)));
+        assert!(presence.observe("source", &partial_present));
+        assert!(!presence.observe("other", &partial_missing));
+        assert_eq!(presence.observed, None);
+        assert!(!presence.observe("source", &partial_present));
+        assert!(!presence.observe("", &partial_missing));
+        assert_eq!(presence.observed, None);
     }
     #[test]
     fn manual_stop_arriving_during_return_inventory_wins_before_open() {
