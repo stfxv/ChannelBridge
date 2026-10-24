@@ -24,6 +24,7 @@ pub struct Snapshot {
     pub finished: bool,
     pub audio: Option<crate::view::AudioView>,
     pub diagnostics: Option<crate::view::AudioDiagnostics>,
+    pub retained_io_contexts: u64,
     pub driver_diagnostics: Option<crate::view::DriverDiagnostics>,
     pub control_history: Arc<[crate::view::ControlEvent]>,
     pub devices: Arc<[crate::view::DeviceChoice]>,
@@ -157,6 +158,7 @@ impl Worker {
             finished: false,
             audio: None,
             diagnostics: None,
+            retained_io_contexts: 0,
             driver_diagnostics: None,
             control_history: Arc::from([]),
             devices: Arc::from([]),
@@ -188,6 +190,7 @@ impl Worker {
                             finished: true,
                             audio: None,
                             diagnostics: None,
+                            retained_io_contexts: 0,
                             driver_diagnostics: None,
                             control_history: Arc::from([]),
                             devices: Arc::from([]),
@@ -309,6 +312,7 @@ impl Worker {
                         finished: false,
                         audio: controller.audio_view(),
                         diagnostics: controller.diagnostics(),
+                        retained_io_contexts: controller.retained_io_contexts(),
                         driver_diagnostics: driver_diagnostics.clone(),
                         control_history: controller.history(),
                         devices: Arc::clone(&devices),
@@ -326,6 +330,7 @@ impl Worker {
                     finished: true,
                     audio: None,
                     diagnostics: None,
+                    retained_io_contexts: controller.retained_io_contexts(),
                     driver_diagnostics: None,
                     control_history: controller.history(),
                     devices,
@@ -414,6 +419,9 @@ mod tests {
         }
     }
     impl Backend for LocalBackend {
+        fn retained_io_contexts(&self) -> u64 {
+            7
+        }
         type Pending = ();
         type Session = ();
         fn diagnostics(&self, _: &()) -> Option<crate::view::AudioDiagnostics> {
@@ -503,6 +511,7 @@ mod tests {
             worker.snapshot().control_history.last().unwrap().kind,
             crate::view::ControlEventKind::SessionOpened
         );
+        assert_eq!(worker.snapshot().retained_io_contexts, 7);
         let diagnostics = worker.snapshot().diagnostics.unwrap();
         assert_eq!(diagnostics.capture_written_frames, (1_u64 << 54) + 3);
         let json: serde_json::Value = serde_json::to_value(&diagnostics).unwrap();
@@ -525,6 +534,7 @@ mod tests {
         let shared_snapshot = Arc::clone(&worker.snapshot);
         worker.join().unwrap();
         assert!(shared_snapshot.lock().unwrap().diagnostics.is_none());
+        assert_eq!(shared_snapshot.lock().unwrap().retained_io_contexts, 7);
         assert_eq!(
             shared_snapshot
                 .lock()

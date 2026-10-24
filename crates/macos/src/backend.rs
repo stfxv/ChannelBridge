@@ -16,6 +16,7 @@ unsafe extern "C" {
 }
 pub struct NativeBackend {
     startup_failed: bool,
+    retained_io_contexts: u64,
     settings: PathBuf,
     ticks_per_second: u64,
     stream_health: StreamHealth,
@@ -32,6 +33,7 @@ impl NativeBackend {
         }
         Ok(Self {
             startup_failed: false,
+            retained_io_contexts: 0,
             settings,
             ticks_per_second: frequency as u64,
             stream_health: StreamHealth::default(),
@@ -281,10 +283,20 @@ impl Backend for NativeBackend {
             Err(error) => {
                 self.startup_failed = error
                     .downcast_ref::<crate::session::StartupError>()
-                    .is_some_and(|error| error.context_retained)
+                    .is_some_and(|error| error.requires_stop)
                     || error
                         .downcast_ref::<crate::io::IoError>()
                         .is_some_and(|error| error.context_retained);
+                self.retained_io_contexts += error
+                    .downcast_ref::<crate::session::StartupError>()
+                    .map_or_else(
+                        || {
+                            error
+                                .downcast_ref::<crate::io::IoError>()
+                                .map_or(0, |error| u64::from(error.context_retained))
+                        },
+                        |error| error.retained_io_contexts,
+                    );
                 return Err(error.to_string());
             }
         };
@@ -379,9 +391,22 @@ impl Backend for NativeBackend {
     fn open_failure_requires_stop(&self) -> bool {
         self.startup_failed
     }
+    fn retained_io_contexts(&self) -> u64 {
+        self.retained_io_contexts
+    }
     fn close(&mut self, session: TestSession) -> Result<(), String> {
         self.stream_health.reset();
-        session.close().map_err(|error| error.to_string())
+        match session.close() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.retained_io_contexts += error.retained_io_contexts();
+                if error.requires_stop() {
+                    Err(error.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        }
     }
 }
 

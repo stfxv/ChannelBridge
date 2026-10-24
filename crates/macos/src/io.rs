@@ -95,10 +95,11 @@ impl Handler for OutputCallback {
 }
 struct Context<T> {
     handler: T,
-    accepting: AtomicBool,
-    active: AtomicUsize,
+    admission: AtomicUsize,
     failed: AtomicBool,
 }
+const CLOSED: usize = 1 << (usize::BITS - 1);
+const BAD_DEVICE: i32 = fourcc(b"!dev") as i32;
 struct Active<'a>(&'a AtomicUsize);
 impl Drop for Active<'_> {
     fn drop(&mut self) {
@@ -119,10 +120,19 @@ unsafe extern "C" fn dispatch<T: Handler>(
     }
     // SAFETY: registration owns this stable allocation until HAL deregisters.
     let context = unsafe { &*pointer.cast::<Context<T>>() };
-    context.active.fetch_add(1, Ordering::Acquire);
-    let _active = Active(&context.active);
-    if context.accepting.load(Ordering::Acquire)
-        && !context.failed.load(Ordering::Acquire)
+    // A single atomic linearizes closing against callback admission. Retained
+    // closed contexts may receive late HAL calls, but cannot run their handler.
+    if context
+        .admission
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            (state & CLOSED == 0).then_some(state + 1)
+        })
+        .is_err()
+    {
+        return 0;
+    }
+    let _active = Active(&context.admission);
+    if !context.failed.load(Ordering::Acquire)
         && catch_unwind(AssertUnwindSafe(|| unsafe {
             context
                 .handler
@@ -135,11 +145,19 @@ unsafe extern "C" fn dispatch<T: Handler>(
     // HAL supplies zeroed output; a rejected invocation leaves silence.
     0
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoDisposition {
+    Fatal,
+    /// The device ID vanished. Storage remains retained, but its admission gate
+    /// is closed with no handler running, so a new independent session is safe.
+    RemovedDevice,
+}
 #[derive(Debug)]
 pub struct IoError {
     pub operation: &'static str,
     pub status: i32,
     pub context_retained: bool,
+    pub disposition: IoDisposition,
 }
 impl std::fmt::Display for IoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -173,7 +191,8 @@ fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
     Some((payload, size as u32))
 }
 
-/// Thread-confined owner. Drop never releases memory if Stop/Destroy fails.
+/// Thread-confined owner. Callback storage is released only after successful
+/// deregistration with no admitted invocation still active.
 pub struct Registration<T: Handler> {
     device: ObjectId,
     id: Option<IoProc>,
@@ -189,8 +208,7 @@ impl<T: Handler> Registration<T> {
     fn with_api(device: ObjectId, handler: T, api: Api) -> Result<Self, IoError> {
         let mut context = Box::new(Context {
             handler,
-            accepting: AtomicBool::new(false),
-            active: AtomicUsize::new(0),
+            admission: AtomicUsize::new(CLOSED),
             failed: AtomicBool::new(false),
         });
         let mut id = None;
@@ -207,6 +225,7 @@ impl<T: Handler> Registration<T> {
                 operation: "register",
                 status,
                 context_retained: false,
+                disposition: IoDisposition::Fatal,
             });
         }
         if id.is_none() {
@@ -216,6 +235,7 @@ impl<T: Handler> Registration<T> {
                 operation: "register returned empty ID",
                 status: 0,
                 context_retained: true,
+                disposition: IoDisposition::Fatal,
             });
         }
         Ok(Self {
@@ -275,6 +295,7 @@ impl<T: Handler> Registration<T> {
                 operation: "disable streams",
                 status,
                 context_retained: false,
+                disposition: IoDisposition::Fatal,
             }
             .into());
         }
@@ -286,25 +307,27 @@ impl<T: Handler> Registration<T> {
                 operation: "already started",
                 status: 0,
                 context_retained: false,
+                disposition: IoDisposition::Fatal,
             });
         }
         self.start_attempted = true;
         self.context
             .as_ref()
             .expect("live registration")
-            .accepting
-            .store(true, Ordering::Release);
+            .admission
+            .store(0, Ordering::Release);
         let status = unsafe { (self.api.start)(self.device, self.id.expect("registered ID")) };
         if status != 0 {
             self.context
                 .as_ref()
                 .expect("live registration")
-                .accepting
-                .store(false, Ordering::Release);
+                .admission
+                .fetch_or(CLOSED, Ordering::AcqRel);
             return Err(IoError {
                 operation: "start",
                 status,
                 context_retained: false,
+                disposition: IoDisposition::Fatal,
             });
         }
         Ok(())
@@ -314,33 +337,46 @@ impl<T: Handler> Registration<T> {
             return Ok(());
         };
         let context = self.context.as_ref().expect("registered context");
-        context.accepting.store(false, Ordering::Release);
-        if self.start_attempted {
-            let status = unsafe { (self.api.stop)(self.device, id) };
-            if status != 0 {
-                return Err(IoError {
-                    operation: "stop",
-                    status,
-                    context_retained: true,
-                });
-            }
+        context.admission.fetch_or(CLOSED, Ordering::AcqRel);
+        let stop_status = if self.start_attempted {
+            unsafe { (self.api.stop)(self.device, id) }
+        } else {
+            0
+        };
+        if stop_status != 0 && stop_status != BAD_DEVICE {
+            return Err(IoError {
+                operation: "stop",
+                status: stop_status,
+                context_retained: true,
+                disposition: IoDisposition::Fatal,
+            });
         }
         let status = unsafe { (self.api.destroy)(self.device, id) };
         if status != 0 {
+            let inactive = context.admission.load(Ordering::Acquire) == CLOSED;
             return Err(IoError {
                 operation: "destroy",
                 status,
                 context_retained: true,
+                disposition: if status == BAD_DEVICE
+                    && inactive
+                    && !context.failed.load(Ordering::Acquire)
+                {
+                    IoDisposition::RemovedDevice
+                } else {
+                    IoDisposition::Fatal
+                },
             });
         }
         self.id = None;
         // HAL has removed this IOProc; retain storage if an invocation still
         // owns it rather than assuming Stop proves synchronous completion.
-        if context.active.load(Ordering::Acquire) != 0 {
+        if context.admission.load(Ordering::Acquire) != CLOSED {
             return Err(IoError {
                 operation: "callback still active",
                 status: 0,
                 context_retained: true,
+                disposition: IoDisposition::Fatal,
             });
         }
         Ok(())
@@ -367,6 +403,7 @@ impl<T: Handler> Registration<T> {
                 operation: "callback panic",
                 status: 0,
                 context_retained: false,
+                disposition: IoDisposition::Fatal,
             });
         }
         Ok(self.context.take().expect("owned context").handler)
@@ -405,6 +442,7 @@ mod tests {
             _: *mut AudioBufferList,
             _: *const AudioTimestamp,
         ) {
+            self.0.fetch_add(100, Ordering::Relaxed);
         }
     }
     unsafe extern "C" fn create(
@@ -427,6 +465,67 @@ mod tests {
     unsafe extern "C" fn destroy(_: ObjectId, _: IoProc) -> i32 {
         DESTROYS.fetch_add(1, Ordering::Relaxed);
         DESTROY_ERROR.load(Ordering::Relaxed)
+    }
+    #[test]
+    fn closing_admission_observes_inflight_handler_and_rejects_late_calls() {
+        struct BlockingHandler {
+            entered: std::sync::Barrier,
+            release: std::sync::Barrier,
+            calls: AtomicUsize,
+        }
+        impl Handler for BlockingHandler {
+            unsafe fn process(
+                &self,
+                _: *const AudioTimestamp,
+                _: *const AudioBufferList,
+                _: *const AudioTimestamp,
+                _: *mut AudioBufferList,
+                _: *const AudioTimestamp,
+            ) {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                self.entered.wait();
+                self.release.wait();
+            }
+        }
+        let context = Arc::new(Context {
+            handler: BlockingHandler {
+                entered: std::sync::Barrier::new(2),
+                release: std::sync::Barrier::new(2),
+                calls: AtomicUsize::new(0),
+            },
+            admission: AtomicUsize::new(0),
+            failed: AtomicBool::new(false),
+        });
+        let running = Arc::clone(&context);
+        let callback = std::thread::spawn(move || unsafe {
+            dispatch::<BlockingHandler>(
+                42,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                Arc::as_ptr(&running).cast_mut().cast(),
+            );
+        });
+        context.handler.entered.wait();
+        assert_eq!(context.admission.fetch_or(CLOSED, Ordering::AcqRel), 1);
+        unsafe {
+            dispatch::<BlockingHandler>(
+                42,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                Arc::as_ptr(&context).cast_mut().cast(),
+            );
+        }
+        assert_eq!(context.handler.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(context.admission.load(Ordering::Acquire), CLOSED | 1);
+        context.handler.release.wait();
+        callback.join().unwrap();
+        assert_eq!(context.admission.load(Ordering::Acquire), CLOSED);
     }
     #[test]
     fn stream_usage_payload_includes_id_count_and_every_disabled_flag() {
@@ -477,15 +576,81 @@ mod tests {
             .context
             .as_ref()
             .unwrap()
-            .active
-            .store(1, Ordering::Release);
+            .admission
+            .store(CLOSED | 1, Ordering::Release);
         assert_eq!(
             session.close().err().unwrap().operation,
             "callback still active"
         );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
+        // A disappearing device still gets a deregistration attempt.
+        STOP_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        session.start().unwrap();
+        drop(session.close().unwrap());
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        DESTROY_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        session.start().unwrap();
+        let pointer = (&**session.context.as_ref().unwrap() as *const Context<TestHandler>)
+            .cast_mut()
+            .cast();
+        let error = session.close().err().unwrap();
+        assert_eq!(error.disposition, IoDisposition::RemovedDevice);
+        assert!(error.context_retained);
+        // HAL can still call the retained pointer; its handler is closed forever.
+        unsafe {
+            dispatch::<TestHandler>(
+                42,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                pointer,
+            );
+        }
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        session.start().unwrap();
+        session
+            .context
+            .as_ref()
+            .unwrap()
+            .admission
+            .store(1, Ordering::Release);
+        assert_eq!(
+            session.close().err().unwrap().disposition,
+            IoDisposition::Fatal
+        );
+        // Startup cleanup can lose the device before Start was attempted.
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        assert_eq!(
+            session.close().err().unwrap().disposition,
+            IoDisposition::RemovedDevice
+        );
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        session
+            .context
+            .as_ref()
+            .unwrap()
+            .failed
+            .store(true, Ordering::Release);
+        assert_eq!(
+            session.close().err().unwrap().disposition,
+            IoDisposition::Fatal
+        );
+        DESTROY_ERROR.store(-8, Ordering::Relaxed);
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        session.start().unwrap();
+        assert_eq!(
+            session.close().err().unwrap().disposition,
+            IoDisposition::Fatal
+        );
+        STOP_ERROR.store(0, Ordering::Relaxed);
+        DESTROY_ERROR.store(0, Ordering::Relaxed);
         // Never-started registrations need only deregistration.
         drop(Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap());
-        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        assert_eq!(drops.load(Ordering::Relaxed), 3);
     }
 }

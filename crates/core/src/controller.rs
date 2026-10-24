@@ -2,6 +2,9 @@
 use crate::{CaptureState, Command, Config};
 
 pub trait Backend {
+    fn retained_io_contexts(&self) -> u64 {
+        0
+    }
     fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         None
     }
@@ -120,6 +123,9 @@ impl<B: Backend> Controller<B> {
     pub fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         self.backend.driver_diagnostics()
     }
+    pub fn retained_io_contexts(&self) -> u64 {
+        self.backend.retained_io_contexts()
+    }
     pub fn audio_view(&self) -> Option<crate::view::AudioView> {
         self.session.as_ref().and_then(|session| {
             self.backend
@@ -165,8 +171,14 @@ impl<B: Backend> Controller<B> {
             return Err("worker is shutting down".into());
         }
         match command {
-            Command::Start => self.wanted_send = true,
-            Command::Stop => self.wanted_send = false,
+            Command::Start => {
+                self.wanted_send = true;
+                self.record(None, crate::view::ControlEventKind::SendStarted, None);
+            }
+            Command::Stop => {
+                self.wanted_send = false;
+                self.record(None, crate::view::ControlEventKind::SendStopped, None);
+            }
             Command::Quit => {
                 self.quitting = true;
                 self.wanted_send = false;
@@ -462,6 +474,117 @@ mod tests {
             },
         )
     }
+    #[test]
+    fn detached_sender_reopens_with_exact_policy_and_records_user_intent() {
+        use crate::view::ControlEventKind;
+        let mut worker = controller();
+        let config = Config {
+            left: 3,
+            right: 4,
+            mode: crate::Mode::Stereo,
+            muted: true,
+            ..worker.config().clone()
+        };
+        worker.command(Command::Configure(config.clone())).unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.healthy = false;
+        worker.backend.negotiate_fail = true;
+        worker.tick(100);
+        worker.tick(1100);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        assert!(worker.wanted_send());
+        assert_eq!(worker.config(), &config);
+        worker.backend.negotiate_fail = false;
+        worker.backend.healthy = true;
+        worker.tick(3100);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.backend.sends, [true, true]);
+        assert_eq!(worker.config(), &config);
+        let history = worker.history();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|event| event.kind == ControlEventKind::SendStarted)
+                .count(),
+            1
+        );
+        assert!(
+            !history
+                .iter()
+                .any(|event| event.kind == ControlEventKind::SendStopped)
+        );
+    }
+
+    #[test]
+    fn stop_while_device_is_absent_survives_wake_and_restores_preview() {
+        use crate::{SystemEvent, view::ControlEventKind};
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.healthy = false;
+        worker.backend.negotiate_fail = true;
+        worker.tick(100);
+        worker.tick(1100);
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(1200);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        assert!(!worker.wanted_send());
+        worker.backend.healthy = true;
+        worker.backend.negotiate_fail = false;
+        worker.tick(2200);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert_eq!(worker.backend.sends, [true, false]);
+        assert!(
+            worker
+                .history()
+                .iter()
+                .any(|event| event.kind == ControlEventKind::SendStopped)
+        );
+    }
+
+    #[test]
+    fn unknown_teardown_failure_stays_blocked_across_recovery_commands() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.close_fail = true;
+        worker.backend.healthy = false;
+        worker.tick(100);
+        worker.backend.close_fail = false;
+        worker.backend.healthy = true;
+        for command in [
+            Command::System(SystemEvent::Sleep),
+            Command::System(SystemEvent::Wake),
+            Command::System(SystemEvent::ScreensWake),
+            Command::Refresh,
+            Command::Stop,
+            Command::Start,
+            Command::PermissionChanged(false),
+            Command::PermissionChanged(true),
+            Command::Configure(Config {
+                device_uid: "replacement".into(),
+                ..worker.config().clone()
+            }),
+        ] {
+            worker.command(command).unwrap();
+            worker.tick(100000);
+            assert_eq!(worker.state(), CaptureState::Blocked);
+            assert_eq!(worker.backend.opens, 1);
+        }
+        assert!(worker.wanted_send());
+        assert_eq!(worker.error(), Some("close failed"));
+    }
+
     #[test]
     fn sleep_releases_streams_and_wake_preserves_stop_mute_and_selection() {
         use crate::SystemEvent;

@@ -596,3 +596,54 @@ Intel hardware execution remain unverified for this change. The async sleep
 signal does not guarantee HAL close completes before the OS suspends the worker;
 wake-only handling also closes stale sessions. No installed application, driver,
 audio-service state, receiver settings or microphone authorization was changed.
+
+
+### 2026-10-24 removed-device teardown recovery, 0.5.5
+
+The user supplied a 0.5.4 diagnostic after sleep and dock disconnection. It records
+`retry_scheduled` for a device or format change, followed by `teardown_failed`.
+Input Stop returned 560227702, CoreAudio `!dev`, while the output closed and routing
+stopped. The controller then stayed `Blocked`, including after later sleep and
+wake events. Apple's SDK defines `!dev` as an ID that does not map to a valid
+AudioDevice. The old registration returned immediately on this Stop error,
+retained its callback allocation, and permanently blocked recovery.
+
+Registration now attempts Destroy after Stop `!dev`. Successful Destroy releases
+storage only when no callback remains active. If Destroy also reports a removed
+device, a typed `RemovedDevice` disposition permits retry only when callback
+admission is closed, no handler is active, and no callback panic occurred. The
+allocation remains retained because a failed Destroy does not prove that HAL can
+never call its pointer again. Unknown errors and active or panicked callbacks
+remain fatal. Startup cleanup uses the same distinction between retention and
+fatal failure.
+
+A single atomic word now holds the admission closed bit and active count. Closing
+and admitting a callback therefore have one ordering point. A callback admitted
+before close remains visible in the count; later calls return without running the
+handler. Each new session owns separate routing, queues, meters, and clock state.
+Retained old contexts stay closed permanently and cannot process a new session.
+This preserves callback pointer safety at the cost of retained memory on affected
+removals. The native backend counts retained contexts from startup and shutdown,
+and snapshots and saved diagnostics expose the cumulative `retained_io_contexts`
+value for the application process.
+
+Control history now records `SendStarted` and `SendStopped`. These events preserve
+explicit send intent in the diagnostic history when a report has `wanted_send`
+false, instead of requiring that intent to be inferred from a later snapshot.
+
+Native regression tests cover Stop `!dev` followed by successful Destroy, retained
+removed-device cleanup, late dispatch rejection, active callbacks, panic, unknown
+errors, and startup and shutdown classification. A concurrent barrier test holds
+one admitted handler while closing admission, rejects another dispatch, and
+checks that the first handler's completion leaves the gate closed with zero active
+handlers. `../run-rust.sh cargo test -p channelbridge-macos --lib` passed. Core
+regressions cover send history and retained-context reporting. Broader release
+checks and package results are recorded separately when completed.
+
+The change is in the application. An app-only 0.5.5 update works with the existing
+0.5.4 driver using diagnostic protocol 1 and does not require restarting the HAL
+audio service. The normal full package also includes the 0.5.5 driver. This record
+does not claim that the updated app has passed physical unplug/replug, actual Mac
+sleep/wake, or receiver-app audio recovery. Those acceptance checks remain with
+the user. No installed app, driver, or audio-service state was changed during
+these source and regression-test updates.
