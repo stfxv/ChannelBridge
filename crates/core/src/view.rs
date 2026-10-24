@@ -81,6 +81,17 @@ pub struct AudioDiagnostics {
     pub output_peak_dbfs: Option<[Option<f32>; 2]>,
     pub output_failed: bool,
 }
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeviceInventory {
+    pub choices: Vec<DeviceChoice>,
+    pub completeness: InventoryCompleteness,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InventoryCompleteness {
+    #[default]
+    Complete,
+    Partial { warning: String },
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceChoice {
     pub uid: String,

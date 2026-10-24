@@ -8,8 +8,8 @@ pub trait Backend {
     fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         None
     }
-    fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
-        Ok(Vec::new())
+    fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
+        Ok(crate::view::DeviceInventory::default())
     }
     type Pending;
     type Session;
@@ -85,7 +85,7 @@ impl<B: Backend> Controller<B> {
             history: std::sync::Arc::from([]),
         }
     }
-    pub fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+    pub fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
         self.backend.devices()
     }
     pub fn history(&self) -> std::sync::Arc<[crate::view::ControlEvent]> {
@@ -179,6 +179,15 @@ impl<B: Backend> Controller<B> {
             );
         }
     }
+    pub(crate) fn persist_configuration(&mut self, config: Config) -> Result<bool, String> {
+        config
+            .validate_selection()
+            .map_err(|error| format!("{error:?}"))?;
+        self.backend.save(&config)?;
+        let changed_device = self.config.device_uid != config.device_uid;
+        self.config = config;
+        Ok(changed_device)
+    }
     pub fn command(&mut self, command: Command) -> Result<(), String> {
         if self.quitting {
             return Err("worker is shutting down".into());
@@ -257,13 +266,7 @@ impl<B: Backend> Controller<B> {
                 self.retry_at = 0;
             }
             Command::Configure(config) => {
-                config
-                    .validate_selection()
-                    .map_err(|error| format!("{error:?}"))?;
-                // Commit before changing either the live route or saved policy.
-                self.backend.save(&config)?;
-                let changed_device = self.config.device_uid != config.device_uid;
-                self.config = config;
+                let changed_device = self.persist_configuration(config)?;
                 if changed_device {
                     self.record(None, crate::view::ControlEventKind::DeviceChanged, None);
                     self.disconnect()?;
