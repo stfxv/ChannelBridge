@@ -63,6 +63,16 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
         move || Ok(FakeAudio(backend_lifecycle)),
     )
     .expect("sleep fixture worker");
+    let settings_screen = Screen::new(main, None);
+    let mut settings_snapshot = worker.snapshot();
+    settings_snapshot.config.device_uid.clear();
+    settings_screen.update(&settings_snapshot);
+    assert!(!settings_screen.auto_send_button.isEnabled());
+    assert!(!settings_screen.mute_button.isEnabled());
+    settings_snapshot.config.device_uid = "sleep-wake-fixture".into();
+    settings_screen.update(&settings_snapshot);
+    assert!(settings_screen.auto_send_button.isEnabled());
+    assert!(settings_screen.mute_button.isEnabled());
     let delegate = AppDelegate::new(
         main,
         Runtime {
