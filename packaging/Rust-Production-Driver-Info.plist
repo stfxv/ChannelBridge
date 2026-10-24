@@ -5,8 +5,8 @@
 <key>CFBundleIdentifier</key><string>local.channelbridge.driver</string>
 <key>CFBundleName</key><string>ChannelBridge</string>
 <key>CFBundlePackageType</key><string>BNDL</string>
-<key>CFBundleVersion</key><string>7</string>
-<key>CFBundleShortVersionString</key><string>0.5.6</string>
+<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleShortVersionString</key><string>0.5.7</string>
 <key>CFPlugInDynamicRegistration</key><false/>
 <key>CFPlugInFactories</key><dict><key>F8E2A9C4-712B-4BF6-96F2-5D4F7E301882</key><string>ChannelBridge_Create</string></dict>
 <key>CFPlugInTypes</key><dict><key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key><array><string>F8E2A9C4-712B-4BF6-96F2-5D4F7E301882</string></array></dict>

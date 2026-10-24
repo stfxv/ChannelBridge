@@ -42,10 +42,19 @@ latest power state; even a wake without a preceding sleep retires the old route.
 
 The controller keeps the user's `wanted_send` intent separate from connection
 state. A disconnected sending route can resume after recovery; a user-stopped
-route resumes input preview only. Start/Stop does not recreate the IOProcs.
+route resumes input preview only by default. The persisted `auto_send_on_resume`
+option may request sending at the next system wake, confirmed selected-input
+return, or live-session health recovery, including after a manual Stop. It defaults
+to false. Enabling it, changing input selection, and startup with an already
+connected input do not request sending. Manual intent takes precedence over
+automatic recovery detected in the same worker turn. Start/Stop does not recreate
+the IOProcs.
 Settings are validated and saved before the committed model or live route changes.
 Unavailable selected channels remain explicit selections and are never replaced
-with another channel automatically.
+with another channel automatically. Input inventory preserves usable choices
+alongside a warning if individual devices cannot be read. A partial inventory can
+prove that a selected UID is present, but cannot prove absence. A whole inventory
+failure keeps the previous display and presence evidence.
 
 Session creation first checks microphone permission and the live driver's
 diagnostic protocol/initialization. It follows the physical source's nominal
@@ -56,12 +65,18 @@ FIFO, meters, and callback storage before registration. Each IOProc disables
 its unused direction, then output and capture start with sending disabled.
 
 Transient failure closes the old session and schedules a retry with exponential
-backoff from one to thirty seconds. Successful opening resets the backoff. A
-session whose callback teardown cannot be confirmed blocks new registration;
-Stop/Destroy failures retain callback storage to avoid freeing memory still
-reachable by HAL. Both directions are cleaned up even if the first fails.
-Quit is asynchronous for AppKit and waits for the worker's completion snapshot
-before completing application termination.
+backoff from one to thirty seconds. Successful opening resets the backoff.
+Unknown teardown errors, active callbacks, or callback panics block new
+registration. A removed-device `!dev` error may permit retry after callback
+admission is closed and no handler remains active. Unconfirmed Destroy retains
+its permanently disabled allocation, counted by `retained_io_contexts`, instead
+of freeing storage that HAL might still reach. Both directions are cleaned up
+even if the first fails.
+Quit seals command admission and is asynchronous for AppKit. The worker closes
+audio before attempting the remaining accepted configuration saves in FIFO order.
+This persistence-only path cannot reopen or route audio. Final completion includes
+configuration acknowledgements and failures. AppKit waits for that snapshot before
+completing application termination.
 
 ## Sleep, wake, and progress monitoring
 
@@ -95,7 +110,10 @@ Selected stereo frames cross a bounded single-producer/single-consumer FIFO.
 The virtual output IOProc uses the observed source-clock speed and queue/history
 fill level to adjust a windowed-sinc interpolator smoothly. The provisional
 input target is 16 ms, with a minimum of 256 frames; this does not establish
-the total physical-to-receiver latency. Startup waits for the safety margin.
+the total physical-to-receiver latency. Startup also requires enough input for
+the current complete output callback at the maximum permitted resampling step,
+including interpolation lookahead. Priming preserves PCM rather than repeatedly
+rendering a partial block and discarding its lookahead.
 Real shortages preserve valid output, fade the boundary, emit silence for the
 missing frames, and re-prime interpolation history.
 

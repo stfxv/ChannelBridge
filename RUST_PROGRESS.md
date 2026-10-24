@@ -688,3 +688,64 @@ local artifact verification manifest.
 The installed app was observed as 0.5.5 before building this feature. The user's
 report confirms audio acquisition, but does not establish physical sleep/wake or
 receiver-app recovery. Those hardware checks for 0.5.6 remain pending.
+
+
+### 2026-10-24 full Rust design and code audit, 0.5.7
+
+Independent readers reviewed the seven production Rust crates, AppKit and
+controller lifecycle, native IO ownership, DSP and HAL driver, ABI/contract,
+and distribution scripts at baseline 88ba201. The crate boundaries remain
+appropriate: AppKit owns UI, the control worker owns HAL lifecycle and saved
+policy, callback processors own mutable DSP state, and the driver owns a
+separate timestamped ring. The audit produced five concrete corrections.
+
+- Output started at the provisional 16 ms target without requiring enough input
+  for the requested callback plus sinc lookahead. At 48 kHz with a 768-frame
+  target and regular 1024-frame capture/output blocks, each callback produced
+  927 frames, emitted 97 missing frames, and discarded 97 lookahead frames.
+  The same failure repeated every cycle. Inactive rendering now waits for
+  the larger of the configured target and the maximum-step input needed for
+  a complete output block plus lookahead and rounding. Priming preserves PCM.
+  The feedback target stays unchanged. The regression requires full PCM for
+  at least 15 of 16 callbacks at both 1024 and 4096 frames, permitting priming
+  only on the first callback. Restart with a changed block size and an
+  impossible queue capacity also have focused coverage.
+- Quit previously exited before processing an accepted Configure. A gated
+  factory proof observed zero saves where one was required. A short admission
+  gate now seals the only sender. The worker closes audio, then attempts
+  remaining accepted configurations in FIFO order through the same validation
+  and persistence helper, without opening or routing. Errors and completed
+  attempt counts reach the final snapshot. An already executing synchronous
+  backend operation may finish before the worker observes shutdown; this is
+  not a preemptive cancellation guarantee.
+- One failed CoreAudio device entry previously discarded all valid input
+  choices. Inventory now carries complete or partial coverage with a bounded
+  warning. Positive selected-UID presence remains usable in a partial list;
+  missing from a partial list is unknown and does not establish absence.
+  Whole-list failure retains the previous display and presence history.
+  Existing live-session health recovery policy is unchanged.
+- Auto-send was enabled without a selected UID, although Configure rejected
+  that state. The checkbox now uses the same committed-UID guard as mute.
+- Overlay-copying a new app onto dist could retain obsolete signed resources.
+  A fixture reproduced strict signature failure after that copy. The build
+  now replaces the distribution bundle and verifies its strict signature.
+  The fixed build-script fixture removed the obsolete resource and matched
+  every file in the source app.
+
+`../run-rust.sh bash scripts/test.sh` passed on the integrated 0.5.7 source.
+Default and production each passed 104 unit tests plus six shutdown integration
+tests. Formatting, Clippy, both AppKit power-notification smoke paths, DSP and
+native allocation checks, two Loom models, release response assertions, Apple
+SDK ABI comparison, and the ASan/UBSan fake HAL harness also passed. Rust 1.85.0
+workspace tests passed in the minimum-supported-toolchain check. Separate source
+reviews accepted the DSP and control/inventory fixes. The DSP reviewer reran all
+six output tests. Final build and package checks are recorded in the local
+artifact verification manifest.
+
+The audit did not install 0.5.7, open physical audio, change the installed driver,
+or induce actual system sleep. Physical reconnect and sleep timing, receiver-app
+audio, long calls, and Intel execution remain acceptance work. Closed retained
+IOProc contexts after uncertain removed-device cleanup remain a deliberate memory
+cost until process exit, rather than a license to free a pointer still reachable
+by HAL. The app-only update remains compatible with protocol 1 of the installed
+0.5.4 driver.
