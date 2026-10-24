@@ -647,3 +647,44 @@ does not claim that the updated app has passed physical unplug/replug, actual Ma
 sleep/wake, or receiver-app audio recovery. Those acceptance checks remain with
 the user. No installed app, driver, or audio-service state was changed during
 these source and regression-test updates.
+
+
+### 2026-10-24 automatic sending after resume, 0.5.6
+
+The user confirmed that 0.5.5 acquires audio and requested an option to enter
+sending mode after resume. `auto_send_on_resume` is a persisted boolean whose
+default is false, including when loading older settings. The AppKit checkbox is
+labelled `復帰時に自動送出`. Enabling it requests sending on a later system wake,
+return of the selected input, or recovery of an unhealthy live input session.
+Enabling the checkbox, changing the selected input, and starting the app with an
+already connected input do not themselves request sending. Mute and channel
+selection remain in force. Permission checks and the unsafe-teardown latch remain
+unchanged.
+
+Input inventory distinguishes the first successful observation from an absent
+selected UID returning. Each committed input selection change resets that
+baseline immediately, including changes away and back between inventory polls.
+Inventory errors do not establish absence. Input-return routing is deferred until
+the worker applies manual intent. A Stop arriving during returning-device
+inventory or coinciding with health recovery wins in that worker turn; a later
+separate wake or reconnect may request sending again.
+
+Diagnostics include the option and record `InputReconnected` and
+`AutomaticSendRequested` with its wake or reconnect reason. Core tests cover
+defaults, persistence, selection changes, auto-send triggers, permission and
+teardown guards, and manual Stop ordering. A gated worker test makes Stop arrive
+during inventory and verifies that only a preview route opens. AppKit smoke
+checks cover the checkbox, persisted enabled and disabled values, save failure,
+queue shutdown, no immediate sending, and controls fitting inside the window.
+`../run-rust.sh bash scripts/test.sh` passed after feature integration. It covers
+formatting, Clippy, workspace tests in default and production modes, fake-audio
+AppKit sleep notifications, real-time allocation checks, Loom models, release
+response-grid assertions, the Apple SDK ABI comparison, and ASan/UBSan driver
+checks. Separate default and production AppKit `--smoke` runs passed the new
+checkbox checks. An independent reviewer reran all 34 core tests and found no
+concrete blockers. Universal builds and package verification are recorded in the
+local artifact verification manifest.
+
+The installed app was observed as 0.5.5 before building this feature. The user's
+report confirms audio acquisition, but does not establish physical sleep/wake or
+receiver-app recovery. Those hardware checks for 0.5.6 remain pending.

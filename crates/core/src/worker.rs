@@ -102,7 +102,8 @@ fn apply_command<B: Backend>(
     command: Command,
     error: &mut Option<String>,
     configuration_attempt: &mut u64,
-) {
+) -> bool {
+    let previous_uid = controller.config().device_uid.clone();
     let configuring = matches!(command, Command::Configure(_));
     let clear = matches!(command, Command::Configure(_) | Command::Refresh);
     match controller.command(command) {
@@ -113,6 +114,7 @@ fn apply_command<B: Backend>(
     if configuring {
         *configuration_attempt = configuration_attempt.saturating_add(1);
     }
+    previous_uid != controller.config().device_uid
 }
 fn apply_system_events<B: Backend>(
     events: &SystemEvents,
@@ -133,6 +135,34 @@ fn apply_system_events<B: Backend>(
         );
     }
     power.is_some() || screens_woke
+}
+#[derive(Default)]
+struct InputPresence {
+    observed: Option<(String, bool)>,
+}
+impl InputPresence {
+    fn observe(&mut self, uid: &str, devices: &[crate::view::DeviceChoice]) -> bool {
+        let present = devices.iter().any(|device| device.uid == uid);
+        let reconnected = self
+            .observed
+            .as_ref()
+            .is_some_and(|(previous_uid, previous_present)| {
+                previous_uid == uid && !previous_present && present && !uid.is_empty()
+            });
+        self.observed = Some((uid.to_owned(), present));
+        reconnected
+    }
+}
+fn apply_queued_command<B: Backend>(
+    controller: &mut Controller<B>,
+    command: Command,
+    error: &mut Option<String>,
+    configuration_attempt: &mut u64,
+    presence: &mut InputPresence,
+) {
+    if apply_command(controller, command, error, configuration_attempt) {
+        presence.observed = None;
+    }
 }
 impl Worker {
     /// Construct the backend inside its owning thread, allowing thread-confined
@@ -207,6 +237,7 @@ impl Worker {
                 let mut devices = Arc::<[crate::view::DeviceChoice]>::from([]);
                 let mut device_error = None;
                 let mut next_inventory = Instant::now();
+                let mut input_presence = InputPresence::default();
                 let mut driver_diagnostics = None;
                 loop {
                     if exiting.load(Ordering::Acquire) {
@@ -223,11 +254,12 @@ impl Worker {
                     }
                     match receiver.recv_timeout(Duration::from_millis(20)) {
                         Ok(command) => {
-                            apply_command(
+                            apply_queued_command(
                                 &mut controller,
                                 command,
                                 &mut command_error,
                                 &mut configuration_attempt,
+                                &mut input_presence,
                             );
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -237,11 +269,12 @@ impl Worker {
                     for _ in 0..31 {
                         match receiver.try_recv() {
                             Ok(command) => {
-                                apply_command(
+                                apply_queued_command(
                                     &mut controller,
                                     command,
                                     &mut command_error,
                                     &mut configuration_attempt,
+                                    &mut input_presence,
                                 );
                             }
                             Err(_) => break,
@@ -259,7 +292,38 @@ impl Worker {
                         next_tick = Instant::now();
                         next_inventory = Instant::now();
                     }
-                    match requested.swap(0, Ordering::AcqRel) {
+                    if Instant::now() >= next_inventory {
+                        match controller.devices() {
+                            Ok(current) => {
+                                if input_presence.observe(&controller.config().device_uid, &current)
+                                {
+                                    apply_command(
+                                        &mut controller,
+                                        Command::InputReconnected,
+                                        &mut command_error,
+                                        &mut configuration_attempt,
+                                    );
+                                    next_tick = Instant::now();
+                                }
+                                devices = current.into();
+                                device_error = None;
+                            }
+                            Err(error) => device_error = Some(error),
+                        }
+                        driver_diagnostics = controller.driver_diagnostics().map(|reading| {
+                            crate::view::DriverDiagnostics {
+                                observed_worker_ms: start
+                                    .elapsed()
+                                    .as_millis()
+                                    .min(u64::MAX as u128)
+                                    as u64,
+                                reading,
+                            }
+                        });
+                        next_inventory = Instant::now() + Duration::from_secs(1);
+                    }
+                    let manual_intent = requested.swap(0, Ordering::AcqRel);
+                    match manual_intent {
                         1 => {
                             apply_command(
                                 &mut controller,
@@ -279,28 +343,11 @@ impl Worker {
                         _ => {}
                     }
                     if Instant::now() >= next_tick {
-                        controller.tick(start.elapsed().as_millis().min(u64::MAX as u128) as u64);
+                        controller.tick_with_manual_intent(
+                            start.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                            manual_intent != 0,
+                        );
                         next_tick = Instant::now() + Duration::from_millis(100);
-                    }
-                    if Instant::now() >= next_inventory {
-                        match controller.devices() {
-                            Ok(current) => {
-                                devices = current.into();
-                                device_error = None;
-                            }
-                            Err(error) => device_error = Some(error),
-                        }
-                        driver_diagnostics = controller.driver_diagnostics().map(|reading| {
-                            crate::view::DriverDiagnostics {
-                                observed_worker_ms: start
-                                    .elapsed()
-                                    .as_millis()
-                                    .min(u64::MAX as u128)
-                                    as u64,
-                                reading,
-                            }
-                        });
-                        next_inventory = Instant::now() + Duration::from_secs(1);
                     }
                     publish(Snapshot {
                         state: controller.state(),
@@ -454,6 +501,211 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn manual_stop_arriving_during_return_inventory_wins_before_open() {
+        struct PresenceBackend {
+            present: Arc<AtomicBool>,
+            inventory_count: Arc<AtomicUsize>,
+            entered: mpsc::Sender<()>,
+            release: Option<mpsc::Receiver<()>>,
+            sends: Arc<Mutex<Vec<bool>>>,
+        }
+        impl Backend for PresenceBackend {
+            type Pending = ();
+            type Session = ();
+            fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+                self.inventory_count.fetch_add(1, Ordering::Release);
+                if !self.present.load(Ordering::Acquire) {
+                    return Ok(Vec::new());
+                }
+                if let Some(release) = self.release.take() {
+                    self.entered.send(()).unwrap();
+                    release.recv().unwrap();
+                }
+                Ok(vec![crate::view::DeviceChoice {
+                    uid: "source".into(),
+                    name: "Input".into(),
+                    channels: 2,
+                    rate: 48000.0,
+                    physical_inputs: Vec::new(),
+                    format_error: None,
+                }])
+            }
+            fn save(&mut self, _: &Config) -> Result<(), String> {
+                Ok(())
+            }
+            fn negotiate(&mut self, _: &Config) -> Result<(), String> {
+                if self.present.load(Ordering::Acquire) {
+                    Ok(())
+                } else {
+                    Err("absent".into())
+                }
+            }
+            fn ready(&mut self, _: &()) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn open(&mut self, _: &Config) -> Result<(), String> {
+                Ok(())
+            }
+            fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
+                self.sends.lock().unwrap().push(sending);
+                Ok(())
+            }
+            fn close(&mut self, _: ()) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let present = Arc::new(AtomicBool::new(false));
+        let inventory_count = Arc::new(AtomicUsize::new(0));
+        let sends = Arc::new(Mutex::new(Vec::new()));
+        let (entered, entry) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let backend = PresenceBackend {
+            present: Arc::clone(&present),
+            inventory_count: Arc::clone(&inventory_count),
+            entered,
+            release: Some(gate),
+            sends: Arc::clone(&sends),
+        };
+        let worker = Worker::spawn(
+            Config {
+                device_uid: "source".into(),
+                auto_send_on_resume: true,
+                ..Config::default()
+            },
+            move || Ok(backend),
+        )
+        .unwrap();
+        worker.send(Command::PermissionChanged(true)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while inventory_count.load(Ordering::Acquire) == 0 {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!worker.snapshot().wanted_send);
+        present.store(true, Ordering::Release);
+        entry.recv_timeout(Duration::from_secs(2)).unwrap();
+        worker.send(Command::Stop).unwrap();
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = worker.snapshot();
+            if snapshot.state == CaptureState::Previewing {
+                assert!(!snapshot.wanted_send);
+                assert!(snapshot.control_history.iter().any(
+                    |event| event.kind == crate::view::ControlEventKind::AutomaticSendRequested
+                ));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "return did not restore preview after manual stop"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            *sends.lock().unwrap(),
+            [false],
+            "no sending route may open before same-turn Stop"
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn queued_selection_changes_reset_absence_even_when_selection_returns_between_polls() {
+        let mut controller = Controller::new(
+            LocalBackend {
+                _local: Rc::new(()),
+                drops: Arc::new(AtomicUsize::new(0)),
+                panic_on_save: false,
+            },
+            Config {
+                device_uid: "source".into(),
+                ..Config::default()
+            },
+        );
+        let mut presence = InputPresence::default();
+        presence.observe("source", &[]);
+        let mut error = None;
+        let mut attempt = 0;
+        for uid in ["other", "source"] {
+            let config = Config {
+                device_uid: uid.into(),
+                ..controller.config().clone()
+            };
+            apply_queued_command(
+                &mut controller,
+                Command::Configure(config),
+                &mut error,
+                &mut attempt,
+                &mut presence,
+            );
+        }
+        assert!(presence.observed.is_none());
+        presence.observe("source", &[]);
+        let config = Config {
+            auto_send_on_resume: true,
+            ..controller.config().clone()
+        };
+        apply_queued_command(
+            &mut controller,
+            Command::Configure(config),
+            &mut error,
+            &mut attempt,
+            &mut presence,
+        );
+        assert_eq!(
+            presence.observed,
+            Some(("source".into(), false)),
+            "option changes preserve presence tracking"
+        );
+        let config = Config {
+            left: 0,
+            device_uid: "invalid".into(),
+            ..controller.config().clone()
+        };
+        apply_queued_command(
+            &mut controller,
+            Command::Configure(config),
+            &mut error,
+            &mut attempt,
+            &mut presence,
+        );
+        assert!(error.is_some());
+        assert_eq!(presence.observed, Some(("source".into(), false)));
+    }
+
+    #[test]
+    fn input_presence_requires_a_real_return_of_the_same_selected_uid() {
+        let device = crate::view::DeviceChoice {
+            uid: "source".into(),
+            name: "Input".into(),
+            channels: 2,
+            rate: 48000.0,
+            physical_inputs: Vec::new(),
+            format_error: None,
+        };
+        let mut presence = InputPresence::default();
+        assert!(
+            !presence.observe("source", std::slice::from_ref(&device)),
+            "startup present is not a reconnect"
+        );
+        assert!(!presence.observe("source", &[]));
+        assert!(presence.observe("source", std::slice::from_ref(&device)));
+        assert!(!presence.observe("source", std::slice::from_ref(&device)));
+        assert!(
+            !presence.observe("other", &[]),
+            "selection changes establish a baseline"
+        );
+        assert!(!presence.observe("source", std::slice::from_ref(&device)));
+        let mut absent_at_startup = InputPresence::default();
+        assert!(!absent_at_startup.observe("source", &[]));
+        assert!(absent_at_startup.observe("source", &[device]));
+    }
+
     #[test]
     fn full_queue_does_not_block_stop_or_shutdown_and_backend_stays_local() {
         let (release, gate) = mpsc::channel();

@@ -131,6 +131,7 @@ impl RoutingControls {
             right: 16,
             mode: Mode::Stereo,
             muted: false,
+            ..Config::default()
         };
         self.update(&saved, 2, true, false);
         assert_eq!(self.left.indexOfSelectedItem(), 0);

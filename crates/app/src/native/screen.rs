@@ -15,6 +15,7 @@ pub(super) struct Screen {
     pub(super) permission_button: Retained<NSButton>,
     pub(super) send_button: Retained<NSButton>,
     pub(super) mute_button: Retained<NSButton>,
+    pub(super) auto_send_button: Retained<NSButton>,
     pub(super) meters: crate::input_meters::InputMeters,
     pub(super) routing: crate::routing_controls::RoutingControls,
     pub(super) window: Retained<NSWindow>,
@@ -30,7 +31,7 @@ pub(super) struct Screen {
 }
 impl Screen {
     pub(super) fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 440.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 472.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -108,13 +109,31 @@ impl Screen {
         for index in 0..view.subviews().len() {
             let child = view.subviews().objectAtIndex(index);
             let mut frame = child.frame();
-            frame.origin.y += 40.0;
+            frame.origin.y += 72.0;
             child.setFrame(frame);
         }
         status.setFrame(NSRect::new(
             NSPoint::new(20.0, 10.0),
             NSSize::new(340.0, 25.0),
         ));
+        // SAFETY: the retained main-thread delegate installs target/action later.
+        let auto_send_button = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                ns_string!("復帰時に自動送出"),
+                None,
+                None,
+                main,
+            )
+        };
+        auto_send_button.setFrame(NSRect::new(
+            NSPoint::new(20.0, 86.0),
+            NSSize::new(340.0, 24.0),
+        ));
+        auto_send_button.setToolTip(Some(ns_string!(
+            "有効にすると、現在停止中でも次のシステムのスリープ復帰時や入力機器の再接続時に送出を開始します。ミュート設定は維持します。有効にした直後やアプリ起動時には開始しません。"
+        )));
+        auto_send_button.setEnabled(false);
+        view.addSubview(&auto_send_button);
         let export = super::export::Export::new(main);
         view.addSubview(&export.button);
         view.addSubview(&export.label);
@@ -128,6 +147,7 @@ impl Screen {
             permission_button,
             send_button,
             mute_button,
+            auto_send_button,
             meters,
             routing,
             window,
@@ -207,6 +227,9 @@ impl Screen {
         });
         self.mute_button
             .setEnabled(self.devices.isEnabled() && !snapshot.config.device_uid.is_empty());
+        self.auto_send_button
+            .setState(isize::from(snapshot.config.auto_send_on_resume));
+        self.auto_send_button.setEnabled(self.devices.isEnabled());
         self.overview_button
             .setEnabled(selected.is_some() && !snapshot.finished);
         self.routing.update(
@@ -363,6 +386,16 @@ impl Screen {
         let snapshot = worker.snapshot();
         let mut config = snapshot.config.clone();
         config.muted = !config.muted;
+        self.submit_config(worker, &snapshot, config);
+    }
+    pub(super) fn toggle_auto_send(&self, worker: &channelbridge_core::worker::Worker) {
+        let snapshot = worker.snapshot();
+        if !self.auto_send_button.isEnabled() {
+            self.update(&snapshot);
+            return;
+        }
+        let mut config = snapshot.config.clone();
+        config.auto_send_on_resume = !config.auto_send_on_resume;
         self.submit_config(worker, &snapshot, config);
     }
     pub(super) fn select_device(&self, worker: &channelbridge_core::worker::Worker) {

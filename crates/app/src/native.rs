@@ -97,6 +97,12 @@ define_class!(
                 runtime.screen.toggle_mute(&runtime.worker);
             }
         }
+        #[unsafe(method(toggleAutoSend:))]
+        fn toggle_auto_send(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                runtime.screen.toggle_auto_send(&runtime.worker);
+            }
+        }
         #[unsafe(method(selectRouting:))]
         fn select_routing(&self, sender: &NSPopUpButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
@@ -253,6 +259,7 @@ pub fn run() {
             (&screen.permission_button, sel!(requestMicrophone:)),
             (&screen.send_button, sel!(toggleSend:)),
             (&screen.mute_button, sel!(toggleMute:)),
+            (&screen.auto_send_button, sel!(toggleAutoSend:)),
             (&screen.export.button, sel!(saveDiagnostics:)),
         ] {
             // SAFETY: matching main-thread delegate selectors; delegate retained
@@ -340,7 +347,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                17
+                18
             );
             assert_eq!(
                 runtime.screen.export.button.title().to_string(),

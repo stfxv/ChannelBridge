@@ -287,6 +287,61 @@ pub(super) fn device_save(main: MainThreadMarker) {
         muted.config
     );
     assert_eq!(screen.mute_button.title().to_string(), "ミュート解除");
+    let checkbox_frame = screen.auto_send_button.frame();
+    let content = screen.window.contentView().expect("preference content");
+    let children = content.subviews();
+    for index in 0..children.len() {
+        let frame = children.objectAtIndex(index).frame();
+        assert!(frame.origin.y >= 0.0);
+        assert!(frame.origin.y + frame.size.height <= content.frame().size.height);
+    }
+    assert!(
+        screen.export.button.frame().origin.y + screen.export.button.frame().size.height
+            < checkbox_frame.origin.y
+    );
+    assert!(
+        checkbox_frame.origin.y + checkbox_frame.size.height < screen.send_button.frame().origin.y
+    );
+    assert_eq!(screen.auto_send_button.state(), 0);
+    assert!(screen.auto_send_button.isEnabled());
+    std::fs::remove_file(&destination).expect("replace config with failure fixture");
+    std::fs::create_dir(&destination).expect("create preference save failure");
+    screen.auto_send_button.setState(1);
+    screen.toggle_auto_send(&worker);
+    assert_eq!(screen.auto_send_button.state(), 0);
+    assert!(!screen.auto_send_button.isEnabled());
+    let rejected = wait(&|snapshot| snapshot.configuration_attempt > muted.configuration_attempt);
+    screen.update(&rejected);
+    assert!(rejected.command_error.is_some());
+    assert_eq!(rejected.config, muted.config);
+    assert_eq!(screen.auto_send_button.state(), 0);
+    assert_eq!(screen.devices.indexOfSelectedItem(), 1);
+    assert!(screen.auto_send_button.isEnabled());
+    std::fs::remove_dir(&destination).expect("remove preference save failure");
+    screen.auto_send_button.setState(1);
+    screen.toggle_auto_send(&worker);
+    let enabled = wait(&|snapshot| snapshot.configuration_attempt > rejected.configuration_attempt);
+    screen.update(&enabled);
+    let mut expected = muted.config.clone();
+    expected.auto_send_on_resume = true;
+    assert_eq!(enabled.config, expected);
+    assert_eq!(
+        channelbridge_core::storage::load(&destination).expect("resume preference"),
+        expected
+    );
+    assert_eq!(screen.auto_send_button.state(), 1);
+    assert!(!enabled.wanted_send);
+    assert_eq!(screen.devices.indexOfSelectedItem(), 1);
+    screen.auto_send_button.setState(0);
+    screen.toggle_auto_send(&worker);
+    let disabled = wait(&|snapshot| snapshot.configuration_attempt > enabled.configuration_attempt);
+    screen.update(&disabled);
+    assert_eq!(disabled.config, muted.config);
+    assert_eq!(screen.auto_send_button.state(), 0);
+    assert_eq!(
+        channelbridge_core::storage::load(&destination).expect("disabled resume preference"),
+        muted.config
+    );
     let mut recovery = muted.clone();
     recovery.wanted_send = true;
     recovery.state = channelbridge_core::CaptureState::Recovering;
@@ -301,6 +356,11 @@ pub(super) fn device_save(main: MainThreadMarker) {
     assert!(!screen.send_button.isEnabled());
     worker.request_shutdown();
     wait(&|snapshot| snapshot.finished);
+    screen.auto_send_button.setEnabled(true);
+    screen.auto_send_button.setState(1);
+    screen.toggle_auto_send(&worker);
+    assert_eq!(screen.auto_send_button.state(), 0);
+    assert!(screen.action_error.borrow().is_some());
     worker.join().expect("fixture worker shutdown");
     std::fs::remove_dir_all(directory).expect("remove fixture");
     println!(
