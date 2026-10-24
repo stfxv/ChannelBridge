@@ -556,3 +556,196 @@ Values exceeding unity were observed and must not be described as guaranteed
 clipping to +/-1. No sample waveforms were retained.
 
 Official 0.5.3 full Rust test script, production workspace tests/Clippy and production Universal package build passed. Expanded payload path/type/mode/all-file hashes, signatures and offline production source rebuild passed. dist/ contains the official app and package. Actual production installation/reload remains separate from release promotion; pkgbuild environment warnings remain unresolved.
+
+### 2026-10-05 sleep/wake recovery, 0.5.4
+
+The user reports no automatic physical-input stream reacquisition and no virtual
+microphone audio after system sleep followed by screen wake. A fake-audio AppKit
+test posted the real NSWorkspace sleep notification to the workspace center. On
+0.5.3 it failed with `state=Sending, opens=1, closes=0`: the application did not
+release or reacquire a session in response to power notifications. Native adapter
+tests also reproduced health false positives with invalid input timestamps,
+rejected/empty output buffers and perpetual output priming while callbacks kept
+arriving. These reproduce code-level recovery gaps, not an actual hardware sleep.
+
+0.5.4 adds a retained workspace observer whose selectors only signal atomics.
+The worker receives power signals independently of the bounded settings queue.
+System sleep suspends negotiation and closes the current session; wake retires
+any remaining session, clears retry/pending state and negotiates fresh devices.
+Send/stop intent, mute and channel selection survive. Screen wake alone refreshes
+inventory/health without interrupting a healthy route or lifting system suspension.
+An unsafe teardown failure remains blocked, and wake never grants permission.
+
+Native stream health is now a separate time-injected module. Capture and output
+adapters publish accepted nonzero frame counts, including preview and mute. These
+are watched independently for two-second stalls. Sending additionally watches
+rendered frames so permanent priming cannot count as successful output. Silence
+does not trigger recovery, and Stop/Start receives fresh buffering grace.
+
+`bash scripts/test.sh` passed after all edits: 80 unit tests in each test and
+production profile, formatting/Clippy, fake-audio AppKit notifications in both
+profiles, zero allocations/deallocations in DSP/native callback examples, two
+finite Loom models, release response sweep, SDK ABI comparison and ASan/UBSan
+fake HAL driver checks. The production Universal app/driver and installer build
+passed, including empty-cache offline source rebuild and expanded payload checks.
+The standard iconutil needed to run outside the execution sandbox. pkgbuild's
+existing environment warnings remain; payload verification completed successfully.
+
+Actual Mac sleep, receiver-app audio after wake, device reconnect delays and
+Intel hardware execution remain unverified for this change. The async sleep
+signal does not guarantee HAL close completes before the OS suspends the worker;
+wake-only handling also closes stale sessions. No installed application, driver,
+audio-service state, receiver settings or microphone authorization was changed.
+
+
+### 2026-10-24 removed-device teardown recovery, 0.5.5
+
+The user supplied a 0.5.4 diagnostic after sleep and dock disconnection. It records
+`retry_scheduled` for a device or format change, followed by `teardown_failed`.
+Input Stop returned 560227702, CoreAudio `!dev`, while the output closed and routing
+stopped. The controller then stayed `Blocked`, including after later sleep and
+wake events. Apple's SDK defines `!dev` as an ID that does not map to a valid
+AudioDevice. The old registration returned immediately on this Stop error,
+retained its callback allocation, and permanently blocked recovery.
+
+Registration now attempts Destroy after Stop `!dev`. Successful Destroy releases
+storage only when no callback remains active. If Destroy also reports a removed
+device, a typed `RemovedDevice` disposition permits retry only when callback
+admission is closed, no handler is active, and no callback panic occurred. The
+allocation remains retained because a failed Destroy does not prove that HAL can
+never call its pointer again. Unknown errors and active or panicked callbacks
+remain fatal. Startup cleanup uses the same distinction between retention and
+fatal failure.
+
+A single atomic word now holds the admission closed bit and active count. Closing
+and admitting a callback therefore have one ordering point. A callback admitted
+before close remains visible in the count; later calls return without running the
+handler. Each new session owns separate routing, queues, meters, and clock state.
+Retained old contexts stay closed permanently and cannot process a new session.
+This preserves callback pointer safety at the cost of retained memory on affected
+removals. The native backend counts retained contexts from startup and shutdown,
+and snapshots and saved diagnostics expose the cumulative `retained_io_contexts`
+value for the application process.
+
+Control history now records `SendStarted` and `SendStopped`. These events preserve
+explicit send intent in the diagnostic history when a report has `wanted_send`
+false, instead of requiring that intent to be inferred from a later snapshot.
+
+Native regression tests cover Stop `!dev` followed by successful Destroy, retained
+removed-device cleanup, late dispatch rejection, active callbacks, panic, unknown
+errors, and startup and shutdown classification. A concurrent barrier test holds
+one admitted handler while closing admission, rejects another dispatch, and
+checks that the first handler's completion leaves the gate closed with zero active
+handlers. `../run-rust.sh cargo test -p channelbridge-macos --lib` passed. Core
+regressions cover send history and retained-context reporting. Broader release
+checks and package results are recorded separately when completed.
+
+The change is in the application. An app-only 0.5.5 update works with the existing
+0.5.4 driver using diagnostic protocol 1 and does not require restarting the HAL
+audio service. The normal full package also includes the 0.5.5 driver. This record
+does not claim that the updated app has passed physical unplug/replug, actual Mac
+sleep/wake, or receiver-app audio recovery. Those acceptance checks remain with
+the user. No installed app, driver, or audio-service state was changed during
+these source and regression-test updates.
+
+
+### 2026-10-24 automatic sending after resume, 0.5.6
+
+The user confirmed that 0.5.5 acquires audio and requested an option to enter
+sending mode after resume. `auto_send_on_resume` is a persisted boolean whose
+default is false, including when loading older settings. The AppKit checkbox is
+labelled `復帰時に自動送出`. Enabling it requests sending on a later system wake,
+return of the selected input, or recovery of an unhealthy live input session.
+Enabling the checkbox, changing the selected input, and starting the app with an
+already connected input do not themselves request sending. Mute and channel
+selection remain in force. Permission checks and the unsafe-teardown latch remain
+unchanged.
+
+Input inventory distinguishes the first successful observation from an absent
+selected UID returning. Each committed input selection change resets that
+baseline immediately, including changes away and back between inventory polls.
+Inventory errors do not establish absence. Input-return routing is deferred until
+the worker applies manual intent. A Stop arriving during returning-device
+inventory or coinciding with health recovery wins in that worker turn; a later
+separate wake or reconnect may request sending again.
+
+Diagnostics include the option and record `InputReconnected` and
+`AutomaticSendRequested` with its wake or reconnect reason. Core tests cover
+defaults, persistence, selection changes, auto-send triggers, permission and
+teardown guards, and manual Stop ordering. A gated worker test makes Stop arrive
+during inventory and verifies that only a preview route opens. AppKit smoke
+checks cover the checkbox, persisted enabled and disabled values, save failure,
+queue shutdown, no immediate sending, and controls fitting inside the window.
+`../run-rust.sh bash scripts/test.sh` passed after feature integration. It covers
+formatting, Clippy, workspace tests in default and production modes, fake-audio
+AppKit sleep notifications, real-time allocation checks, Loom models, release
+response-grid assertions, the Apple SDK ABI comparison, and ASan/UBSan driver
+checks. Separate default and production AppKit `--smoke` runs passed the new
+checkbox checks. An independent reviewer reran all 34 core tests and found no
+concrete blockers. Universal builds and package verification are recorded in the
+local artifact verification manifest.
+
+The installed app was observed as 0.5.5 before building this feature. The user's
+report confirms audio acquisition, but does not establish physical sleep/wake or
+receiver-app recovery. Those hardware checks for 0.5.6 remain pending.
+
+
+### 2026-10-24 full Rust design and code audit, 0.5.7
+
+Independent readers reviewed the seven production Rust crates, AppKit and
+controller lifecycle, native IO ownership, DSP and HAL driver, ABI/contract,
+and distribution scripts at baseline 88ba201. The crate boundaries remain
+appropriate: AppKit owns UI, the control worker owns HAL lifecycle and saved
+policy, callback processors own mutable DSP state, and the driver owns a
+separate timestamped ring. The audit produced five concrete corrections.
+
+- Output started at the provisional 16 ms target without requiring enough input
+  for the requested callback plus sinc lookahead. At 48 kHz with a 768-frame
+  target and regular 1024-frame capture/output blocks, each callback produced
+  927 frames, emitted 97 missing frames, and discarded 97 lookahead frames.
+  The same failure repeated every cycle. Inactive rendering now waits for
+  the larger of the configured target and the maximum-step input needed for
+  a complete output block plus lookahead and rounding. Priming preserves PCM.
+  The feedback target stays unchanged. The regression requires full PCM for
+  at least 15 of 16 callbacks at both 1024 and 4096 frames, permitting priming
+  only on the first callback. Restart with a changed block size and an
+  impossible queue capacity also have focused coverage.
+- Quit previously exited before processing an accepted Configure. A gated
+  factory proof observed zero saves where one was required. A short admission
+  gate now seals the only sender. The worker closes audio, then attempts
+  remaining accepted configurations in FIFO order through the same validation
+  and persistence helper, without opening or routing. Errors and completed
+  attempt counts reach the final snapshot. An already executing synchronous
+  backend operation may finish before the worker observes shutdown; this is
+  not a preemptive cancellation guarantee.
+- One failed CoreAudio device entry previously discarded all valid input
+  choices. Inventory now carries complete or partial coverage with a bounded
+  warning. Positive selected-UID presence remains usable in a partial list;
+  missing from a partial list is unknown and does not establish absence.
+  Whole-list failure retains the previous display and presence history.
+  Existing live-session health recovery policy is unchanged.
+- Auto-send was enabled without a selected UID, although Configure rejected
+  that state. The checkbox now uses the same committed-UID guard as mute.
+- Overlay-copying a new app onto dist could retain obsolete signed resources.
+  A fixture reproduced strict signature failure after that copy. The build
+  now replaces the distribution bundle and verifies its strict signature.
+  The fixed build-script fixture removed the obsolete resource and matched
+  every file in the source app.
+
+`../run-rust.sh bash scripts/test.sh` passed on the integrated 0.5.7 source.
+Default and production each passed 104 unit tests plus six shutdown integration
+tests. Formatting, Clippy, both AppKit power-notification smoke paths, DSP and
+native allocation checks, two Loom models, release response assertions, Apple
+SDK ABI comparison, and the ASan/UBSan fake HAL harness also passed. Rust 1.85.0
+workspace tests passed in the minimum-supported-toolchain check. Separate source
+reviews accepted the DSP and control/inventory fixes. The DSP reviewer reran all
+six output tests. Final build and package checks are recorded in the local
+artifact verification manifest.
+
+The audit did not install 0.5.7, open physical audio, change the installed driver,
+or induce actual system sleep. Physical reconnect and sleep timing, receiver-app
+audio, long calls, and Intel execution remain acceptance work. Closed retained
+IOProc contexts after uncertain removed-device cleanup remain a deliberate memory
+cost until process exit, rather than a license to free a pointer still reachable
+by HAL. The app-only update remains compatible with protocol 1 of the installed
+0.5.4 driver.

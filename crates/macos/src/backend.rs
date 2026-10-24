@@ -1,16 +1,14 @@
 //! Native control backend for the selected deployment virtual microphone.
 use crate::{
     devices,
+    health::StreamHealth,
     rate::{RateFollow, Status},
     session::TestSession,
 };
 use channelbridge_audio::routing::{Mode, Selection};
 use channelbridge_core::{Config, controller::Backend, storage};
 use channelbridge_hal_abi::{StreamFormat, fourcc};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Instant};
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioGetHostClockFrequency() -> f64;
@@ -18,9 +16,10 @@ unsafe extern "C" {
 }
 pub struct NativeBackend {
     startup_failed: bool,
+    retained_io_contexts: u64,
     settings: PathBuf,
     ticks_per_second: u64,
-    activity: Option<((u64, u64), Instant)>,
+    stream_health: StreamHealth,
 }
 impl NativeBackend {
     pub fn new(settings: PathBuf) -> Result<Self, String> {
@@ -34,9 +33,10 @@ impl NativeBackend {
         }
         Ok(Self {
             startup_failed: false,
+            retained_io_contexts: 0,
             settings,
             ticks_per_second: frequency as u64,
-            activity: None,
+            stream_health: StreamHealth::default(),
         })
     }
 }
@@ -46,6 +46,74 @@ pub fn spawn_worker(
     config: Config,
 ) -> std::io::Result<channelbridge_core::worker::Worker> {
     channelbridge_core::worker::Worker::spawn(config, move || NativeBackend::new(settings))
+}
+
+fn project_inventory(
+    entries: Result<Vec<Result<devices::Device, devices::Error>>, devices::Error>,
+    mut read_streams: impl FnMut(
+        channelbridge_hal_abi::ObjectId,
+    ) -> Result<Vec<devices::Stream>, devices::Error>,
+) -> Result<channelbridge_core::view::DeviceInventory, String> {
+    use channelbridge_core::view::{DeviceChoice, InputFormat};
+
+    let entries = entries.map_err(|error| error.to_string())?;
+    let mut choices = Vec::new();
+    let mut failed_entries = 0usize;
+    let mut first_error = None;
+    for entry in entries {
+        let device = match entry {
+            Ok(device) => device,
+            Err(error) => {
+                failed_entries += 1;
+                first_error.get_or_insert_with(|| error.to_string());
+                continue;
+            }
+        };
+        if device.input_channels == 0
+            || [
+                channelbridge_contract::TEST_DEVICE_UID,
+                channelbridge_contract::PRODUCTION_DEVICE_UID,
+            ]
+            .contains(&device.uid.as_str())
+        {
+            continue;
+        }
+        let (physical_inputs, format_error) = match read_streams(device.id) {
+            Ok(streams) => (
+                streams
+                    .into_iter()
+                    .map(|stream| {
+                        let format = stream.physical_format;
+                        InputFormat {
+                            channels: format.channels_per_frame,
+                            rate: format.sample_rate,
+                            bits: format.bits_per_channel,
+                            float: format.format_flags & 1 != 0,
+                        }
+                    })
+                    .collect(),
+                None,
+            ),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        choices.push(DeviceChoice {
+            uid: device.uid,
+            name: device.name,
+            channels: device.input_channels,
+            rate: device.rate,
+            physical_inputs,
+            format_error,
+        });
+    }
+    Ok(channelbridge_core::view::DeviceInventory {
+        choices,
+        completeness: match first_error {
+            Some(error) => channelbridge_core::view::InventoryCompleteness::Partial {
+                warning: format!("{failed_entries} device entries could not be read: {error}"),
+            },
+            None => channelbridge_core::view::InventoryCompleteness::Complete,
+        },
+    })
 }
 
 fn selection(config: &Config) -> Result<Selection, String> {
@@ -147,51 +215,10 @@ impl Backend for NativeBackend {
             output_failed: output.failed,
         })
     }
-    fn devices(&mut self) -> Result<Vec<channelbridge_core::view::DeviceChoice>, String> {
-        use channelbridge_core::view::{DeviceChoice, InputFormat};
-        let entries = devices::list().map_err(|error| error.to_string())?;
-        let mut choices = Vec::new();
-        for entry in entries {
-            let device = entry.map_err(|error| error.to_string())?;
-            if device.input_channels == 0
-                || [
-                    channelbridge_contract::TEST_DEVICE_UID,
-                    channelbridge_contract::PRODUCTION_DEVICE_UID,
-                ]
-                .contains(&device.uid.as_str())
-            {
-                continue;
-            }
-            let (physical_inputs, format_error) = match devices::streams(device.id, fourcc(b"inpt"))
-            {
-                Ok(streams) => (
-                    streams
-                        .into_iter()
-                        .map(|stream| {
-                            let format = stream.physical_format;
-                            InputFormat {
-                                channels: format.channels_per_frame,
-                                rate: format.sample_rate,
-                                bits: format.bits_per_channel,
-                                float: format.format_flags & 1 != 0,
-                            }
-                        })
-                        .collect(),
-                    None,
-                ),
-                Err(error) => (Vec::new(), Some(error.to_string())),
-            };
-            choices.push(DeviceChoice {
-                uid: device.uid,
-                name: device.name,
-                channels: device.input_channels,
-                rate: device.rate,
-                physical_inputs,
-                format_error,
-            });
-        }
-        Ok(choices)
+    fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
+        project_inventory(devices::list(), |id| devices::streams(id, fourcc(b"inpt")))
     }
+
     fn audio_view(
         &self,
         session: &TestSession,
@@ -283,14 +310,24 @@ impl Backend for NativeBackend {
             Err(error) => {
                 self.startup_failed = error
                     .downcast_ref::<crate::session::StartupError>()
-                    .is_some_and(|error| error.context_retained)
+                    .is_some_and(|error| error.requires_stop)
                     || error
                         .downcast_ref::<crate::io::IoError>()
                         .is_some_and(|error| error.context_retained);
+                self.retained_io_contexts += error
+                    .downcast_ref::<crate::session::StartupError>()
+                    .map_or_else(
+                        || {
+                            error
+                                .downcast_ref::<crate::io::IoError>()
+                                .map_or(0, |error| u64::from(error.context_retained))
+                        },
+                        |error| error.retained_io_contexts,
+                    );
                 return Err(error.to_string());
             }
         };
-        self.activity = Some(((0, 0), Instant::now()));
+        self.stream_health.started(Instant::now());
         Ok(session)
     }
     fn healthy(&mut self, session: &TestSession, config: &Config) -> Result<bool, String> {
@@ -348,23 +385,12 @@ impl Backend for NativeBackend {
             return Ok(false);
         }
         let (capture, output) = session.stats();
-        if capture.failed || output.failed {
-            return Err("audio callback failed".into());
-        }
-        let counts = (capture.callbacks, output.callbacks);
-        if let Some((previous, time)) = self.activity {
-            if (counts.0 == previous.0 || counts.1 == previous.1)
-                && time.elapsed() >= Duration::from_secs(2)
-            {
-                return Ok(false);
-            }
-            if counts.0 != previous.0 && counts.1 != previous.1 {
-                self.activity = Some((counts, Instant::now()));
-            }
-        } else {
-            self.activity = Some((counts, Instant::now()));
-        }
-        Ok(true)
+        self.stream_health.check(
+            capture,
+            output,
+            session.routing.load().sending,
+            Instant::now(),
+        )
     }
     fn route(
         &mut self,
@@ -385,20 +411,100 @@ impl Backend for NativeBackend {
             .routing
             .configure(selection(config)?, sending, overview)
             .ok_or("routing generation changed concurrently")?;
+        self.stream_health
+            .routed(sending, session.stats().1.rendered_frames, Instant::now());
         Ok(())
     }
     fn open_failure_requires_stop(&self) -> bool {
         self.startup_failed
     }
+    fn retained_io_contexts(&self) -> u64 {
+        self.retained_io_contexts
+    }
     fn close(&mut self, session: TestSession) -> Result<(), String> {
-        self.activity = None;
-        session.close().map_err(|error| error.to_string())
+        self.stream_health.reset();
+        match session.close() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.retained_io_contexts += error.retained_io_contexts();
+                if error.requires_stop() {
+                    Err(error.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn input(uid: &str) -> devices::Device {
+        devices::Device {
+            id: 42,
+            uid: uid.into(),
+            name: uid.into(),
+            rate: 48000.0,
+            input_channels: 2,
+            output_channels: 0,
+        }
+    }
+    #[test]
+    fn inventory_retains_inputs_before_and_after_entry_failures() {
+        use channelbridge_core::view::InventoryCompleteness;
+        for entries in [
+            vec![Ok(input("input")), Err(devices::Error::Hal(-1))],
+            vec![Err(devices::Error::Hal(-1)), Ok(input("input"))],
+        ] {
+            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).unwrap();
+            assert_eq!(inventory.choices.len(), 1);
+            assert_eq!(inventory.choices[0].uid, "input");
+            assert!(matches!(
+                inventory.completeness,
+                InventoryCompleteness::Partial { .. }
+            ));
+        }
+    }
+    #[test]
+    fn inventory_all_entry_failures_have_one_bounded_warning() {
+        use channelbridge_core::view::InventoryCompleteness;
+        let inventory = project_inventory(
+            Ok((0..100).map(|_| Err(devices::Error::Hal(-7))).collect()),
+            |_| panic!("failed entries have no stream query"),
+        )
+        .unwrap();
+        assert!(inventory.choices.is_empty());
+        let InventoryCompleteness::Partial { warning } = inventory.completeness else {
+            panic!("entry errors must mark inventory partial");
+        };
+        assert!(warning.contains("CoreAudio status -7"));
+        assert!(warning.contains("100"));
+        assert!(warning.len() < 200);
+    }
+    #[test]
+    fn inventory_whole_list_failure_remains_an_error() {
+        let error = project_inventory(Err(devices::Error::Hal(-8)), |_| {
+            panic!("failed list has no stream query")
+        })
+        .unwrap_err();
+        assert_eq!(error, "CoreAudio status -8");
+    }
+    #[test]
+    fn inventory_stream_failure_keeps_definite_input_presence() {
+        use channelbridge_core::view::InventoryCompleteness;
+        let inventory = project_inventory(Ok(vec![Ok(input("input"))]), |_| {
+            Err(devices::Error::Hal(-9))
+        })
+        .unwrap();
+        assert_eq!(inventory.completeness, InventoryCompleteness::Complete);
+        assert_eq!(inventory.choices[0].uid, "input");
+        assert!(inventory.choices[0].physical_inputs.is_empty());
+        assert_eq!(
+            inventory.choices[0].format_error.as_deref(),
+            Some("CoreAudio status -9")
+        );
+    }
     #[test]
     fn driver_initialization_requires_a_nonzero_generation_not_audio_activity() {
         use channelbridge_contract::DriverCounters;

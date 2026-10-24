@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
     a=address('cbid'); CFStringRef identity=NULL;
     assert((*driver)->GetPropertyDataSize(driver,Device,0,&a,0,NULL,&bytes)==0 && bytes==sizeof(identity));
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(identity),&bytes,&identity)==0);
-    assert(CFEqual(identity,CFSTR("0.5.3"))); CFRelease(identity);
+    assert(CFEqual(identity,CFSTR("0.5.7"))); CFRelease(identity);
     a=address(custom[0].mSelector); UInt64 diagnostics[6]={0}; CFDataRef data=NULL;
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(data),&bytes,&data)==0 && bytes==sizeof(data));
     assert(CFGetTypeID(data)==CFDataGetTypeID() && CFDataGetLength(data)==48);

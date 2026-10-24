@@ -30,6 +30,8 @@ struct Report<'a> {
     right_channel: u32,
     mode: crate::Mode,
     muted: bool,
+    auto_send_on_resume: bool,
+    retained_io_contexts: u64,
     session_counters: &'a Option<crate::view::AudioDiagnostics>,
     driver: &'a Option<crate::view::DriverDiagnostics>,
     /// Active-session formats and dry levels; null without a session.
@@ -87,6 +89,8 @@ pub fn save_new_with_metadata(
         right_channel: snapshot.config.right,
         mode: snapshot.config.mode,
         muted: snapshot.config.muted,
+        auto_send_on_resume: snapshot.config.auto_send_on_resume,
+        retained_io_contexts: snapshot.retained_io_contexts,
         session_counters: &snapshot.diagnostics,
         driver: &snapshot.driver_diagnostics,
         audio: &snapshot.audio,
@@ -185,6 +189,8 @@ mod tests {
         .unwrap();
         let mut snapshot = worker.snapshot();
         worker.join().unwrap();
+        snapshot.retained_io_contexts = 3;
+        snapshot.config.auto_send_on_resume = true;
         snapshot.driver_diagnostics = Some(crate::view::DriverDiagnostics {
             observed_worker_ms: 17,
             reading: crate::view::DriverReading::Unavailable {
@@ -222,6 +228,8 @@ mod tests {
         let bytes = fs::read(&destination).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json["session_counters"].is_null());
+        assert_eq!(json["retained_io_contexts"], 3);
+        assert_eq!(json["auto_send_on_resume"], true);
         assert!(json["metadata"]["application_bundle_version"].is_null());
         assert_eq!(json["audio"]["physical_inputs"][0]["bits"], 24);
         assert_eq!(json["audio"]["virtual_bits"], 32);

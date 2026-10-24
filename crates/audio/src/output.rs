@@ -119,9 +119,9 @@ impl OutputProcessor {
         total
     }
 
-    /// Startup waits for a configured safety margin. A real shortage zeroes
-    /// only missing output, fades the valid boundary and re-primes DSP history;
-    /// it does not restart CoreAudio or mutate the producer's queue.
+    /// Startup waits for the safety margin and enough input for a complete block.
+    /// A real shortage zeroes only missing output, fades the valid boundary and
+    /// re-primes DSP history; it does not restart CoreAudio or mutate the producer's queue.
     pub fn render(
         &mut self,
         output: &mut [StereoFrame],
@@ -135,7 +135,17 @@ impl OutputProcessor {
             };
         }
         if !self.active {
-            if self.queued() < self.target {
+            let required = (output.len() as f64 * self.maximum_step).ceil() as usize
+                + self.resampler.lookahead_frames()
+                + 1;
+            if required > self.input.capacity() {
+                return RenderReport {
+                    missing: output.len(),
+                    queued_input: self.queued(),
+                    ..Default::default()
+                };
+            }
+            if self.queued() < self.target.max(required) {
                 return RenderReport {
                     queued_input: self.queued(),
                     priming: true,
@@ -197,6 +207,83 @@ mod tests {
     use super::*;
     use crate::drift::ClockEstimator;
     use crate::fifo::stereo_queue;
+    #[test]
+    fn session_target_primes_complete_large_callbacks() {
+        for frames in [1024, 4096] {
+            let target = 48_000 * 16 / 1000;
+            let (mut producer, consumer) = stereo_queue(16384).unwrap();
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).unwrap();
+            let incoming = vec![StereoFrame::new(0.25, -0.25); frames];
+            let mut output = vec![StereoFrame::SILENCE; frames];
+            let mut audible_blocks = 0;
+            for cycle in 0..16 {
+                assert_eq!(producer.push(&incoming), frames);
+                let report = processor.render(&mut output, Some(1.0));
+                assert_eq!(
+                    report.missing, 0,
+                    "frames={frames} cycle={cycle} {report:?}"
+                );
+                assert_eq!(report.dropped_lookahead, 0);
+                if report.priming {
+                    assert_eq!(cycle, 0, "startup must finish by the second callback");
+                    assert_eq!(report.queued_input, frames);
+                    assert!(output.iter().all(|frame| *frame == StereoFrame::SILENCE));
+                } else {
+                    assert_eq!(report.produced, frames);
+                    assert!((output[frames - 1].left - 0.25).abs() < 0.0001);
+                    assert!((output[frames - 1].right + 0.25).abs() < 0.0001);
+                    audible_blocks += 1;
+                }
+            }
+            assert!(audible_blocks >= 15);
+            assert_eq!(processor.target_frames(), target);
+        }
+    }
+
+    #[test]
+    fn priming_tracks_callback_size_after_restart() {
+        let (mut producer, consumer) = stereo_queue(16384).unwrap();
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let pcm = [StereoFrame::new(0.25, -0.25); 4096];
+        let mut output = [StereoFrame::SILENCE; 4096];
+        assert_eq!(producer.push(&pcm[..768]), 768);
+        assert_eq!(
+            processor.render(&mut output[..128], Some(1.0)).produced,
+            128
+        );
+        processor.set_generation(2);
+        assert_eq!(producer.push_generation(&pcm, 2), 4096);
+        let report = processor.render(&mut output, Some(1.0));
+        assert!(report.priming);
+        assert_eq!(report.queued_input, 4096);
+        assert_eq!(producer.push_generation(&pcm, 2), 4096);
+        let report = processor.render(&mut output, Some(1.0));
+        assert_eq!(report.produced, 4096);
+        assert_eq!(report.missing, 0);
+        assert!((output[4095].left - 0.25).abs() < 0.0001);
+    }
+
+    #[test]
+    fn callback_larger_than_queue_capacity_reports_shortage_without_consuming() {
+        let (mut producer, consumer) = stereo_queue(1024).unwrap();
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let pcm = [StereoFrame::new(0.25, -0.25); 1024];
+        assert_eq!(producer.push(&pcm), pcm.len());
+        let mut output = [StereoFrame::SILENCE; 4096];
+        for _ in 0..2 {
+            let report = processor.render(&mut output, Some(1.0));
+            assert!(!report.priming);
+            assert_eq!(report.produced, 0);
+            assert_eq!(report.missing, output.len());
+            assert_eq!(report.queued_input, pcm.len());
+            assert_eq!(report.dropped_lookahead, 0);
+        }
+        assert_eq!(
+            processor.render(&mut output[..128], Some(1.0)).produced,
+            128
+        );
+    }
+
     #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
         let (mut producer, consumer) = stereo_queue(8192).unwrap();

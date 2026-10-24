@@ -23,6 +23,7 @@ pub struct OutputCallback {
     busy: AtomicBool,
     failed: AtomicBool,
     callbacks: AtomicU64,
+    accepted_frames: AtomicU64,
     rejected: AtomicU64,
     missing: AtomicU64,
     priming_callbacks: AtomicU64,
@@ -48,6 +49,8 @@ impl Drop for Gate<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct OutputStats {
     pub callbacks: u64,
+    /// Completed native buffer processing, including intentional preview silence.
+    pub(crate) accepted_frames: u64,
     pub rejected: u64,
     pub missing: u64,
     /// Waiting for startup/recovery buffering, separate from an active underrun.
@@ -80,6 +83,7 @@ impl OutputCallback {
             busy: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             callbacks: AtomicU64::new(0),
+            accepted_frames: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             missing: AtomicU64::new(0),
             priming_callbacks: AtomicU64::new(0),
@@ -108,6 +112,7 @@ impl OutputCallback {
         ];
         OutputStats {
             callbacks: self.callbacks.load(Ordering::Acquire),
+            accepted_frames: self.accepted_frames.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
             missing: self.missing.load(Ordering::Acquire),
             priming_callbacks: self.priming_callbacks.load(Ordering::Acquire),
@@ -210,6 +215,9 @@ impl OutputCallback {
             self.peak.store(0, Ordering::Release);
             self.failed.store(true, Ordering::Release);
             self.rejected.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.accepted_frames
+                .fetch_add(output.len() as u64, Ordering::Relaxed);
         }
     }
 }

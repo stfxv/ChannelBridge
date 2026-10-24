@@ -26,6 +26,7 @@ pub struct CaptureCallback {
     busy: AtomicBool,
     failed: AtomicBool,
     callbacks: AtomicU64,
+    accepted_frames: AtomicU64,
     rejected: AtomicU64,
     written: AtomicU64,
     overflow: AtomicU64,
@@ -40,6 +41,8 @@ unsafe impl Sync for CaptureCallback {}
 #[derive(Clone, Copy, Debug)]
 pub struct CaptureStats {
     pub callbacks: u64,
+    /// Valid clocked input, including preview and silence. Local watchdog data.
+    pub(crate) accepted_frames: u64,
     pub rejected: u64,
     pub written: u64,
     pub overflow: u64,
@@ -65,6 +68,7 @@ impl CaptureCallback {
             busy: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             callbacks: AtomicU64::new(0),
+            accepted_frames: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             written: AtomicU64::new(0),
             overflow: AtomicU64::new(0),
@@ -80,6 +84,7 @@ impl CaptureCallback {
         let clock = self.source_clock.snapshot();
         CaptureStats {
             callbacks: self.callbacks.load(Ordering::Acquire),
+            accepted_frames: self.accepted_frames.load(Ordering::Acquire),
             rejected: self.rejected.load(Ordering::Acquire),
             written: self.written.load(Ordering::Acquire),
             overflow: self.overflow.load(Ordering::Acquire),
@@ -166,7 +171,13 @@ impl CaptureCallback {
             if report.unavailable_channel {
                 self.unavailable_channel.fetch_add(1, Ordering::Relaxed);
             }
-            !report.format_changed && !report.invalid_clock && !report.unavailable_channel
+            let accepted =
+                !report.format_changed && !report.invalid_clock && !report.unavailable_channel;
+            if accepted {
+                self.accepted_frames
+                    .fetch_add(buffers.frames() as u64, Ordering::Relaxed);
+            }
+            accepted
         }));
         match result {
             Ok(true) => {}
@@ -268,6 +279,7 @@ mod tests {
         callback.busy.store(false, Ordering::Release);
         assert_eq!(callback.stats().rejected, 1);
         assert_eq!(callback.stats().written, 64);
+        assert_eq!(callback.stats().accepted_frames, 128);
         assert_eq!(callback.stats().clock_generation, Some(generation));
         assert_eq!(callback.stats().source_speed, Some(1.0));
         unsafe {
@@ -296,6 +308,7 @@ mod tests {
         assert_eq!(callback.stats().invalid_clock, 1);
         assert_eq!(callback.stats().discontinuities, 1);
         assert_eq!(callback.stats().source_speed, None);
+        assert_eq!(callback.stats().accepted_frames, 128);
         assert!(callback.stats().clock_generation.unwrap() > generation);
         assert!(!callback.stats().failed);
     }

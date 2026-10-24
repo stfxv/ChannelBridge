@@ -34,4 +34,7 @@ pub mod rate;
 pub mod backend;
 
 #[cfg(target_os = "macos")]
+pub(crate) mod health;
+
+#[cfg(target_os = "macos")]
 pub mod permission;

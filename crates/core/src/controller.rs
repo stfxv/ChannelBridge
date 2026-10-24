@@ -2,11 +2,14 @@
 use crate::{CaptureState, Command, Config};
 
 pub trait Backend {
+    fn retained_io_contexts(&self) -> u64 {
+        0
+    }
     fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         None
     }
-    fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
-        Ok(Vec::new())
+    fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
+        Ok(crate::view::DeviceInventory::default())
     }
     type Pending;
     type Session;
@@ -49,9 +52,11 @@ pub struct Controller<B: Backend> {
     pending: Option<B::Pending>,
     session: Option<B::Session>,
     wanted_send: bool,
+    route_pending: bool,
     overview: bool,
     permission: bool,
     quitting: bool,
+    suspended: bool,
     teardown_failed: bool,
     retry_at: u64,
     retry_delay: u64,
@@ -67,9 +72,11 @@ impl<B: Backend> Controller<B> {
             pending: None,
             session: None,
             wanted_send: false,
+            route_pending: false,
             overview: false,
             permission: false,
             quitting: false,
+            suspended: false,
             teardown_failed: false,
             retry_at: 0,
             retry_delay: 1000,
@@ -78,7 +85,7 @@ impl<B: Backend> Controller<B> {
             history: std::sync::Arc::from([]),
         }
     }
-    pub fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+    pub fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
         self.backend.devices()
     }
     pub fn history(&self) -> std::sync::Arc<[crate::view::ControlEvent]> {
@@ -118,6 +125,9 @@ impl<B: Backend> Controller<B> {
     pub fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         self.backend.driver_diagnostics()
     }
+    pub fn retained_io_contexts(&self) -> u64 {
+        self.backend.retained_io_contexts()
+    }
     pub fn audio_view(&self) -> Option<crate::view::AudioView> {
         self.session.as_ref().and_then(|session| {
             self.backend
@@ -143,6 +153,7 @@ impl<B: Backend> Controller<B> {
     }
     fn disconnect(&mut self) -> Result<(), String> {
         self.pending = None;
+        self.route_pending = false;
         if let Some(session) = self.session.take() {
             if let Err(error) = self.backend.close(session) {
                 self.record(
@@ -158,13 +169,38 @@ impl<B: Backend> Controller<B> {
         }
         Ok(())
     }
+    fn automatic_send(&mut self, reason: &str) {
+        if self.config.auto_send_on_resume {
+            self.wanted_send = true;
+            self.record(
+                None,
+                crate::view::ControlEventKind::AutomaticSendRequested,
+                Some(reason),
+            );
+        }
+    }
+    pub(crate) fn persist_configuration(&mut self, config: Config) -> Result<bool, String> {
+        config
+            .validate_selection()
+            .map_err(|error| format!("{error:?}"))?;
+        self.backend.save(&config)?;
+        let changed_device = self.config.device_uid != config.device_uid;
+        self.config = config;
+        Ok(changed_device)
+    }
     pub fn command(&mut self, command: Command) -> Result<(), String> {
         if self.quitting {
             return Err("worker is shutting down".into());
         }
         match command {
-            Command::Start => self.wanted_send = true,
-            Command::Stop => self.wanted_send = false,
+            Command::Start => {
+                self.wanted_send = true;
+                self.record(None, crate::view::ControlEventKind::SendStarted, None);
+            }
+            Command::Stop => {
+                self.wanted_send = false;
+                self.record(None, crate::view::ControlEventKind::SendStopped, None);
+            }
             Command::Quit => {
                 self.quitting = true;
                 self.wanted_send = false;
@@ -173,6 +209,44 @@ impl<B: Backend> Controller<B> {
                 return Ok(());
             }
             Command::Overview(value) => self.overview = value,
+            Command::System(event) => {
+                use crate::{SystemEvent, view::ControlEventKind};
+                match event {
+                    SystemEvent::Sleep => {
+                        if !self.suspended {
+                            self.record(None, ControlEventKind::SystemSleep, None);
+                            self.suspended = true;
+                            self.disconnect()?;
+                        }
+                        if !self.teardown_failed {
+                            self.error = None;
+                            self.state = CaptureState::Suspended;
+                        }
+                    }
+                    SystemEvent::Wake => {
+                        self.record(None, ControlEventKind::SystemWake, None);
+                        self.suspended = false;
+                        self.automatic_send("wake");
+                        // Also retire a stale session when will-sleep was missed.
+                        // A wake never clears an unsafe teardown failure.
+                        self.disconnect()?;
+                        if !self.teardown_failed {
+                            self.retry_at = 0;
+                            self.route_pending = false;
+                            self.retry_delay = 1000;
+                            self.error = None;
+                            self.state = CaptureState::Recovering;
+                        }
+                    }
+                    SystemEvent::ScreensWake => {
+                        self.record(None, ControlEventKind::ScreensWake, None);
+                        // Display sleep alone does not invalidate a working route.
+                        // The worker immediately checks health and refreshes inventory.
+                        self.retry_at = 0;
+                    }
+                }
+                return Ok(());
+            }
             Command::PermissionChanged(value) => {
                 self.permission = value;
                 if !value {
@@ -181,17 +255,18 @@ impl<B: Backend> Controller<B> {
                     self.state = CaptureState::Blocked;
                 }
             }
+            Command::InputReconnected => {
+                self.record(None, crate::view::ControlEventKind::InputReconnected, None);
+                self.automatic_send("reconnect");
+                self.route_pending = true;
+                self.retry_at = 0;
+                return Ok(());
+            }
             Command::Refresh => {
                 self.retry_at = 0;
             }
             Command::Configure(config) => {
-                config
-                    .validate_selection()
-                    .map_err(|error| format!("{error:?}"))?;
-                // Commit before changing either the live route or saved policy.
-                self.backend.save(&config)?;
-                let changed_device = self.config.device_uid != config.device_uid;
-                self.config = config;
+                let changed_device = self.persist_configuration(config)?;
                 if changed_device {
                     self.record(None, crate::view::ControlEventKind::DeviceChanged, None);
                     self.disconnect()?;
@@ -215,6 +290,7 @@ impl<B: Backend> Controller<B> {
                 self.retry_at = 0;
                 return Err(error);
             }
+            self.route_pending = false;
             self.state = if self.wanted_send {
                 CaptureState::Sending
             } else {
@@ -238,7 +314,10 @@ impl<B: Backend> Controller<B> {
         self.retry_delay = (self.retry_delay * 2).min(30000);
     }
     pub fn tick(&mut self, now_ms: u64) {
-        if self.quitting || self.teardown_failed {
+        self.tick_with_manual_intent(now_ms, false);
+    }
+    pub(crate) fn tick_with_manual_intent(&mut self, now_ms: u64, manual_intent: bool) {
+        if self.quitting || self.teardown_failed || self.suspended {
             return;
         }
         if !self.permission {
@@ -251,9 +330,39 @@ impl<B: Backend> Controller<B> {
         }
         if let Some(session) = self.session.as_ref() {
             match self.backend.healthy(session, &self.config) {
-                Ok(true) => return,
-                Ok(false) => self.retry(now_ms, "device or format changed".into()),
-                Err(error) => self.retry(now_ms, error),
+                Ok(true) => {
+                    if self.route_pending {
+                        self.route_pending = false;
+                        match self.backend.route(
+                            session,
+                            &self.config,
+                            self.wanted_send,
+                            self.overview,
+                        ) {
+                            Ok(()) => {
+                                self.state = if self.wanted_send {
+                                    CaptureState::Sending
+                                } else {
+                                    CaptureState::Previewing
+                                }
+                            }
+                            Err(error) => self.retry(now_ms, error),
+                        }
+                    }
+                    return;
+                }
+                Ok(false) => {
+                    if !manual_intent {
+                        self.automatic_send("reconnect");
+                    }
+                    self.retry(now_ms, "device or format changed".into());
+                }
+                Err(error) => {
+                    if !manual_intent {
+                        self.automatic_send("reconnect");
+                    }
+                    self.retry(now_ms, error);
+                }
             }
             return;
         }
@@ -320,6 +429,7 @@ impl<B: Backend> Controller<B> {
                             self.retry(now_ms, error);
                             return;
                         }
+                        self.route_pending = false;
                         self.retry_delay = 1000;
                         self.record(
                             Some(now_ms),
@@ -355,6 +465,8 @@ mod tests {
         close_fail: bool,
         open_fail: bool,
         retained_on_open_failure: bool,
+        negotiate_fail: bool,
+        negotiations: usize,
         opens: usize,
         closes: usize,
         sends: Vec<bool>,
@@ -373,7 +485,12 @@ mod tests {
             }
         }
         fn negotiate(&mut self, _: &Config) -> Result<(), String> {
-            Ok(())
+            self.negotiations += 1;
+            if self.negotiate_fail {
+                Err("device not ready after wake".into())
+            } else {
+                Ok(())
+            }
         }
         fn ready(&mut self, _: &()) -> Result<bool, String> {
             Ok(self.ready)
@@ -416,6 +533,418 @@ mod tests {
                 ..Config::default()
             },
         )
+    }
+    #[test]
+    fn input_return_defers_existing_session_route_until_manual_intent_is_applied() {
+        let mut worker = controller();
+        worker
+            .command(Command::Configure(Config {
+                auto_send_on_resume: true,
+                ..worker.config().clone()
+            }))
+            .unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.command(Command::InputReconnected).unwrap();
+        assert_eq!(
+            worker.backend.sends,
+            [false],
+            "inventory must not route before manual intent"
+        );
+        worker.command(Command::Stop).unwrap();
+        worker.tick_with_manual_intent(1, true);
+        assert!(worker.backend.sends.iter().all(|sending| !sending));
+        worker.command(Command::InputReconnected).unwrap();
+        worker.tick(2);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.backend.sends.last(), Some(&true));
+    }
+
+    #[test]
+    fn same_turn_manual_stop_wins_over_health_recovery_and_later_wake_can_resume() {
+        let mut worker = controller();
+        worker
+            .command(Command::Configure(Config {
+                auto_send_on_resume: true,
+                muted: true,
+                ..worker.config().clone()
+            }))
+            .unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.command(Command::Start).unwrap();
+        worker.command(Command::Stop).unwrap();
+        worker.backend.healthy = false;
+        worker.tick_with_manual_intent(1, true);
+        worker.backend.healthy = true;
+        worker.tick(1001);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert!(!worker.wanted_send());
+        assert!(worker.config().muted);
+        worker
+            .command(Command::System(crate::SystemEvent::Wake))
+            .unwrap();
+        worker.tick(1002);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert!(worker.config().muted);
+        worker.command(Command::Stop).unwrap();
+        worker
+            .command(Command::Configure(Config {
+                device_uid: "other".into(),
+                ..worker.config().clone()
+            }))
+            .unwrap();
+        worker.tick(1003);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert!(!worker.wanted_send());
+    }
+
+    #[test]
+    fn automatic_send_is_event_based_and_enabling_does_not_start() {
+        use crate::SystemEvent;
+        for auto in [false, true] {
+            let mut worker = controller();
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.backend.ready = true;
+            worker.tick(0);
+            let config = Config {
+                auto_send_on_resume: auto,
+                ..worker.config().clone()
+            };
+            worker.command(Command::Configure(config)).unwrap();
+            assert_eq!(worker.state(), CaptureState::Previewing);
+            assert!(!worker.wanted_send());
+            worker.command(Command::System(SystemEvent::Wake)).unwrap();
+            worker.tick(1);
+            assert_eq!(worker.wanted_send(), auto);
+            assert_eq!(
+                worker.state(),
+                if auto {
+                    CaptureState::Sending
+                } else {
+                    CaptureState::Previewing
+                }
+            );
+            worker.command(Command::Stop).unwrap();
+            assert_eq!(worker.state(), CaptureState::Previewing);
+            worker.backend.healthy = false;
+            worker.tick(2);
+            worker.backend.healthy = true;
+            worker.tick(1002);
+            assert_eq!(worker.wanted_send(), auto);
+            assert_eq!(
+                worker.state(),
+                if auto {
+                    CaptureState::Sending
+                } else {
+                    CaptureState::Previewing
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn input_return_bypasses_backoff_and_requests_send_only_when_opted_in() {
+        for auto in [false, true] {
+            let mut worker = controller();
+            worker
+                .command(Command::Configure(Config {
+                    auto_send_on_resume: auto,
+                    ..worker.config().clone()
+                }))
+                .unwrap();
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.backend.negotiate_fail = true;
+            worker.tick(0);
+            assert!(
+                !worker.wanted_send(),
+                "startup while absent must wait for a real return"
+            );
+            worker.backend.negotiate_fail = false;
+            worker.backend.ready = true;
+            worker.command(Command::InputReconnected).unwrap();
+            worker.tick(1);
+            assert_eq!(worker.wanted_send(), auto);
+            assert_eq!(
+                worker.state(),
+                if auto {
+                    CaptureState::Sending
+                } else {
+                    CaptureState::Previewing
+                }
+            );
+            assert_eq!(worker.backend.opens, 1);
+        }
+    }
+
+    #[test]
+    fn automatic_intent_never_bypasses_permission_or_unknown_teardown() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        worker
+            .command(Command::Configure(Config {
+                auto_send_on_resume: true,
+                ..worker.config().clone()
+            }))
+            .unwrap();
+        worker.backend.ready = true;
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.command(Command::InputReconnected).unwrap();
+        worker.tick(0);
+        assert_eq!(worker.state(), CaptureState::Blocked);
+        assert_eq!(worker.backend.opens, 0);
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.tick(1);
+        worker.backend.close_fail = true;
+        worker.backend.healthy = false;
+        worker.tick(2);
+        worker.backend.close_fail = false;
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.command(Command::InputReconnected).unwrap();
+        worker.tick(100000);
+        assert!(worker.wanted_send());
+        assert_eq!(worker.state(), CaptureState::Blocked);
+        assert_eq!(worker.backend.opens, 1);
+    }
+
+    #[test]
+    fn failed_save_cannot_enable_automatic_send_or_change_intent() {
+        let mut worker = controller();
+        worker.backend.save_fail = true;
+        assert!(
+            worker
+                .command(Command::Configure(Config {
+                    auto_send_on_resume: true,
+                    ..worker.config().clone()
+                }))
+                .is_err()
+        );
+        assert!(!worker.config().auto_send_on_resume);
+        worker.command(Command::InputReconnected).unwrap();
+        assert!(!worker.wanted_send());
+    }
+
+    #[test]
+    fn detached_sender_reopens_with_exact_policy_and_records_user_intent() {
+        use crate::view::ControlEventKind;
+        let mut worker = controller();
+        let config = Config {
+            left: 3,
+            right: 4,
+            mode: crate::Mode::Stereo,
+            muted: true,
+            ..worker.config().clone()
+        };
+        worker.command(Command::Configure(config.clone())).unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.healthy = false;
+        worker.backend.negotiate_fail = true;
+        worker.tick(100);
+        worker.tick(1100);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        assert!(worker.wanted_send());
+        assert_eq!(worker.config(), &config);
+        worker.backend.negotiate_fail = false;
+        worker.backend.healthy = true;
+        worker.tick(3100);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.backend.sends, [true, true]);
+        assert_eq!(worker.config(), &config);
+        let history = worker.history();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|event| event.kind == ControlEventKind::SendStarted)
+                .count(),
+            1
+        );
+        assert!(
+            !history
+                .iter()
+                .any(|event| event.kind == ControlEventKind::SendStopped)
+        );
+    }
+
+    #[test]
+    fn stop_while_device_is_absent_survives_wake_and_restores_preview() {
+        use crate::{SystemEvent, view::ControlEventKind};
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.healthy = false;
+        worker.backend.negotiate_fail = true;
+        worker.tick(100);
+        worker.tick(1100);
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(1200);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        assert!(!worker.wanted_send());
+        worker.backend.healthy = true;
+        worker.backend.negotiate_fail = false;
+        worker.tick(2200);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert_eq!(worker.backend.sends, [true, false]);
+        assert!(
+            worker
+                .history()
+                .iter()
+                .any(|event| event.kind == ControlEventKind::SendStopped)
+        );
+    }
+
+    #[test]
+    fn unknown_teardown_failure_stays_blocked_across_recovery_commands() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.backend.close_fail = true;
+        worker.backend.healthy = false;
+        worker.tick(100);
+        worker.backend.close_fail = false;
+        worker.backend.healthy = true;
+        for command in [
+            Command::System(SystemEvent::Sleep),
+            Command::System(SystemEvent::Wake),
+            Command::System(SystemEvent::ScreensWake),
+            Command::Refresh,
+            Command::Stop,
+            Command::Start,
+            Command::PermissionChanged(false),
+            Command::PermissionChanged(true),
+            Command::Configure(Config {
+                device_uid: "replacement".into(),
+                ..worker.config().clone()
+            }),
+        ] {
+            worker.command(command).unwrap();
+            worker.tick(100000);
+            assert_eq!(worker.state(), CaptureState::Blocked);
+            assert_eq!(worker.backend.opens, 1);
+        }
+        assert!(worker.wanted_send());
+        assert_eq!(worker.error(), Some("close failed"));
+    }
+
+    #[test]
+    fn sleep_releases_streams_and_wake_preserves_stop_mute_and_selection() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        let config = Config {
+            left: 3,
+            right: 4,
+            mode: crate::Mode::Stereo,
+            muted: true,
+            ..worker.config().clone()
+        };
+        worker.command(Command::Configure(config.clone())).unwrap();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.backend.ready = true;
+        worker.tick(0);
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        assert_eq!(worker.state(), CaptureState::Suspended);
+        assert_eq!(worker.backend.closes, 1);
+        assert!(worker.wanted_send());
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        worker
+            .command(Command::System(SystemEvent::ScreensWake))
+            .unwrap();
+        worker.tick(10000);
+        assert_eq!((worker.backend.opens, worker.backend.closes), (1, 1));
+        worker.command(Command::Stop).unwrap();
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10001);
+        assert_eq!(worker.state(), CaptureState::Previewing);
+        assert_eq!(worker.backend.sends, [true, false]);
+        assert_eq!(worker.config(), &config);
+        worker.command(Command::Start).unwrap();
+        worker
+            .command(Command::System(SystemEvent::ScreensWake))
+            .unwrap();
+        worker.tick(10002);
+        assert_eq!(
+            worker.backend.opens, 2,
+            "display wake must preserve a healthy route"
+        );
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10003);
+        assert_eq!(
+            worker.backend.opens, 3,
+            "wake-only must retire a stale session"
+        );
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.config(), &config);
+    }
+    #[test]
+    fn wake_restarts_pending_negotiation_and_retries_devices_still_unavailable() {
+        use crate::SystemEvent;
+        let mut worker = controller();
+        worker.command(Command::PermissionChanged(true)).unwrap();
+        worker.command(Command::Start).unwrap();
+        worker.tick(0);
+        assert!(worker.pending.is_some());
+        worker.command(Command::System(SystemEvent::Sleep)).unwrap();
+        assert!(worker.pending.is_none());
+        worker.tick(10000);
+        assert_eq!(worker.backend.negotiations, 1);
+        worker.backend.negotiate_fail = true;
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(10001);
+        assert_eq!(worker.state(), CaptureState::Recovering);
+        worker.tick(11000);
+        assert_eq!(worker.backend.negotiations, 2);
+        worker.backend.negotiate_fail = false;
+        worker.backend.ready = true;
+        worker.tick(11001);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.backend.negotiations, 3);
+        // A new wake discards even a long retry accumulated before sleep.
+        worker.retry_delay = 30000;
+        worker.retry(12000, "fixture disconnected".into());
+        worker.command(Command::System(SystemEvent::Wake)).unwrap();
+        worker.tick(12001);
+        assert_eq!(worker.state(), CaptureState::Sending);
+        assert_eq!(worker.retry_delay, 1000);
+    }
+    #[test]
+    fn wake_never_bypasses_revoked_permission_or_unsafe_teardown() {
+        use crate::SystemEvent;
+        for failed_teardown in [false, true] {
+            let mut worker = controller();
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.command(Command::Start).unwrap();
+            worker.backend.ready = true;
+            worker.tick(0);
+            worker.backend.close_fail = failed_teardown;
+            assert_eq!(
+                worker.command(Command::System(SystemEvent::Sleep)).is_err(),
+                failed_teardown
+            );
+            worker.command(Command::PermissionChanged(false)).unwrap();
+            worker.command(Command::System(SystemEvent::Wake)).unwrap();
+            worker.tick(10000);
+            assert_eq!(worker.state(), CaptureState::Blocked);
+            assert_eq!(worker.backend.opens, 1);
+            worker.command(Command::PermissionChanged(true)).unwrap();
+            worker.tick(10001);
+            assert_eq!(worker.backend.opens, if failed_teardown { 1 } else { 2 });
+            if failed_teardown {
+                assert_eq!(worker.error(), Some("close failed"));
+            }
+        }
     }
     #[test]
     fn pending_rate_is_preserved_in_failure_history_before_disconnect() {

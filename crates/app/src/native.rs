@@ -1,5 +1,6 @@
 //! Main-thread application lifecycle, selectors and timer ownership.
 mod export;
+mod power;
 mod screen;
 mod smoke;
 use objc2::{
@@ -23,6 +24,7 @@ struct Runtime {
     permission_monitor: bool,
 }
 struct DelegateState {
+    _power: Retained<power::PowerObserver>,
     runtime: std::cell::RefCell<Option<Runtime>>,
     shutting_down: std::cell::Cell<bool>,
     ticks: std::cell::Cell<u64>,
@@ -95,6 +97,12 @@ define_class!(
                 runtime.screen.toggle_mute(&runtime.worker);
             }
         }
+        #[unsafe(method(toggleAutoSend:))]
+        fn toggle_auto_send(&self, _sender: &NSButton) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
+                runtime.screen.toggle_auto_send(&runtime.worker);
+            }
+        }
         #[unsafe(method(selectRouting:))]
         fn select_routing(&self, sender: &NSPopUpButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
@@ -142,6 +150,7 @@ impl AppDelegate {
     }
     fn new(main: MainThreadMarker, runtime: Runtime) -> Retained<Self> {
         let allocated = Self::alloc(main).set_ivars(DelegateState {
+            _power: power::PowerObserver::new(runtime.worker.system_events()),
             runtime: std::cell::RefCell::new(Some(runtime)),
             shutting_down: std::cell::Cell::new(false),
             ticks: std::cell::Cell::new(0),
@@ -153,6 +162,10 @@ impl AppDelegate {
 pub fn run() {
     let main = MainThreadMarker::new().expect("AppKit must start on the main thread");
     let app = NSApplication::sharedApplication(main);
+    if std::env::args().any(|argument| argument == "--sleep-wake-smoke") {
+        smoke::sleep_wake(main);
+        return;
+    }
     let menu = NSMenu::initWithTitle(NSMenu::alloc(main), ns_string!(""));
     let app_menu = NSMenu::initWithTitle(
         NSMenu::alloc(main),
@@ -246,6 +259,7 @@ pub fn run() {
             (&screen.permission_button, sel!(requestMicrophone:)),
             (&screen.send_button, sel!(toggleSend:)),
             (&screen.mute_button, sel!(toggleMute:)),
+            (&screen.auto_send_button, sel!(toggleAutoSend:)),
             (&screen.export.button, sel!(saveDiagnostics:)),
         ] {
             // SAFETY: matching main-thread delegate selectors; delegate retained
@@ -333,7 +347,7 @@ pub fn run() {
                     .expect("content view")
                     .subviews()
                     .len(),
-                17
+                18
             );
             assert_eq!(
                 runtime.screen.export.button.title().to_string(),
@@ -380,6 +394,7 @@ pub fn run() {
         runtime.worker.join().expect("worker shutdown");
         app.setDelegate(None);
         smoke::device_save(main);
+        smoke::sleep_wake(main);
         println!(
             "Rust AppKit timer refreshed inventory and observed worker shutdown; no audio or permission request"
         );

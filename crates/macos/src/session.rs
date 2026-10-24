@@ -212,6 +212,21 @@ pub struct ShutdownError {
     pub route_stopped: bool,
 }
 impl ShutdownError {
+    pub fn retained_io_contexts(&self) -> u64 {
+        self.output
+            .iter()
+            .chain(self.input.iter())
+            .filter(|error| error.context_retained)
+            .count() as u64
+    }
+    pub fn requires_stop(&self) -> bool {
+        !self.route_stopped
+            || self
+                .output
+                .iter()
+                .chain(self.input.iter())
+                .any(|error| error.disposition == crate::io::IoDisposition::Fatal)
+    }
     pub fn context_retained(&self) -> bool {
         self.output
             .iter()
@@ -256,6 +271,8 @@ pub struct StartupError {
     pub cause: String,
     pub cleanup_errors: Vec<String>,
     pub context_retained: bool,
+    pub requires_stop: bool,
+    pub retained_io_contexts: u64,
 }
 impl std::fmt::Display for StartupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -292,6 +309,15 @@ fn startup_error(cause: String, retained: bool, outcomes: Vec<crate::io::IoError
     StartupError {
         cause,
         context_retained: retained || outcomes.iter().any(|error| error.context_retained),
+        requires_stop: retained
+            || outcomes
+                .iter()
+                .any(|error| error.disposition == crate::io::IoDisposition::Fatal),
+        retained_io_contexts: u64::from(retained)
+            + outcomes
+                .iter()
+                .filter(|error| error.context_retained)
+                .count() as u64,
         cleanup_errors: outcomes
             .into_iter()
             .map(|error| error.to_string())
@@ -304,17 +330,37 @@ mod tests {
     use super::*;
     use channelbridge_audio::routing::Mode;
     #[test]
+    fn removed_device_retention_permits_retry_and_is_counted_in_startup_and_shutdown() {
+        let removed = || crate::io::IoError {
+            operation: "destroy",
+            status: channelbridge_hal_abi::fourcc(b"!dev") as i32,
+            context_retained: true,
+            disposition: crate::io::IoDisposition::RemovedDevice,
+        };
+        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), true).unwrap_err();
+        assert!(!shutdown.requires_stop());
+        assert_eq!(shutdown.retained_io_contexts(), 1);
+        let startup = startup_error("device disconnected".into(), false, vec![removed()]);
+        assert!(!startup.requires_stop);
+        assert!(startup.context_retained);
+        assert_eq!(startup.retained_io_contexts, 1);
+        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), false).unwrap_err();
+        assert!(shutdown.requires_stop());
+    }
+    #[test]
     fn shutdown_preserves_both_failures_and_retained_context_information() {
         let error = shutdown_result::<(), ()>(
             Err(crate::io::IoError {
                 operation: "callback panic",
                 status: 0,
                 context_retained: false,
+                disposition: crate::io::IoDisposition::Fatal,
             }),
             Err(crate::io::IoError {
                 operation: "input stop",
                 status: -1,
                 context_retained: true,
+                disposition: crate::io::IoDisposition::Fatal,
             }),
             true,
         )
@@ -339,11 +385,13 @@ mod tests {
                     operation: "output stop",
                     status: -1,
                     context_retained: true,
+                    disposition: crate::io::IoDisposition::Fatal,
                 },
                 crate::io::IoError {
                     operation: "input destroy",
                     status: -2,
                     context_retained: true,
+                    disposition: crate::io::IoDisposition::Fatal,
                 },
             ],
         );

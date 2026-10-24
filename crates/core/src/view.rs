@@ -10,6 +10,10 @@ pub struct ControlEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlEventKind {
+    AutomaticSendRequested,
+    InputReconnected,
+    SendStarted,
+    SendStopped,
     NegotiationStarted,
     NegotiationRequested,
     NegotiationReady,
@@ -19,6 +23,9 @@ pub enum ControlEventKind {
     PermissionRevoked,
     DeviceChanged,
     RouteFailed,
+    SystemSleep,
+    SystemWake,
+    ScreensWake,
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct DriverDiagnostics {
@@ -73,6 +80,19 @@ pub struct AudioDiagnostics {
     /// [None, None] inside Some represents known stereo silence (-infinity).
     pub output_peak_dbfs: Option<[Option<f32>; 2]>,
     pub output_failed: bool,
+}
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeviceInventory {
+    pub choices: Vec<DeviceChoice>,
+    pub completeness: InventoryCompleteness,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InventoryCompleteness {
+    #[default]
+    Complete,
+    Partial {
+        warning: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceChoice {

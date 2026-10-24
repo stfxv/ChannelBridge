@@ -26,6 +26,7 @@ pub struct Config {
     pub right: u32,
     pub mode: Mode,
     pub muted: bool,
+    pub auto_send_on_resume: bool,
 }
 
 impl Default for Config {
@@ -36,6 +37,7 @@ impl Default for Config {
             right: 2,
             mode: Mode::Mono,
             muted: false,
+            auto_send_on_resume: false,
         }
     }
 }
@@ -75,7 +77,15 @@ pub enum CaptureState {
     Previewing,
     Sending,
     Recovering,
+    Suspended,
     Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemEvent {
+    Sleep,
+    Wake,
+    ScreensWake,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,9 +94,11 @@ pub enum Command {
     Stop,
     Quit,
     Refresh,
+    InputReconnected,
     Configure(Config),
     Overview(bool),
     PermissionChanged(bool),
+    System(SystemEvent),
 }
 
 #[cfg(test)]
@@ -98,6 +110,7 @@ mod tests {
         let json =
             r#"{"device_uid":"RME","left":9,"right":16,"mode":"stereo","muted":false,"gain_db":3}"#;
         let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.auto_send_on_resume);
         assert_eq!(config.left, 9);
         assert_eq!(config.right, 16);
         assert_eq!(
@@ -107,6 +120,20 @@ mod tests {
         let restored: Config =
             serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn automatic_send_is_opt_in_and_round_trips_as_a_boolean() {
+        assert!(!Config::default().auto_send_on_resume);
+        let config = Config {
+            auto_send_on_resume: true,
+            ..Config::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Config>(&serde_json::to_string(&config).unwrap()).unwrap(),
+            config
+        );
+        assert!(serde_json::from_str::<Config>(r#"{"auto_send_on_resume":"true"}"#).is_err());
     }
 
     #[test]

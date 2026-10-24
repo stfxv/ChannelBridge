@@ -106,6 +106,7 @@ mod tests {
             right: 16,
             mode: Mode::Stereo,
             muted: false,
+            auto_send_on_resume: false,
         };
         save(&path, &original).unwrap();
         let invalid = Config {
