@@ -31,12 +31,17 @@ pub struct Snapshot {
     pub device_error: Option<String>,
 }
 pub struct Worker {
-    commands: SyncSender<Command>,
+    commands: Arc<Mutex<Option<SyncSender<Command>>>>,
     intent: Arc<AtomicU8>,
     quit: Arc<AtomicBool>,
     system_events: SystemEvents,
     snapshot: Arc<Mutex<Snapshot>>,
     thread: Option<JoinHandle<()>>,
+}
+fn seal(commands: &Mutex<Option<SyncSender<Command>>>, quit: &AtomicBool) -> bool {
+    let mut admission = commands.lock().unwrap_or_else(|error| error.into_inner());
+    quit.store(true, Ordering::Release);
+    admission.take().is_some()
 }
 /// Notification callbacks only publish atomics; they never access UI or HAL.
 /// The latest sleep/wake state wins if notifications arrive before a worker turn.
@@ -118,6 +123,7 @@ fn apply_command<B: Backend>(
 }
 fn apply_system_events<B: Backend>(
     events: &SystemEvents,
+    quit: &AtomicBool,
     controller: &mut Controller<B>,
     error: &mut Option<String>,
     configuration_attempt: &mut u64,
@@ -127,6 +133,9 @@ fn apply_system_events<B: Backend>(
         .into_iter()
         .chain(screens_woke.then_some(SystemEvent::ScreensWake))
     {
+        if quit.load(Ordering::Acquire) {
+            break;
+        }
         apply_command(
             controller,
             Command::System(event),
@@ -141,8 +150,27 @@ struct InputPresence {
     observed: Option<(String, bool)>,
 }
 impl InputPresence {
-    fn observe(&mut self, uid: &str, devices: &[crate::view::DeviceChoice]) -> bool {
-        let present = devices.iter().any(|device| device.uid == uid);
+    fn observe(&mut self, uid: &str, inventory: &crate::view::DeviceInventory) -> bool {
+        if self
+            .observed
+            .as_ref()
+            .is_some_and(|(previous, _)| previous != uid)
+        {
+            self.observed = None;
+        }
+        if uid.is_empty() {
+            self.observed = None;
+            return false;
+        }
+        let present = inventory.choices.iter().any(|device| device.uid == uid);
+        if !present
+            && matches!(
+                inventory.completeness,
+                crate::view::InventoryCompleteness::Partial { .. }
+            )
+        {
+            return false;
+        }
         let reconnected = self
             .observed
             .as_ref()
@@ -171,7 +199,8 @@ impl Worker {
         config: Config,
         factory: impl FnOnce() -> Result<B, String> + Send + 'static,
     ) -> std::io::Result<Self> {
-        let (commands, receiver) = mpsc::sync_channel(32);
+        let (sender, receiver) = mpsc::sync_channel(32);
+        let commands = Arc::new(Mutex::new(Some(sender)));
         let intent = Arc::new(AtomicU8::new(0));
         let quit = Arc::new(AtomicBool::new(false));
         let system_events = SystemEvents {
@@ -198,6 +227,7 @@ impl Worker {
         let requested = Arc::clone(&intent);
         let exiting = Arc::clone(&quit);
         let lifecycle = system_events.clone();
+        let admission = Arc::clone(&commands);
         let thread = thread::Builder::new()
             .name("channelbridge-control".into())
             .spawn(move || {
@@ -210,13 +240,18 @@ impl Worker {
                 let backend = match factory() {
                     Ok(backend) => backend,
                     Err(error) => {
+                        seal(&admission, &exiting);
+                        let configuration_attempt = receiver
+                            .iter()
+                            .filter(|command| matches!(command, Command::Configure(_)))
+                            .count() as u64;
                         publish(Snapshot {
                             state: CaptureState::Blocked,
                             config,
                             wanted_send: false,
-                            error: Some(error),
-                            command_error: None,
-                            configuration_attempt: 0,
+                            error: Some(error.clone()),
+                            command_error: (configuration_attempt != 0).then_some(error),
+                            configuration_attempt,
                             finished: true,
                             audio: None,
                             diagnostics: None,
@@ -239,12 +274,14 @@ impl Worker {
                 let mut next_inventory = Instant::now();
                 let mut input_presence = InputPresence::default();
                 let mut driver_diagnostics = None;
-                loop {
+                let mut held_command = None;
+                'running: loop {
                     if exiting.load(Ordering::Acquire) {
                         break;
                     }
                     if apply_system_events(
                         &lifecycle,
+                        &exiting,
                         &mut controller,
                         &mut command_error,
                         &mut configuration_attempt,
@@ -252,8 +289,15 @@ impl Worker {
                         next_tick = Instant::now();
                         next_inventory = Instant::now();
                     }
+                    if exiting.load(Ordering::Acquire) {
+                        break;
+                    }
                     match receiver.recv_timeout(Duration::from_millis(20)) {
                         Ok(command) => {
+                            if exiting.load(Ordering::Acquire) {
+                                held_command = Some(command);
+                                break;
+                            }
                             apply_queued_command(
                                 &mut controller,
                                 command,
@@ -267,8 +311,15 @@ impl Worker {
                     }
                     // Finite drain budget: UI bursts cannot starve health checks.
                     for _ in 0..31 {
+                        if exiting.load(Ordering::Acquire) {
+                            break 'running;
+                        }
                         match receiver.try_recv() {
                             Ok(command) => {
+                                if exiting.load(Ordering::Acquire) {
+                                    held_command = Some(command);
+                                    break 'running;
+                                }
                                 apply_queued_command(
                                     &mut controller,
                                     command,
@@ -285,6 +336,7 @@ impl Worker {
                     }
                     if apply_system_events(
                         &lifecycle,
+                        &exiting,
                         &mut controller,
                         &mut command_error,
                         &mut configuration_attempt,
@@ -292,8 +344,15 @@ impl Worker {
                         next_tick = Instant::now();
                         next_inventory = Instant::now();
                     }
+                    if exiting.load(Ordering::Acquire) {
+                        break;
+                    }
                     if Instant::now() >= next_inventory {
-                        match controller.devices() {
+                        let inventory = controller.devices();
+                        if exiting.load(Ordering::Acquire) {
+                            break;
+                        }
+                        match inventory {
                             Ok(current) => {
                                 if input_presence.observe(&controller.config().device_uid, &current)
                                 {
@@ -305,10 +364,18 @@ impl Worker {
                                     );
                                     next_tick = Instant::now();
                                 }
-                                devices = current.into();
-                                device_error = None;
+                                devices = current.choices.into();
+                                device_error = match current.completeness {
+                                    crate::view::InventoryCompleteness::Complete => None,
+                                    crate::view::InventoryCompleteness::Partial { warning } => {
+                                        Some(warning)
+                                    }
+                                };
                             }
                             Err(error) => device_error = Some(error),
+                        }
+                        if exiting.load(Ordering::Acquire) {
+                            break;
                         }
                         driver_diagnostics = controller.driver_diagnostics().map(|reading| {
                             crate::view::DriverDiagnostics {
@@ -321,6 +388,9 @@ impl Worker {
                             }
                         });
                         next_inventory = Instant::now() + Duration::from_secs(1);
+                    }
+                    if exiting.load(Ordering::Acquire) {
+                        break;
                     }
                     let manual_intent = requested.swap(0, Ordering::AcqRel);
                     match manual_intent {
@@ -341,6 +411,9 @@ impl Worker {
                             );
                         }
                         _ => {}
+                    }
+                    if exiting.load(Ordering::Acquire) {
+                        break;
                     }
                     if Instant::now() >= next_tick {
                         controller.tick_with_manual_intent(
@@ -366,7 +439,14 @@ impl Worker {
                         device_error: device_error.clone(),
                     });
                 }
+                seal(&admission, &exiting);
                 let shutdown_error = controller.command(Command::Quit).err();
+                for command in held_command.into_iter().chain(receiver.iter()) {
+                    if let Command::Configure(config) = command {
+                        configuration_attempt = configuration_attempt.saturating_add(1);
+                        command_error = controller.persist_configuration(config).err();
+                    }
+                }
                 publish(Snapshot {
                     state: controller.state(),
                     config: controller.config().clone(),
@@ -394,11 +474,21 @@ impl Worker {
         })
     }
     pub fn send(&self, command: Command) -> Result<(), String> {
-        if self.quit.load(Ordering::Acquire) || self.snapshot().finished {
+        if self.snapshot().finished {
             return Err("control worker has stopped".into());
         }
-        // Stop and Quit do not depend on free queue capacity. Last send intent
-        // supersedes earlier intent while settings retain their queue order.
+        if matches!(command, Command::Quit) {
+            return if seal(&self.commands, &self.quit) {
+                Ok(())
+            } else {
+                Err("control worker has stopped".into())
+            };
+        }
+        let admission = self
+            .commands
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let sender = admission.as_ref().ok_or("control worker has stopped")?;
         match command {
             Command::System(event) => {
                 self.system_events.notify(event);
@@ -412,17 +502,10 @@ impl Worker {
                 self.intent.store(2, Ordering::Release);
                 Ok(())
             }
-            Command::Quit => {
-                self.quit.store(true, Ordering::Release);
-                Ok(())
-            }
-            command => self
-                .commands
-                .try_send(command)
-                .map_err(|error| match error {
-                    TrySendError::Full(_) => "control command queue is full".into(),
-                    TrySendError::Disconnected(_) => "control worker has stopped".into(),
-                }),
+            command => sender.try_send(command).map_err(|error| match error {
+                TrySendError::Full(_) => "control command queue is full".into(),
+                TrySendError::Disconnected(_) => "control worker has stopped".into(),
+            }),
         }
     }
     pub fn system_events(&self) -> SystemEvents {
@@ -436,7 +519,7 @@ impl Worker {
     }
     /// Signal without blocking AppKit. Poll snapshot.finished before joining.
     pub fn request_shutdown(&self) {
-        self.quit.store(true, Ordering::Release);
+        seal(&self.commands, &self.quit);
     }
     pub fn join(mut self) -> thread::Result<()> {
         self.request_shutdown();
@@ -447,13 +530,19 @@ impl Drop for Worker {
     fn drop(&mut self) {
         // The worker still owns sessions while closing. Detaching its handle is
         // preferable to blocking the UI on an unresponsive device teardown.
-        self.quit.store(true, Ordering::Release);
+        seal(&self.commands, &self.quit);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn complete(choices: &[crate::view::DeviceChoice]) -> crate::view::DeviceInventory {
+        crate::view::DeviceInventory {
+            choices: choices.to_vec(),
+            completeness: crate::view::InventoryCompleteness::Complete,
+        }
+    }
     use std::{rc::Rc, sync::atomic::AtomicUsize};
     struct LocalBackend {
         _local: Rc<()>,
@@ -513,23 +602,23 @@ mod tests {
         impl Backend for PresenceBackend {
             type Pending = ();
             type Session = ();
-            fn devices(&mut self) -> Result<Vec<crate::view::DeviceChoice>, String> {
+            fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
                 self.inventory_count.fetch_add(1, Ordering::Release);
                 if !self.present.load(Ordering::Acquire) {
-                    return Ok(Vec::new());
+                    return Ok(crate::view::DeviceInventory::default());
                 }
                 if let Some(release) = self.release.take() {
                     self.entered.send(()).unwrap();
                     release.recv().unwrap();
                 }
-                Ok(vec![crate::view::DeviceChoice {
+                Ok(complete(&[crate::view::DeviceChoice {
                     uid: "source".into(),
                     name: "Input".into(),
                     channels: 2,
                     rate: 48000.0,
                     physical_inputs: Vec::new(),
                     format_error: None,
-                }])
+                }]))
             }
             fn save(&mut self, _: &Config) -> Result<(), String> {
                 Ok(())
@@ -628,7 +717,7 @@ mod tests {
             },
         );
         let mut presence = InputPresence::default();
-        presence.observe("source", &[]);
+        presence.observe("source", &complete(&[]));
         let mut error = None;
         let mut attempt = 0;
         for uid in ["other", "source"] {
@@ -645,7 +734,7 @@ mod tests {
             );
         }
         assert!(presence.observed.is_none());
-        presence.observe("source", &[]);
+        presence.observe("source", &complete(&[]));
         let config = Config {
             auto_send_on_resume: true,
             ..controller.config().clone()
@@ -690,20 +779,20 @@ mod tests {
         };
         let mut presence = InputPresence::default();
         assert!(
-            !presence.observe("source", std::slice::from_ref(&device)),
+            !presence.observe("source", &complete(std::slice::from_ref(&device))),
             "startup present is not a reconnect"
         );
-        assert!(!presence.observe("source", &[]));
-        assert!(presence.observe("source", std::slice::from_ref(&device)));
-        assert!(!presence.observe("source", std::slice::from_ref(&device)));
+        assert!(!presence.observe("source", &complete(&[])));
+        assert!(presence.observe("source", &complete(std::slice::from_ref(&device))));
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&device))));
         assert!(
-            !presence.observe("other", &[]),
+            !presence.observe("other", &complete(&[])),
             "selection changes establish a baseline"
         );
-        assert!(!presence.observe("source", std::slice::from_ref(&device)));
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&device))));
         let mut absent_at_startup = InputPresence::default();
-        assert!(!absent_at_startup.observe("source", &[]));
-        assert!(absent_at_startup.observe("source", &[device]));
+        assert!(!absent_at_startup.observe("source", &complete(&[])));
+        assert!(absent_at_startup.observe("source", &complete(&[device])));
     }
 
     #[test]
