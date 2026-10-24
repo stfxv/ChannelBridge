@@ -198,6 +198,36 @@ mod tests {
     use crate::drift::ClockEstimator;
     use crate::fifo::stereo_queue;
     #[test]
+    fn session_target_primes_complete_large_callbacks() {
+        for frames in [1024, 4096] {
+            let target = 48_000 * 16 / 1000;
+            let (mut producer, consumer) = stereo_queue(16384).unwrap();
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).unwrap();
+            let incoming = vec![StereoFrame::new(0.25, -0.25); frames];
+            let mut output = vec![StereoFrame::SILENCE; frames];
+            let mut audible_blocks = 0;
+            for cycle in 0..16 {
+                assert_eq!(producer.push(&incoming), frames);
+                let report = processor.render(&mut output, Some(1.0));
+                assert_eq!(report.missing, 0, "frames={frames} cycle={cycle} {report:?}");
+                assert_eq!(report.dropped_lookahead, 0);
+                if report.priming {
+                    assert_eq!(cycle, 0, "startup must finish by the second callback");
+                    assert_eq!(report.queued_input, frames);
+                    assert!(output.iter().all(|frame| *frame == StereoFrame::SILENCE));
+                } else {
+                    assert_eq!(report.produced, frames);
+                    assert!((output[frames - 1].left - 0.25).abs() < 0.0001);
+                    assert!((output[frames - 1].right + 0.25).abs() < 0.0001);
+                    audible_blocks += 1;
+                }
+            }
+            assert!(audible_blocks >= 15);
+            assert_eq!(processor.target_frames(), target);
+        }
+    }
+
+    #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
         let (mut producer, consumer) = stereo_queue(8192).unwrap();
         let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
