@@ -16,6 +16,10 @@ pub struct Selection {
     muted: bool,
 }
 impl Selection {
+    /// Accepts one-based channels in `1..=512` and stores zero-based indices.
+    /// Mono uses `left` for both channels and ignores `right`. Returns `None`
+    /// when a channel used by the selected mode is outside that range.
+    #[must_use]
     pub fn new(left: u32, right: u32, mode: Mode, muted: bool) -> Option<Self> {
         if !(1..=512).contains(&left) {
             return None;
@@ -31,18 +35,23 @@ impl Selection {
             muted,
         })
     }
+    #[must_use]
     pub fn left(&self) -> usize {
         self.left
     }
+    #[must_use]
     pub fn right(&self) -> usize {
         self.right
     }
+    #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
     }
+    #[must_use]
     pub fn muted(&self) -> bool {
         self.muted
     }
+    #[must_use]
     pub fn available(&self, channels: usize) -> bool {
         self.left < channels && self.right < channels
     }
@@ -95,6 +104,7 @@ pub struct AtomicRouting {
     word: AtomicU64,
 }
 impl AtomicRouting {
+    #[must_use]
     pub fn new(selection: Selection) -> Self {
         Self {
             word: AtomicU64::new(
@@ -108,6 +118,7 @@ impl AtomicRouting {
             ),
         }
     }
+    #[must_use]
     pub fn load(&self) -> Routing {
         Routing::decode(self.word.load(Ordering::Acquire))
     }

@@ -19,6 +19,7 @@ pub struct Report {
     pub first_missing_input_sample: Option<f64>,
 }
 impl Report {
+    #[must_use]
     pub fn passed(&self) -> bool {
         self.callbacks >= 10
             && self.compared_frames >= 4096

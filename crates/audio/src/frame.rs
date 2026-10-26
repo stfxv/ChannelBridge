@@ -11,6 +11,7 @@ impl StereoFrame {
         right: 0.0,
     };
 
+    #[must_use]
     pub fn new(left: f32, right: f32) -> Self {
         Self {
             left: finite(left),
@@ -30,18 +31,21 @@ impl StereoFrame {
     }
 }
 
+#[must_use]
 pub fn finite(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
 }
 
-/// One normalization policy for ring addressing AND availability checking.
-/// Integer sample numbers must be exactly representable by the HAL's f64.
+/// A nonnegative frame index exactly representable by the HAL's `f64`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FramePosition(u64);
 
 impl FramePosition {
     pub const MAX_EXACT: u64 = (1_u64 << 53) - 1;
 
+    /// Floors a finite sample time in `0..=MAX_EXACT`.
+    /// Returns `None` for negative, non-finite, or larger values.
+    #[must_use]
     pub fn from_sample_time(time: f64) -> Option<Self> {
         if !time.is_finite() || time < 0.0 || time > Self::MAX_EXACT as f64 {
             return None;
@@ -49,10 +53,14 @@ impl FramePosition {
         Some(Self(time.floor() as u64))
     }
 
+    /// Returns `None` above `MAX_EXACT`, even if a larger integer happens
+    /// to be representable as an `f64`.
+    #[must_use]
     pub fn from_integer(time: u64) -> Option<Self> {
         (time <= Self::MAX_EXACT).then_some(Self(time))
     }
 
+    #[must_use]
     pub fn get(self) -> u64 {
         self.0
     }

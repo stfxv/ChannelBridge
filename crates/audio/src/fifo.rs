@@ -24,7 +24,10 @@ pub struct Consumer {
     shared: Arc<Shared>,
 }
 
-/// Allocate the queue before starting either I/O callback.
+/// Allocates one producer and one consumer before either I/O callback starts.
+/// Each endpoint has one owner. Returns `None` unless capacity is a power of
+/// two in `2..=1_048_576`, or if frame storage cannot be reserved.
+#[must_use]
 pub fn stereo_queue(capacity: usize) -> Option<(Producer, Consumer)> {
     if !capacity.is_power_of_two() || !(2..=1_048_576).contains(&capacity) {
         return None;
@@ -90,10 +93,12 @@ pub struct PopResult {
     pub discarded: usize,
 }
 impl Consumer {
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.shared.frames.len()
     }
 
+    #[must_use]
     pub fn available(&self) -> usize {
         let read = self.shared.read.load(Ordering::Relaxed);
         let write = self.shared.write.load(Ordering::Acquire);

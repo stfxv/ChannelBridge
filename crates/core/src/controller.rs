@@ -1,6 +1,9 @@
 //! Control-thread state machine. Backend calls must not block audio callbacks.
 use crate::{CaptureState, Command, Config};
 
+/// Control-thread operations for negotiation, session ownership, and persistence.
+/// The controller retries recoverable failures and owns each opened session
+/// until `close` consumes it. Implementations keep these calls off audio callbacks.
 pub trait Backend {
     fn retained_io_contexts(&self) -> u64 {
         0
@@ -27,7 +30,10 @@ pub trait Backend {
     ) -> Option<crate::view::AudioView> {
         None
     }
+    /// Persists the configuration before the controller accepts the edit.
+    /// An error leaves the controller's prior configuration active.
     fn save(&mut self, config: &Config) -> Result<(), String>;
+    /// Starts rate negotiation. `ready` polls the returned pending operation.
     fn negotiate(&mut self, config: &Config) -> Result<Self::Pending, String>;
     fn ready(&mut self, pending: &Self::Pending) -> Result<bool, String>;
     fn open(&mut self, config: &Config) -> Result<Self::Session, String>;
@@ -39,9 +45,12 @@ pub trait Backend {
         sending: bool,
         overview: bool,
     ) -> Result<(), String>;
+    /// Reports whether failed startup retained I/O that prevents a safe retry.
     fn open_failure_requires_stop(&self) -> bool {
         false
     }
+    /// Consumes the session and stops its callbacks. An error prevents automatic
+    /// reopening because callback teardown may still be incomplete.
     fn close(&mut self, session: Self::Session) -> Result<(), String>;
 }
 /// `now_ms` is monotonic worker time, not a wall clock. Only the worker owns
@@ -65,6 +74,7 @@ pub struct Controller<B: Backend> {
     history: std::sync::Arc<[crate::view::ControlEvent]>,
 }
 impl<B: Backend> Controller<B> {
+    #[must_use]
     pub fn new(backend: B, config: Config) -> Self {
         Self {
             backend,
@@ -88,6 +98,7 @@ impl<B: Backend> Controller<B> {
     pub fn devices(&mut self) -> Result<crate::view::DeviceInventory, String> {
         self.backend.devices()
     }
+    #[must_use]
     pub fn history(&self) -> std::sync::Arc<[crate::view::ControlEvent]> {
         std::sync::Arc::clone(&self.history)
     }
@@ -122,32 +133,40 @@ impl<B: Backend> Controller<B> {
         });
         self.history = events.into();
     }
+    #[must_use]
     pub fn driver_diagnostics(&self) -> Option<crate::view::DriverReading> {
         self.backend.driver_diagnostics()
     }
+    #[must_use]
     pub fn retained_io_contexts(&self) -> u64 {
         self.backend.retained_io_contexts()
     }
+    #[must_use]
     pub fn audio_view(&self) -> Option<crate::view::AudioView> {
         self.session.as_ref().and_then(|session| {
             self.backend
                 .audio_view(session, &self.config, self.overview)
         })
     }
+    #[must_use]
     pub fn state(&self) -> CaptureState {
         self.state
     }
+    #[must_use]
     pub fn diagnostics(&self) -> Option<crate::view::AudioDiagnostics> {
         self.session
             .as_ref()
             .and_then(|session| self.backend.diagnostics(session))
     }
+    #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
     }
+    #[must_use]
     pub fn wanted_send(&self) -> bool {
         self.wanted_send
     }
+    #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -313,6 +332,8 @@ impl<B: Backend> Controller<B> {
         self.retry_at = now_ms.saturating_add(self.retry_delay);
         self.retry_delay = (self.retry_delay * 2).min(30000);
     }
+    /// Advances recovery and negotiation using monotonic milliseconds.
+    /// Repeated recoverable failures back off from one to thirty seconds.
     pub fn tick(&mut self, now_ms: u64) {
         self.tick_with_manual_intent(now_ms, false);
     }

@@ -97,10 +97,12 @@ impl OutputCallback {
             peak: AtomicU64::new(u64::MAX),
         })
     }
+    #[must_use]
     pub fn with_source_clock(mut self, clock: Arc<SourceClock>) -> Self {
         self.source_clock = clock;
         self
     }
+    #[must_use]
     pub fn stats(&self) -> OutputStats {
         let minimum = self.fifo_min.load(Ordering::Acquire);
         let observed = minimum != u64::MAX;

@@ -252,6 +252,7 @@ impl<T: Handler> Registration<T> {
             _control_thread: PhantomData,
         })
     }
+    #[must_use]
     pub fn handler(&self) -> &T {
         &self.context.as_ref().expect("live registration").handler
     }

@@ -55,9 +55,11 @@ impl CaptureLayout {
             rate,
         })
     }
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.total
     }
+    #[must_use]
     pub fn sample_rate(&self) -> f64 {
         self.rate
     }
@@ -159,12 +161,15 @@ impl<'buffer> InputBuffers<'buffer> {
         }
         Ok(result)
     }
+    #[must_use]
     pub fn frames(&self) -> usize {
         self.frames
     }
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.channels
     }
+    #[must_use]
     pub fn sample(&self, frame: usize, channel: usize) -> Option<f32> {
         if frame >= self.frames || channel >= self.channels {
             return None;

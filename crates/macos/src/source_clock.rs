@@ -29,12 +29,14 @@ impl SourceClock {
             )
             .is_ok()
     }
+    #[must_use]
     pub fn speed(&self, generation: u64) -> Option<f64> {
         self.snapshot()
             .filter(|(observed, _)| *observed == generation)
             .and_then(|(_, speed)| speed)
     }
     /// A single atomic word keeps diagnostic speed and generation paired too.
+    #[must_use]
     pub fn snapshot(&self) -> Option<(u64, Option<f64>)> {
         let word = self.0.load(Ordering::Acquire);
         let encoded = word & MASK;

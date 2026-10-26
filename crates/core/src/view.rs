@@ -124,6 +124,7 @@ pub struct AudioView {
     pub virtual_bits: u32,
     pub levels: Vec<InputLevel>,
 }
+#[must_use]
 pub fn dbfs(amplitude: f32) -> Option<f32> {
     (amplitude.is_finite() && amplitude > 0.0).then(|| 20.0 * amplitude.log10())
 }

@@ -113,6 +113,9 @@ impl std::error::Error for DiagnosticError {}
 impl DriverCounters {
     /// Decode the HAL's native-endian protocol v1 bytes, never Rust struct layout.
     /// Counters are independently sampled cumulative totals, not an atomic epoch.
+    /// Requires exactly 48 bytes: version and reserved `u32` fields, followed by
+    /// five `u64` fields in declaration order. Rejects incompatible versions and
+    /// nonzero reserved bytes with `DiagnosticError`.
     pub fn decode(bytes: &[u8]) -> Result<Self, DiagnosticError> {
         if bytes.len() != DIAGNOSTICS_BYTES {
             return Err(DiagnosticError::Size(bytes.len()));

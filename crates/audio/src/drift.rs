@@ -17,6 +17,8 @@ pub struct ClockEstimator {
     speed: f64,
 }
 impl ClockEstimator {
+    /// Returns `None` if either clock rate is zero.
+    #[must_use]
     pub fn new(nominal_rate: u32, ticks_per_second: u64) -> Option<Self> {
         if nominal_rate == 0 || ticks_per_second == 0 {
             return None;
@@ -29,6 +31,7 @@ impl ClockEstimator {
             speed: 1.0,
         })
     }
+    #[must_use]
     pub fn speed(&self) -> f64 {
         self.speed
     }
@@ -93,6 +96,8 @@ pub struct DriftController {
 impl DriftController {
     /// target is total pending input in FIFO + resampler working history.
     /// Caller sizes it for its block size, filter lookahead and arrival jitter.
+    /// Returns `None` for zero rates or a target outside `1..=1_048_576`.
+    #[must_use]
     pub fn new(input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
         if input_rate == 0 || output_rate == 0 || !(1..=1_048_576).contains(&target) {
             return None;
@@ -109,6 +114,7 @@ impl DriftController {
         })
     }
 
+    #[must_use]
     pub fn correction_ppm(&self) -> f64 {
         self.correction * 1_000_000.0
     }
@@ -118,6 +124,7 @@ impl DriftController {
         self.correction = 0.0;
         self.measured_speed = 1.0;
     }
+    #[must_use]
     pub fn step(&self) -> f64 {
         self.nominal_step * (1.0 + self.correction)
     }

@@ -26,6 +26,11 @@ pub struct OutputProcessor {
     stale_discarded: u64,
 }
 impl OutputProcessor {
+    /// Takes ownership of the queue consumer and preallocates callback storage.
+    /// Returns `None` for zero rates, an invalid resampler step, a target
+    /// no larger than filter lookahead or above queue capacity, or a failed
+    /// storage reservation. The target counts queue and filter history together.
+    #[must_use]
     pub fn new(input: Consumer, input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
         let controller = DriftController::new(input_rate, output_rate, target)?;
         let maximum_step = f64::from(input_rate) / f64::from(output_rate) * 1.002;
@@ -50,16 +55,20 @@ impl OutputProcessor {
         })
     }
 
+    #[must_use]
     pub fn correction_ppm(&self) -> f64 {
         self.controller.correction_ppm()
     }
+    #[must_use]
     pub fn fifo_frames(&self) -> usize {
         self.input.available()
     }
     /// Target includes FIFO and interpolation history together.
+    #[must_use]
     pub fn target_frames(&self) -> usize {
         self.target
     }
+    #[must_use]
     pub fn stale_discarded(&self) -> u64 {
         self.stale_discarded
     }

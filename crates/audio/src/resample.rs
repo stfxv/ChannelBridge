@@ -19,6 +19,9 @@ pub struct SincKernel {
 impl SincKernel {
     /// step = input frames consumed per output frame. Include the permitted
     /// clock correction in maximum_step; changing the filter requires a restart.
+    /// Returns `None` for a non-finite step, a step outside `1/128..=128`,
+    /// or a failed reservation of the coefficient table.
+    #[must_use]
     pub fn new(maximum_step: f64) -> Option<Self> {
         if !maximum_step.is_finite() || !(1.0 / 128.0..=128.0).contains(&maximum_step) {
             return None;
@@ -55,6 +58,7 @@ impl SincKernel {
         })
     }
 
+    #[must_use]
     pub fn radius(&self) -> usize {
         self.radius
     }
@@ -122,6 +126,10 @@ pub struct StreamingResampler {
 }
 
 impl StreamingResampler {
+    /// Preallocates history for the filter window and an input block.
+    /// Returns `None` for an invalid kernel step, a block capacity outside
+    /// `1..=65_536`, a capacity overflow, or a failed history reservation.
+    #[must_use]
     pub fn new(maximum_step: f64, block_capacity: usize) -> Option<Self> {
         if !(1..=65_536).contains(&block_capacity) {
             return None;
@@ -143,10 +151,12 @@ impl StreamingResampler {
         })
     }
 
+    #[must_use]
     pub fn lookahead_frames(&self) -> usize {
         self.kernel.radius
     }
 
+    #[must_use]
     pub fn writable_frames(&self) -> usize {
         self.history
             .len()
@@ -154,6 +164,7 @@ impl StreamingResampler {
     }
     /// Include this when measuring queued input; moving FIFO data into working
     /// history must not make clock control believe the samples were consumed.
+    #[must_use]
     pub fn queued_input_frames(&self) -> usize {
         self.written.saturating_sub(self.cursor) as usize
     }
@@ -169,6 +180,8 @@ impl StreamingResampler {
         self.fraction = 0.0;
     }
 
+    /// Copies the accepted prefix into history without allocation.
+    /// A full history leaves the remaining input for the caller to retain.
     pub fn push(&mut self, input: &[StereoFrame]) -> usize {
         let count = input.len().min(self.writable_frames());
         let mut accepted = 0;

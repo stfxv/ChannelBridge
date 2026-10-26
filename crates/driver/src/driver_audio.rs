@@ -15,6 +15,7 @@ pub struct DriverAudio {
 }
 
 impl DriverAudio {
+    #[must_use]
     pub fn new(capacity: usize) -> Option<Self> {
         Some(Self {
             ring: TimelineRing::new(capacity)?,
@@ -74,6 +75,7 @@ impl DriverAudio {
         result
     }
 
+    #[must_use]
     pub fn counters(&self) -> DriverCounters {
         DriverCounters {
             generation: self.generation.load(Ordering::Acquire),

@@ -22,6 +22,7 @@ pub struct Report {
     pub invalid_samples: u64,
 }
 impl Report {
+    #[must_use]
     pub fn valid(&self) -> bool {
         self.callbacks >= 10
             && self.frames >= 4096

@@ -17,6 +17,9 @@ pub struct ZeroTimestamp {
 }
 
 impl DeviceClock {
+    /// Returns `None` if the tick frequency, sample rate, period, or seed is zero.
+    /// `anchor_ticks` and subsequent timestamps use the same monotonic clock.
+    #[must_use]
     pub fn new(
         anchor_ticks: u64,
         ticks_per_second: u64,
@@ -36,6 +39,9 @@ impl DeviceClock {
         })
     }
 
+    /// Returns the latest complete period at or before `now_ticks`.
+    /// Returns `None` before the anchor or if the result overflows `u64`.
+    #[must_use]
     pub fn timestamp(self, now_ticks: u64) -> Option<ZeroTimestamp> {
         let elapsed = now_ticks.checked_sub(self.anchor_ticks)?;
         let frames =

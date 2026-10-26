@@ -117,6 +117,7 @@ pub struct UuidBytes {
     pub bytes: [u8; 16],
 }
 
+#[must_use]
 pub const fn fourcc(value: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*value)
 }

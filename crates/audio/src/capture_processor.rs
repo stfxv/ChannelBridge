@@ -37,6 +37,9 @@ pub struct CaptureProcessor {
     pending_generation: bool,
 }
 impl CaptureProcessor {
+    /// Takes ownership of the meter writer and queue producer for one callback.
+    /// Returns `None` for a zero sample rate or tick frequency, or a failed
+    /// reservation of the 4096-frame scratch buffer.
     pub fn new(
         routing: Arc<AtomicRouting>,
         meters: MeterWriter,

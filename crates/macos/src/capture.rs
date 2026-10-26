@@ -60,6 +60,7 @@ impl Drop for Gate<'_> {
     }
 }
 impl CaptureCallback {
+    #[must_use]
     pub fn new(layout: CaptureLayout, processor: CaptureProcessor) -> Self {
         Self {
             source_clock: Arc::new(SourceClock::default()),
@@ -77,9 +78,11 @@ impl CaptureCallback {
             unavailable_channel: AtomicU64::new(0),
         }
     }
+    #[must_use]
     pub fn source_clock(&self) -> Arc<SourceClock> {
         Arc::clone(&self.source_clock)
     }
+    #[must_use]
     pub fn stats(&self) -> CaptureStats {
         let clock = self.source_clock.snapshot();
         CaptureStats {

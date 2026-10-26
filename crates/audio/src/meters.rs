@@ -77,6 +77,9 @@ fn allocated<T>(count: usize, mut make: impl FnMut() -> T) -> Option<Box<[T]>> {
     values.extend((0..count).map(|_| make()));
     Some(values.into_boxed_slice())
 }
+/// Allocates a callback-owned writer and a reader that can be cloned for views.
+/// Returns `None` unless channels is in `1..=512` and tick frequency is nonzero,
+/// or if meter storage cannot be reserved. Both endpoints use the same clock.
 pub fn meter_bank(channels: usize, ticks_per_second: u64) -> Option<(MeterWriter, MeterReader)> {
     if !(1..=512).contains(&channels) || ticks_per_second == 0 {
         return None;
@@ -113,6 +116,7 @@ impl Shared {
     }
 }
 impl MeterWriter {
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.current.len()
     }
@@ -157,6 +161,7 @@ impl MeterWriter {
     }
 }
 impl MeterReader {
+    #[must_use]
     pub fn level(&self, channel: usize, now: u64) -> Level {
         let Some(bucket) = self.shared.bucket(now) else {
             return Level::default();

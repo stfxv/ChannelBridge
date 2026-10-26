@@ -37,6 +37,7 @@ fn nominal_rate(device: ObjectId) -> Result<f64, Error> {
     Ok(rate)
 }
 impl RateFollow {
+    #[must_use]
     pub fn desired_rate(&self) -> u32 {
         self.desired
     }

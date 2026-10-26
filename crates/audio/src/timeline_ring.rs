@@ -85,6 +85,8 @@ pub struct TimelineRing {
 
 impl TimelineRing {
     /// Allocation belongs to initialization, never a HAL I/O callback.
+    /// Returns `None` outside `1..=1_048_576` frames or if storage reservation fails.
+    #[must_use]
     pub fn new(capacity_frames: usize) -> Option<Self> {
         if capacity_frames == 0 || capacity_frames > 1_048_576 {
             return None;
@@ -95,6 +97,7 @@ impl TimelineRing {
         Some(Self { slots })
     }
 
+    #[must_use]
     pub fn write(&self, generation: u64, start: FramePosition, audio: &[StereoFrame]) -> Transfer {
         let mut result = Transfer::default();
         if generation == 0 || audio.len() > self.slots.len() {
@@ -190,7 +193,7 @@ mod tests {
     fn fractional_timestamps_do_not_spuriously_mute() {
         let ring =
             TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
-        ring.write(
+        let _ = ring.write(
             1,
             FramePosition::from_sample_time(128.25)
                 .expect("fixture sample time is finite, nonnegative and within the timeline range"),
@@ -214,11 +217,11 @@ mod tests {
     fn wrap_and_restart_do_not_read_stale_audio() {
         let ring =
             TimelineRing::new(4).expect("fixture timeline capacity is a nonzero power of two");
-        ring.write(1, at(3), &[tone(); 4]);
+        let _ = ring.write(1, at(3), &[tone(); 4]);
         let mut out = [StereoFrame::SILENCE; 4];
         assert_eq!(ring.read(1, at(3), &mut out).valid, 4);
         assert_eq!(ring.read(2, at(3), &mut out).valid, 0);
-        ring.write(1, at(7), &[tone(); 4]);
+        let _ = ring.write(1, at(7), &[tone(); 4]);
         assert_eq!(ring.read(1, at(3), &mut out).valid, 0);
         assert_eq!(ring.read(1, at(7), &mut out).valid, 4);
     }
@@ -235,7 +238,7 @@ mod tests {
                 scope.spawn(move || {
                     for n in 0..40_000 {
                         let v = (n + writer * 40_000 + 1) as f32;
-                        ring.write(1, at(0), &[StereoFrame::new(v, -v)]);
+                        let _ = ring.write(1, at(0), &[StereoFrame::new(v, -v)]);
                     }
                 });
             }

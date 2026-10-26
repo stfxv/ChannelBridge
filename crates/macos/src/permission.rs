@@ -16,6 +16,7 @@ pub enum Permission {
     Unavailable,
 }
 impl Permission {
+    #[must_use]
     pub fn allowed(self) -> bool {
         self == Self::Authorized
     }
@@ -29,6 +30,7 @@ fn translate(status: AVAuthorizationStatus) -> Permission {
         _ => Permission::Unavailable,
     }
 }
+#[must_use]
 pub fn status() -> Permission {
     // SAFETY: framework's immutable constant is audio, the supported media type.
     let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
@@ -88,6 +90,7 @@ impl MicrophonePermission {
         }
         Ok(Request::Pending)
     }
+    #[must_use]
     pub fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }

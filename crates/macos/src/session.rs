@@ -184,6 +184,7 @@ impl TestSession {
             source_streams: prepared.source_streams,
         })
     }
+    #[must_use]
     pub fn stats(&self) -> (crate::capture::CaptureStats, crate::output::OutputStats) {
         (
             self.capture.handler().stats(),
@@ -212,6 +213,7 @@ pub struct ShutdownError {
     pub route_stopped: bool,
 }
 impl ShutdownError {
+    #[must_use]
     pub fn retained_io_contexts(&self) -> u64 {
         self.output
             .iter()
@@ -219,6 +221,7 @@ impl ShutdownError {
             .filter(|error| error.context_retained)
             .count() as u64
     }
+    #[must_use]
     pub fn requires_stop(&self) -> bool {
         !self.route_stopped
             || self
@@ -227,6 +230,7 @@ impl ShutdownError {
                 .chain(self.input.iter())
                 .any(|error| error.disposition == crate::io::IoDisposition::Fatal)
     }
+    #[must_use]
     pub fn context_retained(&self) -> bool {
         self.output
             .iter()
