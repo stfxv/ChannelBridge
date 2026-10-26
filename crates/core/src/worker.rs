@@ -36,7 +36,7 @@ pub struct Worker {
     quit: Arc<AtomicBool>,
     system_events: SystemEvents,
     snapshot: Arc<Mutex<Snapshot>>,
-    completed: Arc<AtomicBool>,
+    completion: Arc<AtomicU8>,
     initial_config: Config,
     thread: Option<JoinHandle<()>>,
 }
@@ -89,14 +89,35 @@ impl SystemEvents {
         (state, pending & 4 != 0)
     }
 }
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u8)]
+enum Completion {
+    Running = 0,
+    Finished = 1,
+    Panicked = 2,
+}
+impl Completion {
+    fn load(state: &AtomicU8) -> Self {
+        match state.load(Ordering::Acquire) {
+            0 => Self::Running,
+            1 => Self::Finished,
+            _ => Self::Panicked,
+        }
+    }
+}
 /// Declared before the backend so it publishes only after stack unwinding has
 /// dropped the backend/session owners. Preserve join's panic result as well.
 struct WorkerExit {
-    completed: Arc<AtomicBool>,
+    completion: Arc<AtomicU8>,
 }
 impl Drop for WorkerExit {
     fn drop(&mut self) {
-        self.completed.store(true, Ordering::Release);
+        let completion = if thread::panicking() {
+            Completion::Panicked
+        } else {
+            Completion::Finished
+        };
+        self.completion.store(completion as u8, Ordering::Release);
     }
 }
 fn apply_command<B: Backend>(
@@ -215,8 +236,8 @@ impl Worker {
         let commands = Arc::new(Mutex::new(Some(sender)));
         let intent = Arc::new(AtomicU8::new(0));
         let quit = Arc::new(AtomicBool::new(false));
-        let completed = Arc::new(AtomicBool::new(false));
-        let completion = Arc::clone(&completed);
+        let completion = Arc::new(AtomicU8::new(Completion::Running as u8));
+        let thread_completion = Arc::clone(&completion);
         let initial_config = config.clone();
         let system_events = SystemEvents {
             pending: Arc::new(AtomicU8::new(0)),
@@ -247,7 +268,7 @@ impl Worker {
             .name("channelbridge-control".into())
             .spawn(move || {
                 let _exit = WorkerExit {
-                    completed: completion,
+                    completion: thread_completion,
                 };
                 let publish = |value: Snapshot| match shared.lock() {
                     Ok(mut snapshot) => *snapshot = value,
@@ -486,7 +507,7 @@ impl Worker {
             quit,
             system_events,
             snapshot,
-            completed,
+            completion,
             initial_config,
             thread: Some(thread),
         })
@@ -536,17 +557,17 @@ impl Worker {
         self.system_events.clone()
     }
     pub fn snapshot(&self) -> Snapshot {
-        let completed = self.completed.load(Ordering::Acquire);
+        let completion = Completion::load(&self.completion);
+        let completed = completion != Completion::Running;
         let mut value = match self.snapshot.lock() {
             Ok(snapshot) => {
                 let mut value = snapshot.clone();
                 // Stored finished marks normal final publication, not owner destruction.
-                if completed && !value.finished {
+                if completion == Completion::Panicked || (completed && !value.finished) {
                     value.state = CaptureState::Blocked;
                     value.wanted_send = false;
                     value.audio = None;
                     value.diagnostics = None;
-                    value.retained_io_contexts = 0;
                     value.driver_diagnostics = None;
                     value.error = Some("control worker terminated unexpectedly".into());
                 }
@@ -745,14 +766,17 @@ mod tests {
             if panic_on_drop {
                 let after = worker.snapshot();
                 assert_eq!(after.state, CaptureState::Blocked);
-                assert_eq!(after.error.as_deref(), Some("control worker terminated unexpectedly"));
+                assert_eq!(
+                    after.error.as_deref(),
+                    Some("control worker terminated unexpectedly")
+                );
             }
             assert_eq!(worker.join().is_err(), panic_on_drop);
         }
     }
     #[test]
     fn poisoned_snapshot_is_independent_and_completion_survives_unwind() {
-        for panic_on_save in [false, true] {
+        for (panic_on_save, observe_poison) in [(false, false), (false, true), (true, false)] {
             let (factory_entered, factory_observed) = mpsc::channel();
             let (factory_release, factory_gate) = mpsc::channel();
             let (entered, observed) = mpsc::channel();
@@ -789,8 +813,12 @@ mod tests {
             });
             // In the panic case, let the queued command unwind before observing poison.
             factory_release.send(()).expect("factory waits for release");
-            if !panic_on_save {
+            if observe_poison {
                 let _ = worker.snapshot();
+                assert!(
+                    worker.send(Command::Start).is_err(),
+                    "snapshot failure seals healthy admission through quit"
+                );
             }
             observed
                 .recv_timeout(Duration::from_secs(2))
@@ -818,6 +846,79 @@ mod tests {
             );
             assert_eq!(worker.join().is_err(), panic_on_save);
         }
+    }
+    #[test]
+    fn unexpected_completion_clears_session_readings_but_preserves_known_history() {
+        let (factory_release, factory_gate) = mpsc::channel();
+        let (entered, observed) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let worker = Worker::spawn(
+            Config {
+                device_uid: "source".into(),
+                ..Config::default()
+            },
+            move || {
+                factory_gate
+                    .recv()
+                    .expect("factory remains gated until snapshot seeded");
+                Ok(ExitBackend {
+                    entered,
+                    release: gate,
+                    saves: Arc::new(Mutex::new(Vec::new())),
+                    panic_on_save: true,
+                    panic_on_drop: false,
+                })
+            },
+        )
+        .expect("worker starts");
+        worker
+            .send(Command::Configure(Config {
+                device_uid: "source".into(),
+                ..Config::default()
+            }))
+            .expect("panic-triggering command accepted");
+        {
+            let mut snapshot = worker.snapshot.lock().expect("snapshot remains healthy");
+            snapshot.wanted_send = true;
+            snapshot.retained_io_contexts = 7;
+            snapshot.configuration_attempt = 3;
+            snapshot.command_error = Some("prior command failure".into());
+            snapshot.audio = Some(crate::view::AudioView {
+                physical_inputs: Vec::new(),
+                virtual_rate: 48000,
+                virtual_bits: 32,
+                levels: Vec::new(),
+            });
+            snapshot.diagnostics = Some(crate::view::AudioDiagnostics::default());
+        }
+        factory_release.send(()).expect("factory waits for seed");
+        observed
+            .recv_timeout(Duration::from_secs(2))
+            .expect("save panic reaches backend drop");
+        let before = worker.snapshot();
+        release.send(()).expect("backend drop is gated");
+        wait_finished(&worker);
+        let after = worker.snapshot();
+        assert!(!before.finished);
+        assert!(before.audio.is_some());
+        assert_eq!(after.state, CaptureState::Blocked);
+        assert!(!after.wanted_send);
+        assert!(
+            after.audio.is_none()
+                && after.diagnostics.is_none()
+                && after.driver_diagnostics.is_none()
+        );
+        assert_eq!(after.retained_io_contexts, 7);
+        assert_eq!(after.configuration_attempt, 3);
+        assert_eq!(
+            after.command_error.as_deref(),
+            Some("prior command failure")
+        );
+        assert_eq!(
+            after.error.as_deref(),
+            Some("control worker terminated unexpectedly")
+        );
+        assert!(worker.join().is_err());
     }
     #[test]
     fn poisoned_admission_drains_accepted_prefix_even_with_retained_sender() {
