@@ -459,7 +459,9 @@ mod tests {
             vec![Ok(input("input")), Err(devices::Error::Hal(-1))],
             vec![Err(devices::Error::Hal(-1)), Ok(input("input"))],
         ] {
-            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).expect("a successful device list preserves per-entry failures as partial inventory");
+            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).expect(
+                "a successful device list preserves per-entry failures as partial inventory",
+            );
             assert_eq!(inventory.choices.len(), 1);
             assert_eq!(inventory.choices[0].uid, "input");
             assert!(matches!(
@@ -537,7 +539,9 @@ mod tests {
             right: 16,
             ..Config::default()
         };
-        let selected = selection(&config).expect("saved mono selection uses its valid left channel and ignores its stale right channel");
+        let selected = selection(&config).expect(
+            "saved mono selection uses its valid left channel and ignores its stale right channel",
+        );
         assert_eq!((selected.left(), selected.right()), (1, 1));
         assert_eq!(config.right, 16);
         let original = StreamFormat {

@@ -114,7 +114,11 @@ mod tests {
             ..original.clone()
         };
         assert!(save(&path, &invalid).is_err());
-        assert_eq!(load(&path).expect("failed validation preserves the readable previously saved settings"), original);
+        assert_eq!(
+            load(&path)
+                .expect("failed validation preserves the readable previously saved settings"),
+            original
+        );
     }
 
     #[test]
@@ -128,24 +132,41 @@ mod tests {
         };
         assert!(save(&path, &config).is_err());
         assert!(path.is_dir());
-        assert_eq!(fs::read_dir(&dir.0).expect("fixture directory remains present for cleanup inspection").count(), 1);
+        assert_eq!(
+            fs::read_dir(&dir.0)
+                .expect("fixture directory remains present for cleanup inspection")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn corrupted_config_is_not_silently_reset() {
         let dir = TestDirectory::new();
         let path = dir.0.join("settings.json");
-        assert_eq!(load(&path).expect("a missing settings file loads the default configuration"), Config::default());
+        assert_eq!(
+            load(&path).expect("a missing settings file loads the default configuration"),
+            Config::default()
+        );
         fs::write(&path, b"broken json").expect("fixture owns this writable settings path");
-        assert_eq!(load(&path).expect_err("the fixture deliberately wrote malformed JSON").kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            load(&path)
+                .expect_err("the fixture deliberately wrote malformed JSON")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
     fn a_colliding_temporary_file_is_never_removed() {
         let dir = TestDirectory::new();
         let path = dir.0.join("existing.tmp");
-        fs::write(&path, b"owned by another writer").expect("fixture owns this writable settings path");
+        fs::write(&path, b"owned by another writer")
+            .expect("fixture owns this writable settings path");
         assert!(open_temporary(path.clone()).is_err());
-        assert_eq!(fs::read(&path).expect("fixture file was written and remains present for inspection"), b"owned by another writer");
+        assert_eq!(
+            fs::read(&path).expect("fixture file was written and remains present for inspection"),
+            b"owned by another writer"
+        );
     }
 }

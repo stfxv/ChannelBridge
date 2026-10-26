@@ -90,7 +90,8 @@ mod tests {
     use super::*;
     #[test]
     fn shortage_and_epoch_statistics_are_visible() {
-        let audio = DriverAudio::new(512).expect("fixture timeline capacity is a nonzero power of two");
+        let audio =
+            DriverAudio::new(512).expect("fixture timeline capacity is a nonzero power of two");
         let input = [StereoFrame::new(0.25, -0.25); 255];
         audio.write(128.25, &input);
         let mut out = [StereoFrame::SILENCE; 256];

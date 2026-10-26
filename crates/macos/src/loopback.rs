@@ -148,7 +148,8 @@ unsafe fn process(
     let mut mismatched = 0;
     let mut missing = 0;
     let mut received = context.compared.load(Ordering::Relaxed) != 0;
-    for (index, frame) in incoming.chunks_exact(2).enumerate() {
+    let input_frames = incoming.chunks_exact(2).enumerate();
+    for (index, frame) in input_frames {
         if frame[0] == 0.0 && frame[1] == 0.0 {
             silent += 1;
             if received {
@@ -173,7 +174,8 @@ unsafe fn process(
             mismatched += 1;
         }
     }
-    for (index, frame) in outgoing.chunks_exact_mut(2).enumerate() {
+    let output_frames = outgoing.chunks_exact_mut(2).enumerate();
+    for (index, frame) in output_frames {
         frame.copy_from_slice(&tone(
             output_time.sample_time.floor() + index as f64,
             context.rate,
@@ -215,7 +217,8 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
         return Err("probe duration must be between 1 and 30 seconds".into());
     }
     let mut selected = None;
-    for device in devices::list()?.into_iter().flatten() {
+    let available_devices = devices::list()?.into_iter().flatten();
+    for device in available_devices {
         if device.uid == TEST_DEVICE_UID {
             if selected.is_some() {
                 return Err("duplicate Rust test UID".into());
@@ -261,7 +264,8 @@ mod tests {
         };
         let mut incoming = [0_f32; 128];
         let mut outgoing = [0_f32; 128];
-        for (index, frame) in incoming.chunks_exact_mut(2).enumerate() {
+        let input_frames = incoming.chunks_exact_mut(2).enumerate();
+        for (index, frame) in input_frames {
             frame.copy_from_slice(&tone(128.0 + index as f64, context.rate));
         }
         let input = AudioBufferList {

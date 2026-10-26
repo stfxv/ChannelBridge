@@ -41,3 +41,13 @@ so this finding requires review before changing behavior.
 Run the behavior fixtures with `cargo test --locked --manifest-path
 tools/rust-style/Cargo.toml`. The standalone manifest and lockfile isolate parser
 dependencies from every production crate. No nightly rustfmt setting is required.
+
+The `fixture_expects` binary inventories empty `.unwrap()` and `.unwrap_err()`
+method calls, including calls inside macro token trees. Comments and string
+literals are opaque. Run `cargo run --bin fixture_expects -- SOURCE.rs` to print
+one-based line, zero-based column, and method as tab-separated fields. To apply
+reviewed explanations, pass a second file whose rows append a fourth field with
+the causal panic explanation. The tool validates every token location before
+writing and rejects duplicate locations or empty explanations. Recreate the map
+after any source edits; positions refer to the exact input source. Whitespace
+between method names and parentheses requires a manual edit.

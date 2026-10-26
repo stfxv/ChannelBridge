@@ -201,7 +201,8 @@ mod tests {
     use super::*;
     #[test]
     fn fresh_silence_is_distinct_from_missing_and_stale_callbacks() {
-        let (mut writer, reader) = meter_bank(1, 1000).expect("fixture channel count and host clock frequency are positive");
+        let (mut writer, reader) = meter_bank(1, 1000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         assert!(!reader.level(0, 0).fresh);
         assert!(writer.record(0, 0.0, 0));
         assert!(reader.level(0, 0).fresh);
@@ -212,7 +213,8 @@ mod tests {
     }
     #[test]
     fn readers_do_not_clear_peaks_and_old_ring_slots_expire() {
-        let (mut writer, reader) = meter_bank(10, 1000).expect("fixture channel count and host clock frequency are positive");
+        let (mut writer, reader) = meter_bank(10, 1000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         assert_eq!(reader.level(9, 100).held_peak, 0.0);
         writer.record(9, 0.8, 100);
         writer.record(9, 0.2, 120);
@@ -250,8 +252,12 @@ mod model_tests {
                     assert_eq!(peak, 0.75);
                 }
             });
-            writer.join().expect("fixture worker completes without panic");
-            reader.join().expect("fixture worker completes without panic");
+            writer
+                .join()
+                .expect("fixture worker completes without panic");
+            reader
+                .join()
+                .expect("fixture worker completes without panic");
             assert_eq!(slot.read(3), None);
             assert_eq!(slot.read(67), Some(0.75));
         });

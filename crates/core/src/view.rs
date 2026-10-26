@@ -134,7 +134,11 @@ mod tests {
     fn silence_is_distinct_from_zero_dbfs_and_invalid_levels_are_not_displayed() {
         assert_eq!(dbfs(0.0), None);
         assert_eq!(dbfs(1.0), Some(0.0));
-        assert!((dbfs(0.5).expect("a positive finite amplitude has a decibel representation") + 6.0206).abs() < 0.0001);
+        assert!(
+            (dbfs(0.5).expect("a positive finite amplitude has a decibel representation") + 6.0206)
+                .abs()
+                < 0.0001
+        );
         assert_eq!(dbfs(f32::NAN), None);
         assert_eq!(dbfs(f32::INFINITY), None);
     }

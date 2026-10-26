@@ -172,7 +172,8 @@ impl StreamingResampler {
     pub fn push(&mut self, input: &[StereoFrame]) -> usize {
         let count = input.len().min(self.writable_frames());
         let mut accepted = 0;
-        for frame in input.iter().take(count) {
+        let accepted_frames = input.iter().take(count);
+        for frame in accepted_frames {
             let Some(next) = self.written.checked_add(1) else {
                 break;
             };
@@ -234,7 +235,8 @@ mod tests {
     fn response_grid_meets_declared_passband_and_stopband_targets() {
         println!("maximum_step\tmax_gain_error_db\tmax_phase_component_error\tmax_stopband_db");
         for step in [0.501, 1.002, 2.004, 4.008, 16.032, 96.192] {
-            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
+            let kernel = SincKernel::new(step)
+                .expect("fixture resampling step is finite and within the supported range");
             let mut gain_error = 0_f64;
             let mut phase_error = 0_f64;
             let mut stop_amplitude = 0_f64;
@@ -290,11 +292,13 @@ mod tests {
     #[test]
     fn phase_table_preserves_dc_and_passband() {
         for step in [0.501, 1.002, 2.004, 4.008, 96.192] {
-            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
+            let kernel = SincKernel::new(step)
+                .expect("fixture resampling step is finite and within the supported range");
             for fraction in [0.0, 0.125, 0.371, 0.999] {
                 let dc = kernel.interpolate(fraction, |_| StereoFrame::new(0.3, -0.7));
                 assert!((dc.left - 0.3).abs() < 1e-7 && (dc.right + 0.7).abs() < 1e-7);
-                for frequency in [0.01, 0.1, 0.4, 5.0 / 12.0].map(|f| f / step.max(1.0)) {
+                let passband_frequencies = [0.01, 0.1, 0.4, 5.0 / 12.0].map(|f| f / step.max(1.0));
+                for frequency in passband_frequencies {
                     let omega = frequency * std::f64::consts::TAU;
                     let tone = kernel.interpolate(fraction, |index| {
                         let phase = omega * (index as f64 - kernel.radius as f64);
@@ -315,12 +319,13 @@ mod tests {
     #[test]
     fn downsampling_suppresses_out_of_band_tones() {
         for step in [1.002, 2.004, 4.008, 96.192] {
-            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
-            for frequency in [0.5, 0.55, 0.7]
+            let kernel = SincKernel::new(step)
+                .expect("fixture resampling step is finite and within the supported range");
+            let stopband_frequencies = [0.5, 0.55, 0.7]
                 .map(|f| f / step)
                 .into_iter()
-                .filter(|f| *f < 0.5)
-            {
+                .filter(|f| *f < 0.5);
+            for frequency in stopband_frequencies {
                 for fraction in [0.125, 0.371, 0.999] {
                     let tone = kernel.interpolate(fraction, |index| {
                         let phase = std::f64::consts::TAU
@@ -340,14 +345,16 @@ mod tests {
 
     #[test]
     fn stream_history_wraps_without_losing_phase_or_repeating_shortages() {
-        let mut resampler = StreamingResampler::new(1.002, 256).expect("fixture resampling step is supported and scratch capacity is nonzero");
+        let mut resampler = StreamingResampler::new(1.002, 256)
+            .expect("fixture resampling step is supported and block capacity lies in 1..=65_536");
         let mut incoming = [StereoFrame::SILENCE; 127];
         let mut outgoing = [StereoFrame::new(9.0, 9.0); 113];
         let mut written = 0;
         let mut position = 0.0;
         let mut compared = 0;
         for _ in 0..100 {
-            for (index, frame) in incoming.iter_mut().enumerate() {
+            let indexed_input_frames = incoming.iter_mut().enumerate();
+            for (index, frame) in indexed_input_frames {
                 let phase = (written + index) as f64 * 0.02 * std::f64::consts::TAU;
                 *frame = StereoFrame::new(phase.sin() as f32, phase.cos() as f32);
             }
@@ -356,7 +363,8 @@ mod tests {
             loop {
                 outgoing.fill(StereoFrame::new(9.0, 9.0));
                 let count = resampler.render(&mut outgoing, 1.001);
-                for frame in outgoing.iter().take(count) {
+                let rendered_frames = outgoing.iter().take(count);
+                for frame in rendered_frames {
                     if position > 2.0 * resampler.lookahead_frames() as f64 {
                         let phase = position * 0.02 * std::f64::consts::TAU;
                         assert!((f64::from(frame.left) - phase.sin()).abs() < 0.00001);

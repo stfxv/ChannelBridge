@@ -162,10 +162,10 @@ fn apply_system_events<B: Backend>(
     configuration_attempt: &mut u64,
 ) -> bool {
     let (power, screens_woke) = events.take();
-    for event in power
+    let pending_events = power
         .into_iter()
-        .chain(screens_woke.then_some(SystemEvent::ScreensWake))
-    {
+        .chain(screens_woke.then_some(SystemEvent::ScreensWake));
+    for event in pending_events {
         if quit.load(Ordering::Acquire) {
             break;
         }
@@ -602,7 +602,10 @@ impl Worker {
     }
     pub fn join(mut self) -> thread::Result<()> {
         self.request_shutdown();
-        self.thread.take().expect("worker thread").join()
+        self.thread
+            .take()
+            .expect("Worker owns its join handle until this consuming join call")
+            .join()
     }
 }
 impl Drop for Worker {
@@ -998,9 +1001,13 @@ mod tests {
                     device_uid: uid.into(),
                     ..Config::default()
                 }))
-                .unwrap();
+                .expect(
+                    "two commands fit the two-slot fixture channel while its receiver is alive",
+                );
         }
-        let held = receiver.try_recv().unwrap();
+        let held = receiver
+            .try_recv()
+            .expect("the fixture just queued two commands without another receiver");
         drop(sender);
         let mut error = Some("prior error".into());
         let mut attempts = 0;
@@ -1081,8 +1088,10 @@ mod tests {
                     return Ok(crate::view::DeviceInventory::default());
                 }
                 if let Some(release) = self.release.take() {
-                    self.entered.send(()).unwrap();
-                    release.recv().unwrap();
+                    self.entered.send(()).expect("test retains the inventory-entry receiver while waiting for this notification");
+                    release.recv().expect(
+                        "test releases inventory only after queuing the competing manual stop",
+                    );
                 }
                 Ok(complete(&[crate::view::DeviceChoice {
                     uid: "source".into(),
@@ -1113,7 +1122,10 @@ mod tests {
                 Ok(true)
             }
             fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
-                self.sends.lock().unwrap().push(sending);
+                self.sends
+                    .lock()
+                    .expect("fixture threads do not panic while holding this mutex")
+                    .push(sending);
                 Ok(())
             }
             fn close(&mut self, _: ()) -> Result<(), String> {
@@ -1140,8 +1152,10 @@ mod tests {
             },
             move || Ok(backend),
         )
-        .unwrap();
-        worker.send(Command::PermissionChanged(true)).unwrap();
+        .expect("fixture worker thread can be created with its fake backend");
+        worker
+            .send(Command::PermissionChanged(true))
+            .expect("running worker has room for the initial permission command");
         let deadline = Instant::now() + Duration::from_secs(2);
         while inventory_count.load(Ordering::Acquire) == 0 {
             assert!(Instant::now() < deadline);
@@ -1149,9 +1163,15 @@ mod tests {
         }
         assert!(!worker.snapshot().wanted_send);
         present.store(true, Ordering::Release);
-        entry.recv_timeout(Duration::from_secs(2)).unwrap();
-        worker.send(Command::Stop).unwrap();
-        release.send(()).unwrap();
+        entry
+            .recv_timeout(Duration::from_secs(2))
+            .expect("present-device inventory signals entry before waiting on its release gate");
+        worker
+            .send(Command::Stop)
+            .expect("manual stop bypasses the UI queue while worker admission remains open");
+        release
+            .send(())
+            .expect("inventory callback retains its receiver while waiting for the manual stop");
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let snapshot = worker.snapshot();
@@ -1169,11 +1189,15 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(
-            *sends.lock().unwrap(),
+            *sends
+                .lock()
+                .expect("fixture threads do not panic while holding this mutex"),
             [false],
             "no sending route may open before same-turn Stop"
         );
-        worker.join().unwrap();
+        worker
+            .join()
+            .expect("fixture worker completes without panic");
     }
 
     #[test]
@@ -1281,7 +1305,8 @@ mod tests {
             },
             move || {
                 assert_ne!(thread::current().id(), parent);
-                gate.recv().unwrap();
+                gate.recv()
+                    .expect("test releases backend creation after filling the command queue");
                 Ok(LocalBackend {
                     _local: Rc::new(()),
                     drops: backend_drops,
@@ -1289,22 +1314,32 @@ mod tests {
                 })
             },
         )
-        .unwrap();
-        worker.send(Command::PermissionChanged(true)).unwrap();
+        .expect("fixture worker thread can be created with its local fake backend");
+        worker
+            .send(Command::PermissionChanged(true))
+            .expect("initial permission command fits the empty 32-slot queue");
         for _ in 0..31 {
-            worker.send(Command::Overview(true)).unwrap();
+            worker
+                .send(Command::Overview(true))
+                .expect("31 overview commands fill the remaining 31 queue slots");
         }
         assert!(worker.send(Command::Refresh).is_err());
         // OS lifecycle must remain deliverable even during a full UI queue.
         worker
             .send(Command::System(crate::SystemEvent::Sleep))
-            .unwrap();
+            .expect("sleep uses reserved lifecycle admission even when the UI queue is full");
         worker
             .send(Command::System(crate::SystemEvent::Wake))
-            .unwrap();
-        worker.send(Command::Start).unwrap();
-        worker.send(Command::Stop).unwrap();
-        release.send(()).unwrap();
+            .expect("wake uses reserved lifecycle admission even when the UI queue is full");
+        worker
+            .send(Command::Start)
+            .expect("manual start bypasses the full UI queue while admission is open");
+        worker
+            .send(Command::Stop)
+            .expect("manual stop bypasses the full UI queue while admission is open");
+        release
+            .send(())
+            .expect("backend factory retains the gate receiver while queue behavior is checked");
         let deadline = Instant::now() + Duration::from_secs(2);
         while worker.snapshot().state != CaptureState::Previewing {
             assert!(
@@ -1322,19 +1357,30 @@ mod tests {
                 .any(|event| event.kind == crate::view::ControlEventKind::SystemWake)
         );
         assert_eq!(
-            worker.snapshot().control_history.last().unwrap().kind,
+            worker
+                .snapshot()
+                .control_history
+                .last()
+                .expect("opening the fake session records a session-opened history event")
+                .kind,
             crate::view::ControlEventKind::SessionOpened
         );
         assert_eq!(worker.snapshot().retained_io_contexts, 7);
-        let diagnostics = worker.snapshot().diagnostics.unwrap();
+        let diagnostics = worker
+            .snapshot()
+            .diagnostics
+            .expect("previewing fake session publishes its diagnostic counters");
         assert_eq!(diagnostics.capture_written_frames, (1_u64 << 54) + 3);
-        let json: serde_json::Value = serde_json::to_value(&diagnostics).unwrap();
+        let json: serde_json::Value = serde_json::to_value(&diagnostics)
+            .expect("integer diagnostic counters have a JSON representation");
         assert_eq!(
             json["capture_written_frames"].as_u64(),
             Some((1_u64 << 54) + 3)
         );
         assert_eq!(diagnostics.output_missing_frames, 7);
-        worker.send(Command::PermissionChanged(false)).unwrap();
+        worker
+            .send(Command::PermissionChanged(false))
+            .expect("permission revocation uses reserved admission while the worker is running");
         let deadline = Instant::now() + Duration::from_secs(2);
         while worker.snapshot().state != CaptureState::Blocked {
             assert!(
@@ -1344,18 +1390,34 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(worker.snapshot().diagnostics.is_none());
-        worker.send(Command::Quit).unwrap();
+        worker
+            .send(Command::Quit)
+            .expect("quit seals running worker admission even when its queue is full");
         let shared_snapshot = Arc::clone(&worker.snapshot);
-        worker.join().unwrap();
-        assert!(shared_snapshot.lock().unwrap().diagnostics.is_none());
-        assert_eq!(shared_snapshot.lock().unwrap().retained_io_contexts, 7);
+        worker
+            .join()
+            .expect("fixture worker completes without panic");
+        assert!(
+            shared_snapshot
+                .lock()
+                .expect("fixture threads do not panic while holding this mutex")
+                .diagnostics
+                .is_none()
+        );
         assert_eq!(
             shared_snapshot
                 .lock()
-                .unwrap()
+                .expect("fixture threads do not panic while holding this mutex")
+                .retained_io_contexts,
+            7
+        );
+        assert_eq!(
+            shared_snapshot
+                .lock()
+                .expect("fixture threads do not panic while holding this mutex")
                 .control_history
                 .last()
-                .unwrap()
+                .expect("permission revocation records an event before shutdown")
                 .kind,
             crate::view::ControlEventKind::PermissionRevoked
         );
@@ -1376,13 +1438,13 @@ mod tests {
                 panic_on_save: true,
             })
         })
-        .unwrap();
+        .expect("fixture worker starts before its save hook intentionally panics");
         worker
             .send(Command::Configure(Config {
                 left: 2,
                 ..original.clone()
             }))
-            .unwrap();
+            .expect("panic-triggering configure command fits the initially empty queue");
         let deadline = Instant::now() + Duration::from_secs(2);
         while !worker.snapshot().finished {
             assert!(
@@ -1404,7 +1466,7 @@ mod tests {
     fn factory_panic_also_publishes_completion() {
         let worker =
             Worker::spawn::<LocalBackend>(Config::default(), || panic!("fixture factory panic"))
-                .unwrap();
+                .expect("thread creation succeeds before the fixture factory intentionally panics");
         let deadline = Instant::now() + Duration::from_secs(2);
         while !worker.snapshot().finished {
             assert!(

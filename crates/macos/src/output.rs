@@ -172,7 +172,8 @@ impl OutputCallback {
             );
             // Muted callbacks still advance DSP and consume queued input.
             let target = if route.selection.muted() { 0.0 } else { 1.0 };
-            for (destination, frame) in output.iter_mut().zip(frames.iter()) {
+            let output_samples = output.iter_mut().zip(frames.iter());
+            for (destination, frame) in output_samples {
                 if state.gain < target {
                     state.gain = (state.gain + 1.0 / 64.0).min(target);
                 } else if state.gain > target {
@@ -236,15 +237,20 @@ mod tests {
     use channelbridge_hal_abi::AudioBuffer;
     #[test]
     fn diagnostics_separate_buffering_from_active_audio_shortage() {
-        let selection = Selection::new(1, 2, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
+        let selection = Selection::new(1, 2, Mode::Stereo, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
         let generation = routing
             .configure(selection, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
-        let (mut producer, consumer) = stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
-        let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect("fixture rates are positive and queue capacity covers the target and render margin");
-        let callback = OutputCallback::new(processor, routing).expect("fixture can allocate the fixed 4096-frame callback scratch buffer");
+        let (mut producer, consumer) =
+            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+        let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
+        let callback = OutputCallback::new(processor, routing)
+            .expect("fixture can allocate the fixed 4096-frame callback scratch buffer");
         assert_eq!(callback.stats().fifo_min, None);
         assert_eq!(callback.stats().correction_ppm, None);
         assert_eq!(callback.stats().peak, None);
@@ -280,21 +286,31 @@ mod tests {
         assert!(stats.dropped_lookahead > 0);
         assert!(stats.priming_callbacks > 1);
         assert!(stats.rendered_frames > 0);
-        assert!(stats.fifo_max.expect("processed output callbacks publish FIFO occupancy statistics") > 0);
+        assert!(
+            stats
+                .fifo_max
+                .expect("processed output callbacks publish FIFO occupancy statistics")
+                > 0
+        );
         assert_eq!(stats.rejected, 0);
         assert!(!stats.failed);
     }
     #[test]
     fn mute_consumes_audio_and_stop_restart_cannot_replay_it() {
-        let selection = Selection::new(1, 2, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
+        let selection = Selection::new(1, 2, Mode::Stereo, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
         let generation = routing
             .configure(selection, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
-        let (mut producer, consumer) = stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
-        let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect("fixture rates are positive and queue capacity covers the target and render margin");
-        let callback = OutputCallback::new(processor, Arc::clone(&routing)).expect("fixture can allocate the fixed 4096-frame callback scratch buffer");
+        let (mut producer, consumer) =
+            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+        let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
+        let callback = OutputCallback::new(processor, Arc::clone(&routing))
+            .expect("fixture can allocate the fixed 4096-frame callback scratch buffer");
         let mut samples = [[9.0_f32; 2]; 512];
         let mut buffer = AudioBufferList {
             count: 1,
@@ -311,12 +327,19 @@ mod tests {
             callback.process(&mut buffer, None);
         }
         assert!((samples[511][0] - 0.5).abs() < 0.0001);
-        let peak = callback.stats().peak.expect("rendered fixture samples publish output peak statistics");
+        let peak = callback
+            .stats()
+            .peak
+            .expect("rendered fixture samples publish output peak statistics");
         assert!((peak[0] - 0.5).abs() < 0.0001);
         assert!((peak[1] - 0.25).abs() < 0.0001);
-        let muted = Selection::new(1, 2, Mode::Stereo, true).expect("fixture channel numbers are nonzero and within the selection encoding");
+        let muted = Selection::new(1, 2, Mode::Stereo, true)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         assert_eq!(
-            routing.configure(muted, true, false).expect("fixture selection is encodable and generation space is not exhausted").generation,
+            routing
+                .configure(muted, true, false)
+                .expect("fixture selection is encodable and generation space is not exhausted")
+                .generation,
             generation
         );
         let fresh = [StereoFrame::new(-0.25, -0.125); 512];
@@ -329,7 +352,9 @@ mod tests {
             }
             assert_eq!(samples[511], [0.0; 2]);
         }
-        routing.configure(selection, true, false).expect("fixture selection is encodable and generation space is not exhausted");
+        routing
+            .configure(selection, true, false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(callback.stats().peak, Some([0.0; 2]));
         producer.push_generation(&fresh, generation);
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
@@ -338,7 +363,9 @@ mod tests {
             callback.process(&mut buffer, None);
         }
         assert!((samples[511][0] + 0.25).abs() < 0.0001);
-        routing.configure(selection, false, false).expect("fixture selection is encodable and generation space is not exhausted");
+        routing
+            .configure(selection, false, false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
         // borrows its samples for this call.
         unsafe {

@@ -59,8 +59,11 @@ mod tests {
 
     #[test]
     fn delayed_poll_catches_up_in_one_call() {
-        let clock = DeviceClock::new(100, 24_000_000, 48_000, 512, 7).expect("fixture clock frequency, sample rate, period and seed are nonzero");
-        let t = clock.timestamp(100 + 24_000_000 * 900).expect("fixture time follows the anchor and fits the timestamp range");
+        let clock = DeviceClock::new(100, 24_000_000, 48_000, 512, 7)
+            .expect("fixture clock frequency, sample rate, period and seed are nonzero");
+        let t = clock
+            .timestamp(100 + 24_000_000 * 900)
+            .expect("fixture time follows the anchor and fits the timestamp range");
         assert_eq!(t.sample_frame, 43_200_000 / 512 * 512);
         assert_eq!(t.seed, 7);
         assert!(clock.timestamp(99).is_none());
@@ -69,9 +72,12 @@ mod tests {
     #[test]
     fn eight_hours_do_not_accumulate_drift() {
         for rate in [8_000, 32_000, 44_100, 48_000, 96_000, 192_000, 768_000] {
-            let clock = DeviceClock::new(1234, 1_000_000_000, rate, 512, 1).expect("fixture clock frequency, sample rate, period and seed are nonzero");
+            let clock = DeviceClock::new(1234, 1_000_000_000, rate, 512, 1)
+                .expect("fixture clock frequency, sample rate, period and seed are nonzero");
             let now = 1234 + 28_800 * 1_000_000_000;
-            let t = clock.timestamp(now).expect("fixture time follows the anchor and fits the timestamp range");
+            let t = clock
+                .timestamp(now)
+                .expect("fixture time follows the anchor and fits the timestamp range");
             let expected = u64::from(rate) * 28_800;
             assert!(t.sample_frame <= expected && expected - t.sample_frame < 512);
             assert!(t.host_ticks <= now);

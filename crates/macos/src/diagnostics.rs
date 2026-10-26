@@ -45,7 +45,9 @@ mod tests {
     #[test]
     fn identity_is_bounded_non_nul_ascii_and_preserves_prerelease() {
         assert_eq!(
-            decode_identity(b"0.5.0-alpha.1+build.2").expect("fixture is a nonempty UTF-8 package version within the identity size limit"),
+            decode_identity(b"0.5.0-alpha.1+build.2").expect(
+                "fixture is a nonempty UTF-8 package version within the identity size limit"
+            ),
             "0.5.0-alpha.1+build.2"
         );
         for bytes in [b"".as_slice(), b"1.0\0", b"1.0\n", &[255], &[b'a'; 65]] {

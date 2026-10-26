@@ -101,7 +101,8 @@ impl TimelineRing {
             result.missing = audio.len();
             return result;
         }
-        for (offset, value) in audio.iter().enumerate() {
+        let indexed_input_frames = audio.iter().enumerate();
+        for (offset, value) in indexed_input_frames {
             let Some(frame) = start
                 .get()
                 .checked_add(offset as u64)
@@ -129,7 +130,8 @@ impl TimelineRing {
         audio: &mut [StereoFrame],
     ) -> Transfer {
         let mut result = Transfer::default();
-        for (offset, out) in audio.iter_mut().enumerate() {
+        let indexed_output_frames = audio.iter_mut().enumerate();
+        for (offset, out) in indexed_output_frames {
             *out = StereoFrame::SILENCE;
             let frame = start
                 .get()
@@ -157,7 +159,8 @@ mod tests {
     use super::*;
 
     fn at(frame: u64) -> FramePosition {
-        FramePosition::from_integer(frame).expect("fixture frame index is within the representable timeline range")
+        FramePosition::from_integer(frame)
+            .expect("fixture frame index is within the representable timeline range")
     }
     fn tone() -> StereoFrame {
         StereoFrame::new(0.25, -0.5)
@@ -165,7 +168,8 @@ mod tests {
 
     #[test]
     fn shortage_preserves_available_frames_and_other_readers() {
-        let ring = TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
+        let ring =
+            TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
         assert_eq!(ring.write(1, at(128), &[tone(); 255]).valid, 255);
         let mut out = [StereoFrame::SILENCE; 256];
         assert_eq!(
@@ -184,23 +188,32 @@ mod tests {
 
     #[test]
     fn fractional_timestamps_do_not_spuriously_mute() {
-        let ring = TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
+        let ring =
+            TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
         ring.write(
             1,
-            FramePosition::from_sample_time(128.25).expect("fixture sample time is finite, nonnegative and within the timeline range"),
+            FramePosition::from_sample_time(128.25)
+                .expect("fixture sample time is finite, nonnegative and within the timeline range"),
             &[tone(); 256],
         );
         let mut out = [StereoFrame::SILENCE; 256];
         assert_eq!(
-            ring.read(1, FramePosition::from_sample_time(128.5).expect("fixture sample time is finite, nonnegative and within the timeline range"), &mut out)
-                .missing,
+            ring.read(
+                1,
+                FramePosition::from_sample_time(128.5).expect(
+                    "fixture sample time is finite, nonnegative and within the timeline range"
+                ),
+                &mut out
+            )
+            .missing,
             0
         );
     }
 
     #[test]
     fn wrap_and_restart_do_not_read_stale_audio() {
-        let ring = TimelineRing::new(4).expect("fixture timeline capacity is a nonzero power of two");
+        let ring =
+            TimelineRing::new(4).expect("fixture timeline capacity is a nonzero power of two");
         ring.write(1, at(3), &[tone(); 4]);
         let mut out = [StereoFrame::SILENCE; 4];
         assert_eq!(ring.read(1, at(3), &mut out).valid, 4);
@@ -213,7 +226,9 @@ mod tests {
     #[test]
     fn readers_cannot_observe_torn_stereo_frames() {
         use std::sync::Arc;
-        let ring = Arc::new(TimelineRing::new(64).expect("fixture timeline capacity is a nonzero power of two"));
+        let ring = Arc::new(
+            TimelineRing::new(64).expect("fixture timeline capacity is a nonzero power of two"),
+        );
         std::thread::scope(|scope| {
             for writer in 0..2 {
                 let ring = ring.clone();
@@ -261,8 +276,12 @@ mod model_tests {
                     assert_eq!(frame, StereoFrame::new(1.0, -1.0));
                 }
             });
-            writer.join().expect("fixture worker completes without panic");
-            reader.join().expect("fixture worker completes without panic");
+            writer
+                .join()
+                .expect("fixture worker completes without panic");
+            reader
+                .join()
+                .expect("fixture worker completes without panic");
         });
     }
 }

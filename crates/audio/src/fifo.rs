@@ -67,7 +67,8 @@ impl Producer {
         let available = shared.frames.len().saturating_sub(used);
         let count = input.len().min(available);
         let mut accepted = 0;
-        for frame in input.iter().take(count) {
+        let accepted_frames = input.iter().take(count);
+        for frame in accepted_frames {
             let index = write.wrapping_add(accepted as u64) as usize & shared.mask;
             let Some(slot) = shared.frames.get(index) else {
                 break;
@@ -155,7 +156,8 @@ mod tests {
     use super::*;
     #[test]
     fn generations_do_not_replay_old_input_or_erase_future_input() {
-        let (mut producer, mut consumer) = stereo_queue(8).expect("fixture queue capacity is a nonzero power of two");
+        let (mut producer, mut consumer) =
+            stereo_queue(8).expect("fixture queue capacity is a nonzero power of two");
         let old = [StereoFrame::new(0.1, -0.1); 3];
         let new = [StereoFrame::new(0.7, -0.7); 3];
         producer.push_generation(&old, 1);
@@ -191,7 +193,8 @@ mod tests {
     }
     #[test]
     fn shortage_full_queue_and_counter_wrap_preserve_order() {
-        let (mut producer, mut consumer) = stereo_queue(4).expect("fixture queue capacity is a nonzero power of two");
+        let (mut producer, mut consumer) =
+            stereo_queue(4).expect("fixture queue capacity is a nonzero power of two");
         producer.shared.write.store(u64::MAX - 1, Ordering::Relaxed);
         producer.shared.read.store(u64::MAX - 1, Ordering::Relaxed);
         let input: Vec<_> = (0..6)
@@ -211,7 +214,8 @@ mod tests {
 
     #[test]
     fn independent_callbacks_transfer_without_torn_pairs() {
-        let (mut producer, mut consumer) = stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
+        let (mut producer, mut consumer) =
+            stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
         let writer = std::thread::spawn(move || {
             for index in 0..50_000 {
                 let frame = StereoFrame::new(index as f32, -(index as f32));
@@ -225,7 +229,8 @@ mod tests {
             let mut expected = 0;
             while expected < 50_000 {
                 let count = consumer.pop(&mut block);
-                for frame in block.iter().take(count) {
+                let received_frames = block.iter().take(count);
+                for frame in received_frames {
                     assert_eq!(
                         *frame,
                         StereoFrame::new(expected as f32, -(expected as f32))
@@ -237,7 +242,11 @@ mod tests {
                 }
             }
         });
-        writer.join().expect("fixture worker completes without panic");
-        reader.join().expect("fixture worker completes without panic");
+        writer
+            .join()
+            .expect("fixture worker completes without panic");
+        reader
+            .join()
+            .expect("fixture worker completes without panic");
     }
 }

@@ -210,12 +210,23 @@ mod tests {
     use std::sync::Arc;
     #[test]
     fn native_buffers_reach_preview_and_fifo_without_reentrant_state_access() {
-        let selection = Selection::new(2, 1, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
+        let selection = Selection::new(2, 1, Mode::Stereo, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (meters, reader) = meter_bank(2, 48_000).expect("fixture channel count and host clock frequency are positive");
-        let (producer, mut consumer) = stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
-        let processor =
-            CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000).expect("fixture capture rates are positive and scratch capacity covers a callback");
+        let (meters, reader) = meter_bank(2, 48_000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
+        let (producer, mut consumer) =
+            stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let processor = CaptureProcessor::new(
+            Arc::clone(&routing),
+            meters,
+            producer,
+            48_000,
+            48_000,
+        )
+        .expect(
+            "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
+        );
         let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48_000.0,
             format_id: fourcc(b"lpcm"),
@@ -302,7 +313,9 @@ mod tests {
         // An unavailable saved channel is distinct from malformed callbacks.
         routing
             .configure(
-                Selection::new(3, 1, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding"),
+                Selection::new(3, 1, Mode::Stereo, false).expect(
+                    "fixture channel numbers are nonzero and within the selection encoding",
+                ),
                 true,
                 false,
             )
@@ -314,7 +327,9 @@ mod tests {
         unsafe { callback.process(&input, &now, &stamp) };
         assert_eq!(callback.stats().unavailable_channel, 1);
         assert_eq!(callback.stats().discontinuities, 0);
-        routing.configure(selection, true, false).expect("fixture selection is encodable and generation space is not exhausted");
+        routing
+            .configure(selection, true, false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         // A missing input timestamp reaches DSP clock validation, unlike a
         // null callback host-time descriptor rejected by the native adapter.
         // SAFETY: The fixture owns input and now; the API permits an absent input timestamp.
@@ -323,7 +338,11 @@ mod tests {
         assert_eq!(callback.stats().discontinuities, 1);
         assert_eq!(callback.stats().source_speed, None);
         assert_eq!(callback.stats().accepted_frames, 128);
-        assert!(callback.stats().clock_generation.expect("valid capture timestamps established a clock generation before the discontinuity") > generation);
+        assert!(
+            callback.stats().clock_generation.expect(
+                "valid capture timestamps established a clock generation before the discontinuity"
+            ) > generation
+        );
         assert!(!callback.stats().failed);
     }
 }

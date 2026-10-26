@@ -123,11 +123,16 @@ mod tests {
 
     impl SyntheticStream {
         fn new(sending: bool, muted: bool) -> Self {
-            let selection = Selection::new(1, 2, Mode::Stereo, muted).expect("fixture channel numbers are nonzero and within the selection encoding");
+            let selection = Selection::new(1, 2, Mode::Stereo, muted)
+                .expect("fixture channel numbers are nonzero and within the selection encoding");
             let routing = Arc::new(AtomicRouting::new(selection));
-            routing.configure(selection, sending, false).expect("fixture selection is encodable and generation space is not exhausted");
-            let (meters, _) = meter_bank(2, 48_000).expect("fixture channel count and host clock frequency are positive");
-            let (producer, consumer) = stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+            routing
+                .configure(selection, sending, false)
+                .expect("fixture selection is encodable and generation space is not exhausted");
+            let (meters, _) = meter_bank(2, 48_000)
+                .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
+            let (producer, consumer) =
+                stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
             let capture = CaptureCallback::new(
                 CaptureLayout::try_new(&[StreamFormat {
                     sample_rate: 48_000.0,
@@ -142,10 +147,12 @@ mod tests {
                 }])
                 .expect("fixture is interleaved stereo float32 PCM at 48 kHz"),
                 CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000)
-                    .expect("fixture capture rates are positive and scratch capacity covers a callback"),
+                    .expect(
+                        "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
+                    ),
             );
             let output = OutputCallback::new(
-                OutputProcessor::new(consumer, 48_000, 48_000, 512).expect("fixture rates are positive and queue capacity covers the target and render margin"),
+                OutputProcessor::new(consumer, 48_000, 48_000, 512).expect("fixture rates are supported and the target lies above lookahead within queue capacity"),
                 Arc::clone(&routing),
             )
             .expect("fixture can allocate the fixed 4096-frame callback scratch buffer")
@@ -250,14 +257,20 @@ mod tests {
         let mut stream = SyntheticStream::new(false, false);
         stream.capture(512, true, true);
         stream.output(512, true);
-        assert!(stream.check(&mut health, start).expect("initial valid callbacks establish healthy input and output progress"));
+        assert!(
+            stream
+                .check(&mut health, start)
+                .expect("initial valid callbacks establish healthy input and output progress")
+        );
         for millis in [500, 1000, 1500] {
             stream.capture(512, false, true);
             stream.output(512, true);
             assert!(
                 stream
                     .check(&mut health, start + Duration::from_millis(millis))
-                    .expect("invalid clock callbacks are still within the input stall grace period")
+                    .expect(
+                        "invalid clock callbacks are still within the input stall grace period"
+                    )
             );
         }
         stream.capture(512, false, true);
@@ -279,7 +292,11 @@ mod tests {
             let mut stream = SyntheticStream::new(false, false);
             stream.capture(512, true, true);
             stream.output(512, true);
-            assert!(stream.check(&mut health, start).expect("initial valid callbacks establish healthy input and output progress"));
+            assert!(
+                stream
+                    .check(&mut health, start)
+                    .expect("initial valid callbacks establish healthy input and output progress")
+            );
             for millis in [500, 1000, 1500] {
                 stream.capture(512, true, true);
                 stream.output(frames, valid_buffer);
@@ -337,15 +354,28 @@ mod tests {
             let mut stream = SyntheticStream::new(false, false);
             stream.capture(512, true, true);
             stream.output(512, true);
-            assert!(stream.check(&mut health, start).expect("initial valid callbacks establish healthy input and output progress"));
+            assert!(
+                stream
+                    .check(&mut health, start)
+                    .expect("initial valid callbacks establish healthy input and output progress")
+            );
             for millis in [500, 1000, 1500, 2000] {
                 stream.capture(frames, true, valid_buffer);
                 stream.output(512, true);
                 let result = stream.check(&mut health, start + Duration::from_millis(millis));
                 if millis < 2000 {
-                    assert!(result.expect("malformed input remains within its initial stall grace period"));
+                    assert!(
+                        result.expect(
+                            "malformed input remains within its initial stall grace period"
+                        )
+                    );
                 } else {
-                    assert_eq!(result.expect_err("malformed or empty input reaches the capture stall deadline"), "input audio frames stopped");
+                    assert_eq!(
+                        result.expect_err(
+                            "malformed or empty input reaches the capture stall deadline"
+                        ),
+                        "input audio frames stopped"
+                    );
                 }
             }
             assert_eq!(stream.capture.stats().accepted_frames, 512);
@@ -387,17 +417,27 @@ mod tests {
         let mut stream = SyntheticStream::new(true, false);
         stream.capture(512, true, true);
         stream.output(512, true);
-        assert!(stream.check(&mut health, start).expect("initial valid callbacks establish healthy input and output progress"));
+        assert!(
+            stream
+                .check(&mut health, start)
+                .expect("initial valid callbacks establish healthy input and output progress")
+        );
         let selection = stream.routing.load().selection;
         // Route updates can happen between health polls. Record both so the
         // restarted sender cannot inherit the previous generation's deadline.
-        stream.routing.configure(selection, false, false).expect("fixture selection is encodable and generation space is not exhausted");
+        stream
+            .routing
+            .configure(selection, false, false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         health.routed(
             false,
             stream.output.stats().rendered_frames,
             start + Duration::from_secs(1),
         );
-        stream.routing.configure(selection, true, false).expect("fixture selection is encodable and generation space is not exhausted");
+        stream
+            .routing
+            .configure(selection, true, false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         health.routed(
             true,
             stream.output.stats().rendered_frames,
@@ -409,10 +449,14 @@ mod tests {
             stream.output(512, true);
             let result = stream.check(&mut health, start + Duration::from_millis(millis));
             if millis < 3500 {
-                assert!(result.expect("restarted sending has not reached its fresh rendering deadline"));
+                assert!(
+                    result.expect("restarted sending has not reached its fresh rendering deadline")
+                );
             } else {
                 assert_eq!(
-                    result.expect_err("restarted perpetual priming reaches its fresh rendering deadline"),
+                    result.expect_err(
+                        "restarted perpetual priming reaches its fresh rendering deadline"
+                    ),
                     "virtual output audio rendering stopped"
                 );
             }

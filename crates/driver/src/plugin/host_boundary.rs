@@ -395,7 +395,8 @@ unsafe extern "C" fn do_io(
                 return ILLEGAL;
             }
             runtime.audio.read(cycle.input_time.sample_time, scratch);
-            for (pair, value) in buffer.chunks_exact_mut(2).zip(scratch.iter()) {
+            let output_frames = buffer.chunks_exact_mut(2).zip(scratch.iter());
+            for (pair, value) in output_frames {
                 pair[0] = value.left;
                 pair[1] = value.right;
             }
@@ -403,7 +404,8 @@ unsafe extern "C" fn do_io(
             if cycle.output_time.flags & 1 == 0 {
                 return ILLEGAL;
             }
-            for (pair, value) in buffer.chunks_exact(2).zip(scratch.iter_mut()) {
+            let input_frames = buffer.chunks_exact(2).zip(scratch.iter_mut());
+            for (pair, value) in input_frames {
                 *value = channelbridge_audio::StereoFrame::new(pair[0], pair[1]);
             }
             runtime.audio.write(cycle.output_time.sample_time, scratch);

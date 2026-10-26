@@ -540,12 +540,15 @@ mod tests {
         assert_eq!(context.handler.calls.load(Ordering::Relaxed), 1);
         assert_eq!(context.admission.load(Ordering::Acquire), CLOSED | 1);
         context.handler.release.wait();
-        callback.join().expect("fixture worker completes without panic");
+        callback
+            .join()
+            .expect("fixture worker completes without panic");
         assert_eq!(context.admission.load(Ordering::Acquire), CLOSED);
     }
     #[test]
     fn stream_usage_payload_includes_id_count_and_every_disabled_flag() {
-        let (payload, size) = disabled_usage(dispatch::<TestHandler>, 3).expect("three streams fit the supported disabled-usage payload range");
+        let (payload, size) = disabled_usage(dispatch::<TestHandler>, 3)
+            .expect("three streams fit the supported disabled-usage payload range");
         assert_eq!(size, 24);
         assert_eq!(
             payload[0],
@@ -555,7 +558,14 @@ mod tests {
             // SAFETY: The initialized word allocation covers size bytes and remains
             // borrowed throughout this inspection.
             unsafe { std::slice::from_raw_parts(payload.as_ptr().cast::<u8>(), size as usize) };
-        assert_eq!(u32::from_ne_bytes(bytes[8..12].try_into().expect("the stream-count field occupies exactly four bytes")), 3);
+        assert_eq!(
+            u32::from_ne_bytes(
+                bytes[8..12]
+                    .try_into()
+                    .expect("the stream-count field occupies exactly four bytes")
+            ),
+            3
+        );
         assert!(bytes[12..].iter().all(|byte| *byte == 0));
         assert!(disabled_usage(dispatch::<TestHandler>, 0).is_none());
         assert!(disabled_usage(dispatch::<TestHandler>, 513).is_none());
@@ -569,27 +579,42 @@ mod tests {
             destroy,
         };
         let drops = Arc::new(AtomicUsize::new(0));
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         assert!(session.start().is_err());
-        drop(session.close().expect("fake stop and destroy hooks both return success"));
+        drop(
+            session
+                .close()
+                .expect("fake stop and destroy hooks both return success"),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(DESTROYS.load(Ordering::Relaxed), 1);
         STOP_ERROR.store(-7, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
-        let error = session.close().err().expect("injected stop status -7 makes close fail");
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        let error = session
+            .close()
+            .err()
+            .expect("injected stop status -7 makes close fail");
         assert_eq!(error.operation, "stop");
         assert!(error.context_retained);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(DESTROYS.load(Ordering::Relaxed), 1);
         STOP_ERROR.store(0, Ordering::Relaxed);
         DESTROY_ERROR.store(-8, Ordering::Relaxed);
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         drop(session);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         DESTROY_ERROR.store(0, Ordering::Relaxed);
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         session
             .context
             .as_ref()
@@ -597,23 +622,44 @@ mod tests {
             .admission
             .store(CLOSED | 1, Ordering::Release);
         assert_eq!(
-            session.close().err().expect("the injected active callback prevents close from releasing its context").operation,
+            session
+                .close()
+                .err()
+                .expect("the injected active callback prevents close from releasing its context")
+                .operation,
             "callback still active"
         );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         // A disappearing device still gets a deregistration attempt.
         STOP_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
-        drop(session.close().expect("removed-device stop still permits successful fake deregistration"));
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        drop(
+            session
+                .close()
+                .expect("removed-device stop still permits successful fake deregistration"),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 2);
         DESTROY_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
-        let pointer = (&**session.context.as_ref().expect("new registration owns its context until the consuming close call") as *const Context<TestHandler>)
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        let pointer = (&**session
+            .context
+            .as_ref()
+            .expect("new registration owns its context until the consuming close call")
+            as *const Context<TestHandler>)
             .cast_mut()
             .cast();
-        let error = session.close().err().expect("injected BAD_DEVICE deregistration status makes close report removal");
+        let error = session
+            .close()
+            .err()
+            .expect("injected BAD_DEVICE deregistration status makes close report removal");
         assert_eq!(error.disposition, IoDisposition::RemovedDevice);
         assert!(error.context_retained);
         // HAL can still call the retained pointer; its handler is closed forever.
@@ -631,8 +677,11 @@ mod tests {
             );
         }
         assert_eq!(drops.load(Ordering::Relaxed), 2);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         session
             .context
             .as_ref()
@@ -640,16 +689,26 @@ mod tests {
             .admission
             .store(1, Ordering::Release);
         assert_eq!(
-            session.close().err().expect("the injected active callback makes teardown fatal").disposition,
+            session
+                .close()
+                .err()
+                .expect("the injected active callback makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         // Startup cleanup can lose the device before Start was attempted.
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         assert_eq!(
-            session.close().err().expect("injected BAD_DEVICE deregistration status reports removal before start").disposition,
+            session
+                .close()
+                .err()
+                .expect("injected BAD_DEVICE deregistration status reports removal before start")
+                .disposition,
             IoDisposition::RemovedDevice
         );
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         session
             .context
             .as_ref()
@@ -657,20 +716,35 @@ mod tests {
             .failed
             .store(true, Ordering::Release);
         assert_eq!(
-            session.close().err().expect("the injected callback failure makes teardown fatal").disposition,
+            session
+                .close()
+                .err()
+                .expect("the injected callback failure makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         DESTROY_ERROR.store(-8, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle");
-        session.start().expect("new registration is not started and the fake start hook returns success");
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         assert_eq!(
-            session.close().err().expect("injected destroy status -8 makes teardown fatal").disposition,
+            session
+                .close()
+                .err()
+                .expect("injected destroy status -8 makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         STOP_ERROR.store(0, Ordering::Relaxed);
         DESTROY_ERROR.store(0, Ordering::Relaxed);
         // Never-started registrations need only deregistration.
-        drop(Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect("fake create hook registers device 42 and supplies a nonnull callback handle"));
+        drop(
+            Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect(
+                "fake create hook registers device 42 and supplies a nonnull callback handle",
+            ),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 3);
     }
 }

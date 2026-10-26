@@ -78,7 +78,8 @@ impl Overview {
                 self.document.scrollRectToVisible(first.frame());
             }
         }
-        for (index, row) in rows.iter().enumerate() {
+        let indexed_rows = rows.iter().enumerate();
+        for (index, row) in indexed_rows {
             row.setStringValue(&NSString::from_str(&crate::input_meters::channel_text(
                 index as u32 + 1,
                 snapshot.audio.as_ref(),
