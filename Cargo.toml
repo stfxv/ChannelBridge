@@ -15,8 +15,7 @@ serde_json = "1"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-# HAL callbacks must contain unwinding before returning to the host.
-# Aborting the host process is not an error-handling strategy.
+# Native entry guards are defense in depth; normal errors do not use panics.
 panic = "unwind"
 
 [workspace.lints.rust]

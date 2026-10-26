@@ -64,3 +64,13 @@ Generate the production package (without installing it) with
 `bash scripts/package-rust-production.sh`. The verified output is
 `work/rust-production-dist/ChannelBridge-Rust.pkg`. See RUST_MIGRATION.md for
 replacement prerequisites, retained legacy artifacts and rollback acceptance.
+
+## Style verification
+
+The archive includes `RUST_STYLE.md`, stable formatting and Clippy configuration,
+and the standalone syntax checker. Python 3 is required for source enumeration
+and archive verification. The style gate works without Git:
+
+```sh
+bash scripts/check-rust-style.sh check
+```

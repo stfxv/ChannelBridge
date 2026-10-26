@@ -3,6 +3,11 @@ set -euo pipefail
 source "$(dirname "$0")/rust-env.sh"
 cd "$CHANNELBRIDGE_ROOT"
 mkdir -p work/test/rust
+bash scripts/check-rust-style.sh check
+bash scripts/test-rust-style.sh
+cargo test --offline --locked --manifest-path tools/rust-style/Cargo.toml
+cargo clippy --offline --locked --manifest-path tools/rust-style/Cargo.toml --all-targets \
+    -- -D warnings -D clippy::unwrap_used -D clippy::disallowed_methods
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace

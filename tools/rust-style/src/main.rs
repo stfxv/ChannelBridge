@@ -19,6 +19,7 @@ struct Imports<'source> {
     findings: Vec<(usize, &'static str)>,
 }
 
+#[must_use]
 fn nested_group(tree: &UseTree, in_group: bool) -> bool {
     match tree {
         UseTree::Path(path) => in_group || nested_group(&path.tree, false),
@@ -148,6 +149,7 @@ fn inspect(source: &str) -> Result<Imports<'_>, syn::Error> {
     Ok(imports)
 }
 
+#[must_use]
 fn rewrite(source: &str, edits: &mut [Edit]) -> String {
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
     let mut result = source.to_owned();
