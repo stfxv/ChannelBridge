@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     #[test]
     fn generations_do_not_replay_old_input_or_erase_future_input() {
-        let (mut producer, mut consumer) = stereo_queue(8).unwrap();
+        let (mut producer, mut consumer) = stereo_queue(8).expect("fixture queue capacity is a nonzero power of two");
         let old = [StereoFrame::new(0.1, -0.1); 3];
         let new = [StereoFrame::new(0.7, -0.7); 3];
         producer.push_generation(&old, 1);
@@ -191,7 +191,7 @@ mod tests {
     }
     #[test]
     fn shortage_full_queue_and_counter_wrap_preserve_order() {
-        let (mut producer, mut consumer) = stereo_queue(4).unwrap();
+        let (mut producer, mut consumer) = stereo_queue(4).expect("fixture queue capacity is a nonzero power of two");
         producer.shared.write.store(u64::MAX - 1, Ordering::Relaxed);
         producer.shared.read.store(u64::MAX - 1, Ordering::Relaxed);
         let input: Vec<_> = (0..6)
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn independent_callbacks_transfer_without_torn_pairs() {
-        let (mut producer, mut consumer) = stereo_queue(128).unwrap();
+        let (mut producer, mut consumer) = stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
         let writer = std::thread::spawn(move || {
             for index in 0..50_000 {
                 let frame = StereoFrame::new(index as f32, -(index as f32));
@@ -237,7 +237,7 @@ mod tests {
                 }
             }
         });
-        writer.join().unwrap();
-        reader.join().unwrap();
+        writer.join().expect("fixture worker completes without panic");
+        reader.join().expect("fixture worker completes without panic");
     }
 }

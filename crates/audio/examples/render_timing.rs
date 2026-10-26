@@ -6,8 +6,8 @@ use std::{hint::black_box, time::Instant};
 fn measure(rate: u32, block: usize) {
     let target = (rate as usize * 16 / 1000).max(256);
     let capacity = (target + 8192).next_power_of_two();
-    let (mut producer, consumer) = stereo_queue(capacity).unwrap();
-    let mut processor = OutputProcessor::new(consumer, rate, rate, target).unwrap();
+    let (mut producer, consumer) = stereo_queue(capacity).expect("fixture queue capacity is a nonzero power of two");
+    let mut processor = OutputProcessor::new(consumer, rate, rate, target).expect("fixture rates are positive and queue capacity covers the target and render margin");
     let prefill = vec![StereoFrame::new(0.25, -0.125); target];
     assert_eq!(producer.push(&prefill), target);
     let incoming = vec![StereoFrame::new(0.25, -0.125); block];

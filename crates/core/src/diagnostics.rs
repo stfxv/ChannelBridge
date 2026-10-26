@@ -178,7 +178,7 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir(&directory).unwrap();
+        fs::create_dir(&directory).expect("fixture owns a writable unique temporary directory");
         let worker = Worker::spawn(
             Config {
                 device_uid: "private-device-serial".into(),
@@ -186,9 +186,9 @@ mod tests {
             },
             || Ok(Empty),
         )
-        .unwrap();
+        .expect("fixture worker thread can be created with its fake backend");
         let mut snapshot = worker.snapshot();
-        worker.join().unwrap();
+        worker.join().expect("fixture worker completes without panic");
         snapshot.retained_io_contexts = 3;
         snapshot.config.auto_send_on_resume = true;
         snapshot.driver_diagnostics = Some(crate::view::DriverDiagnostics {
@@ -224,9 +224,9 @@ mod tests {
             }],
         });
         let destination = directory.join("report.json");
-        save_new(&destination, &snapshot).unwrap();
-        let bytes = fs::read(&destination).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        save_new(&destination, &snapshot).expect("bounded fixture report is published into its fresh writable directory");
+        let bytes = fs::read(&destination).expect("fixture file was written and remains present for inspection");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("published report bytes conform to the diagnostic JSON schema");
         assert!(json["session_counters"].is_null());
         assert_eq!(json["retained_io_contexts"], 3);
         assert_eq!(json["auto_send_on_resume"], true);
@@ -245,15 +245,15 @@ mod tests {
         assert!(json["driver"]["reading"].get("written_frames").is_none());
         assert!(!String::from_utf8_lossy(&bytes).contains("private-device-serial"));
         assert_eq!(
-            save_new(&destination, &snapshot).unwrap_err().kind(),
+            save_new(&destination, &snapshot).expect_err("create-new publication rejects the report path already published above").kind(),
             io::ErrorKind::AlreadyExists
         );
-        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert_eq!(fs::read(&destination).expect("fixture file was written and remains present for inspection"), bytes);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                fs::metadata(&destination).expect("published fixture report remains present for permission inspection").permissions().mode() & 0o777,
                 0o600
             );
         }
@@ -269,9 +269,9 @@ mod tests {
                 application_bundle_build: Some("2".into()),
             },
         )
-        .unwrap();
+        .expect("bounded metadata report is published at a fresh path in the fixture directory");
         let unknown: serde_json::Value =
-            serde_json::from_slice(&fs::read(unavailable_path).unwrap()).unwrap();
+            serde_json::from_slice(&fs::read(unavailable_path).expect("fixture file was written and remains present for inspection")).expect("published report bytes conform to the diagnostic JSON schema");
         assert!(unknown["audio"].is_null());
         assert!(unknown["selected_input_inventory"].is_null());
         assert_eq!(
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(unknown["metadata"]["application_bundle_build"], "2");
         snapshot.error = Some("x".repeat(MAX_REPORT_BYTES));
         assert!(save_new(&directory.join("oversize.json"), &snapshot).is_err());
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
-        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(fs::read_dir(&directory).expect("fixture directory remains present for cleanup inspection").count(), 2);
+        fs::remove_dir_all(directory).expect("fixture owns this temporary directory and has closed its files");
     }
 }

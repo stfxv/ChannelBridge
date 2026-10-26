@@ -68,7 +68,7 @@ mod tests {
     fn existing_json_migrates_without_changing_selected_channels() {
         let json =
             r#"{"device_uid":"RME","left":9,"right":16,"mode":"stereo","muted":false,"gain_db":3}"#;
-        let config: Config = serde_json::from_str(json).unwrap();
+        let config: Config = serde_json::from_str(json).expect("fixture JSON conforms to the Config schema");
         assert!(!config.auto_send_on_resume);
         assert_eq!(config.left, 9);
         assert_eq!(config.right, 16);
@@ -77,7 +77,7 @@ mod tests {
             Err(SelectionError::UnavailableChannel)
         );
         let restored: Config =
-            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            serde_json::from_str(&serde_json::to_string(&config).expect("Config fields have a JSON representation")).expect("JSON serialized from Config conforms to the same schema");
         assert_eq!(restored, config);
     }
 
@@ -89,7 +89,7 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(
-            serde_json::from_str::<Config>(&serde_json::to_string(&config).unwrap()).unwrap(),
+            serde_json::from_str::<Config>(&serde_json::to_string(&config).expect("Config fields have a JSON representation")).expect("JSON serialized from Config conforms to the same schema"),
             config
         );
         assert!(serde_json::from_str::<Config>(r#"{"auto_send_on_resume":"true"}"#).is_err());

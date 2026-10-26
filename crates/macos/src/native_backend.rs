@@ -459,7 +459,7 @@ mod tests {
             vec![Ok(input("input")), Err(devices::Error::Hal(-1))],
             vec![Err(devices::Error::Hal(-1)), Ok(input("input"))],
         ] {
-            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).unwrap();
+            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).expect("a successful device list preserves per-entry failures as partial inventory");
             assert_eq!(inventory.choices.len(), 1);
             assert_eq!(inventory.choices[0].uid, "input");
             assert!(matches!(
@@ -475,7 +475,7 @@ mod tests {
             Ok((0..100).map(|_| Err(devices::Error::Hal(-7))).collect()),
             |_| panic!("failed entries have no stream query"),
         )
-        .unwrap();
+        .expect("a successful device list preserves all entry failures as partial inventory");
         assert!(inventory.choices.is_empty());
         let InventoryCompleteness::Partial { warning } = inventory.completeness else {
             panic!("entry errors must mark inventory partial");
@@ -489,7 +489,7 @@ mod tests {
         let error = project_inventory(Err(devices::Error::Hal(-8)), |_| {
             panic!("failed list has no stream query")
         })
-        .unwrap_err();
+        .expect_err("the injected whole-list HAL error prevents inventory projection");
         assert_eq!(error, "CoreAudio status -8");
     }
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         let inventory = project_inventory(Ok(vec![Ok(input("input"))]), |_| {
             Err(devices::Error::Hal(-9))
         })
-        .unwrap();
+        .expect("a stream query error stays on the listed input rather than failing inventory");
         assert_eq!(inventory.completeness, InventoryCompleteness::Complete);
         assert_eq!(inventory.choices[0].uid, "input");
         assert!(inventory.choices[0].physical_inputs.is_empty());
@@ -537,7 +537,7 @@ mod tests {
             right: 16,
             ..Config::default()
         };
-        let selected = selection(&config).unwrap();
+        let selected = selection(&config).expect("saved mono selection uses its valid left channel and ignores its stale right channel");
         assert_eq!((selected.left(), selected.right()), (1, 1));
         assert_eq!(config.right, 16);
         let original = StreamFormat {

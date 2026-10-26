@@ -154,7 +154,7 @@ mod tests {
         }
         let fixture = &mut bytes[1..];
         assert_eq!(
-            DriverCounters::decode(fixture).unwrap(),
+            DriverCounters::decode(fixture).expect("fixture bytes encode the current driver counter schema"),
             DriverCounters {
                 generation: 7,
                 written_frames: (1 << 54) + 3,

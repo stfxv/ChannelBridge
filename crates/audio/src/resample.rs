@@ -234,7 +234,7 @@ mod tests {
     fn response_grid_meets_declared_passband_and_stopband_targets() {
         println!("maximum_step\tmax_gain_error_db\tmax_phase_component_error\tmax_stopband_db");
         for step in [0.501, 1.002, 2.004, 4.008, 16.032, 96.192] {
-            let kernel = SincKernel::new(step).unwrap();
+            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
             let mut gain_error = 0_f64;
             let mut phase_error = 0_f64;
             let mut stop_amplitude = 0_f64;
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn phase_table_preserves_dc_and_passband() {
         for step in [0.501, 1.002, 2.004, 4.008, 96.192] {
-            let kernel = SincKernel::new(step).unwrap();
+            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
             for fraction in [0.0, 0.125, 0.371, 0.999] {
                 let dc = kernel.interpolate(fraction, |_| StereoFrame::new(0.3, -0.7));
                 assert!((dc.left - 0.3).abs() < 1e-7 && (dc.right + 0.7).abs() < 1e-7);
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn downsampling_suppresses_out_of_band_tones() {
         for step in [1.002, 2.004, 4.008, 96.192] {
-            let kernel = SincKernel::new(step).unwrap();
+            let kernel = SincKernel::new(step).expect("fixture resampling step is finite and within the supported range");
             for frequency in [0.5, 0.55, 0.7]
                 .map(|f| f / step)
                 .into_iter()
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn stream_history_wraps_without_losing_phase_or_repeating_shortages() {
-        let mut resampler = StreamingResampler::new(1.002, 256).unwrap();
+        let mut resampler = StreamingResampler::new(1.002, 256).expect("fixture resampling step is supported and scratch capacity is nonzero");
         let mut incoming = [StereoFrame::SILENCE; 127];
         let mut outgoing = [StereoFrame::new(9.0, 9.0); 113];
         let mut written = 0;

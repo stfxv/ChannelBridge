@@ -28,17 +28,17 @@ impl Backend for Fake {
     fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
         self.inventory.as_ref().map_or_else(
             || Ok(channelbridge_core::view::DeviceInventory::default()),
-            |inventory| inventory.lock().unwrap().clone(),
+            |inventory| inventory.lock().expect("fixture threads do not panic while holding this mutex").clone(),
         )
     }
     fn save(&mut self, config: &Config) -> Result<(), String> {
         self.events
             .lock()
-            .unwrap()
+            .expect("fixture threads do not panic while holding this mutex")
             .push(format!("save:{}", config.device_uid));
         if let Some(saving) = self.saving.take() {
-            saving.send(()).unwrap();
-            self.save_gate.take().unwrap().recv().unwrap();
+            saving.send(()).expect("fixture receiver remains alive until this rendezvous completes");
+            self.save_gate.take().expect("the saving notification and release gate are installed together").recv().expect("fixture sender signals this rendezvous before dropping its channel");
         }
         if config.device_uid == "fail" {
             Err("save failed".into())
@@ -53,9 +53,9 @@ impl Backend for Fake {
         Ok(true)
     }
     fn open(&mut self, _: &Config) -> Result<(), String> {
-        self.events.lock().unwrap().push("open".into());
+        self.events.lock().expect("fixture threads do not panic while holding this mutex").push("open".into());
         if let Some(opened) = self.opened.take() {
-            opened.send(()).unwrap();
+            opened.send(()).expect("fixture receiver remains alive until this rendezvous completes");
         }
         Ok(())
     }
@@ -63,11 +63,11 @@ impl Backend for Fake {
         Ok(true)
     }
     fn route(&mut self, _: &(), _: &Config, _: bool, _: bool) -> Result<(), String> {
-        self.events.lock().unwrap().push("route".into());
+        self.events.lock().expect("fixture threads do not panic while holding this mutex").push("route".into());
         Ok(())
     }
     fn close(&mut self, _: ()) -> Result<(), String> {
-        self.events.lock().unwrap().push("close".into());
+        self.events.lock().expect("fixture threads do not panic while holding this mutex").push("close".into());
         if self.close_fail {
             Err("close failed".into())
         } else {
@@ -101,32 +101,32 @@ fn accepted_configuration_fifo_completes_after_sealing_a_full_queue() {
     let saved = events.clone();
     let (release, gate) = mpsc::channel();
     let worker = Worker::spawn(config("original"), move || {
-        gate.recv().unwrap();
+        gate.recv().expect("fixture sender signals this rendezvous before dropping its channel");
         Ok(Fake {
             events: saved,
             ..Fake::default()
         })
     })
-    .unwrap();
+    .expect("fixture worker thread can be created with its gated fake backend");
     for i in 0..32 {
         worker
             .send(Command::Configure(config(&i.to_string())))
-            .unwrap();
+            .expect("fixture receiver remains alive until this rendezvous completes");
     }
     assert!(worker.send(Command::Refresh).is_err());
-    worker.send(Command::Quit).unwrap();
+    worker.send(Command::Quit).expect("fixture receiver remains alive until this rendezvous completes");
     assert!(worker.send(Command::Configure(config("rejected"))).is_err());
     assert!(worker.send(Command::Start).is_err());
-    release.send(()).unwrap();
+    release.send(()).expect("fixture receiver remains alive until this rendezvous completes");
     let snapshot = wait(&worker, |snapshot| snapshot.finished);
     assert_eq!(snapshot.configuration_attempt, 32);
     assert_eq!(snapshot.config.device_uid, "31");
     assert!(!snapshot.wanted_send);
     assert_eq!(
-        *events.lock().unwrap(),
+        *events.lock().expect("fixture threads do not panic while holding this mutex"),
         (0..32).map(|i| format!("save:{i}")).collect::<Vec<_>>()
     );
-    worker.join().unwrap();
+    worker.join().expect("fixture worker completes without panic");
 }
 #[test]
 fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
@@ -146,26 +146,26 @@ fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
                 ..Fake::default()
             })
         })
-        .unwrap();
-        worker.send(Command::PermissionChanged(true)).unwrap();
-        open.recv_timeout(Duration::from_secs(3)).unwrap();
-        worker.send(Command::Configure(config("source"))).unwrap();
-        save.recv_timeout(Duration::from_secs(3)).unwrap();
+        .expect("fixture worker thread can be created with its fake backend");
+        worker.send(Command::PermissionChanged(true)).expect("fixture receiver remains alive until this rendezvous completes");
+        open.recv_timeout(Duration::from_secs(3)).expect("fixture sender signals this rendezvous before dropping its channel");
+        worker.send(Command::Configure(config("source"))).expect("fixture receiver remains alive until this rendezvous completes");
+        save.recv_timeout(Duration::from_secs(3)).expect("fixture sender signals this rendezvous before dropping its channel");
         worker
             .send(Command::Configure(Config {
                 left: 0,
                 ..config("invalid")
             }))
-            .unwrap();
-        worker.send(Command::Configure(config("fail"))).unwrap();
+            .expect("fixture receiver remains alive until this rendezvous completes");
+        worker.send(Command::Configure(config("fail"))).expect("fixture receiver remains alive until this rendezvous completes");
         if finish_success {
-            worker.send(Command::Configure(config("final"))).unwrap();
+            worker.send(Command::Configure(config("final"))).expect("fixture receiver remains alive until this rendezvous completes");
         }
         worker.request_shutdown();
         worker
             .send(Command::System(channelbridge_core::SystemEvent::Wake))
-            .unwrap_err();
-        release.send(()).unwrap();
+            .expect_err("request_shutdown seals admission before another command is sent");
+        release.send(()).expect("fixture receiver remains alive until this rendezvous completes");
         let snapshot = wait(&worker, |snapshot| snapshot.finished);
         assert_eq!(
             snapshot.configuration_attempt,
@@ -191,8 +191,8 @@ fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
             snapshot.config.device_uid,
             if finish_success { "final" } else { "source" }
         );
-        let log = events.lock().unwrap();
-        let closed = log.iter().position(|event| event == "close").unwrap();
+        let log = events.lock().expect("fixture threads do not panic while holding this mutex");
+        let closed = log.iter().position(|event| event == "close").expect("shutdown records a close event for the opened fake session");
         assert_eq!(
             &log[closed..],
             if finish_success {
@@ -202,39 +202,39 @@ fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
             }
         );
         drop(log);
-        worker.join().unwrap();
+        worker.join().expect("fixture worker completes without panic");
     }
 }
 #[test]
 fn shutdown_without_remaining_configuration_preserves_prior_command_error() {
-    let worker = Worker::spawn(config("source"), || Ok(Fake::default())).unwrap();
-    worker.send(Command::Configure(config("fail"))).unwrap();
+    let worker = Worker::spawn(config("source"), || Ok(Fake::default())).expect("fixture worker thread can be created with its fake backend");
+    worker.send(Command::Configure(config("fail"))).expect("fixture receiver remains alive until this rendezvous completes");
     wait(&worker, |snapshot| snapshot.configuration_attempt == 1);
     worker.request_shutdown();
     let snapshot = wait(&worker, |snapshot| snapshot.finished);
     assert_eq!(snapshot.command_error.as_deref(), Some("save failed"));
     assert_eq!(snapshot.configuration_attempt, 1);
-    worker.join().unwrap();
+    worker.join().expect("fixture worker completes without panic");
 }
 #[test]
 fn factory_failure_completes_accepted_configuration_attempts() {
     let (release, gate) = mpsc::channel();
     let worker = Worker::spawn::<Fake>(config("source"), move || {
-        gate.recv().unwrap();
+        gate.recv().expect("fixture sender signals this rendezvous before dropping its channel");
         Err("factory failed".into())
     })
-    .unwrap();
+    .expect("fixture worker thread can be created with its gated fake backend");
     for _ in 0..3 {
-        worker.send(Command::Configure(config("next"))).unwrap();
+        worker.send(Command::Configure(config("next"))).expect("fixture receiver remains alive until this rendezvous completes");
     }
-    worker.send(Command::Refresh).unwrap();
-    release.send(()).unwrap();
+    worker.send(Command::Refresh).expect("fixture receiver remains alive until this rendezvous completes");
+    release.send(()).expect("fixture receiver remains alive until this rendezvous completes");
     let snapshot = wait(&worker, |snapshot| snapshot.finished);
     assert_eq!(snapshot.configuration_attempt, 3);
     assert_eq!(snapshot.command_error.as_deref(), Some("factory failed"));
     assert_eq!(snapshot.config.device_uid, "source");
     assert!(worker.send(Command::Configure(config("rejected"))).is_err());
-    worker.join().unwrap();
+    worker.join().expect("fixture worker completes without panic");
 }
 #[test]
 fn racing_seal_and_senders_accounts_for_every_accepted_configuration() {
@@ -242,13 +242,13 @@ fn racing_seal_and_senders_accounts_for_every_accepted_configuration() {
     let saved = events.clone();
     let (release, gate) = mpsc::channel();
     let worker = Worker::spawn(config("source"), move || {
-        gate.recv().unwrap();
+        gate.recv().expect("fixture sender signals this rendezvous before dropping its channel");
         Ok(Fake {
             events: saved,
             ..Fake::default()
         })
     })
-    .unwrap();
+    .expect("fixture worker thread can be created with its gated fake backend");
     let accepted = AtomicUsize::new(0);
     let barrier = Barrier::new(5);
     thread::scope(|scope| {
@@ -266,17 +266,17 @@ fn racing_seal_and_senders_accounts_for_every_accepted_configuration() {
         barrier.wait();
         worker.request_shutdown();
     });
-    release.send(()).unwrap();
+    release.send(()).expect("fixture receiver remains alive until this rendezvous completes");
     let snapshot = wait(&worker, |snapshot| snapshot.finished);
     assert_eq!(
         snapshot.configuration_attempt,
         accepted.load(Ordering::Relaxed) as u64
     );
     assert_eq!(
-        events.lock().unwrap().len(),
+        events.lock().expect("fixture threads do not panic while holding this mutex").len(),
         accepted.load(Ordering::Relaxed)
     );
-    worker.join().unwrap();
+    worker.join().expect("fixture worker completes without panic");
 }
 
 #[test]
@@ -303,24 +303,24 @@ fn whole_inventory_failure_retains_choices_and_presence_history() {
             ..Fake::default()
         })
     })
-    .unwrap();
+    .expect("fixture worker thread can be created with its fake backend");
     wait(&worker, |snapshot| snapshot.devices.len() == 1);
-    *inventory.lock().unwrap() = Err("whole list failed".into());
+    *inventory.lock().expect("fixture threads do not panic while holding this mutex") = Err("whole list failed".into());
     worker
         .send(Command::System(
             channelbridge_core::SystemEvent::ScreensWake,
         ))
-        .unwrap();
+        .expect("fixture receiver remains alive until this rendezvous completes");
     let failed = wait(&worker, |snapshot| {
         snapshot.device_error.as_deref() == Some("whole list failed")
     });
     assert_eq!(&*failed.devices, &complete.choices);
-    *inventory.lock().unwrap() = Ok(complete);
+    *inventory.lock().expect("fixture threads do not panic while holding this mutex") = Ok(complete);
     worker
         .send(Command::System(
             channelbridge_core::SystemEvent::ScreensWake,
         ))
-        .unwrap();
+        .expect("fixture receiver remains alive until this rendezvous completes");
     let recovered = wait(&worker, |snapshot| snapshot.device_error.is_none());
     assert!(
         !recovered
@@ -328,5 +328,5 @@ fn whole_inventory_failure_retains_choices_and_presence_history() {
             .iter()
             .any(|event| event.kind == ControlEventKind::InputReconnected)
     );
-    worker.join().unwrap();
+    worker.join().expect("fixture worker completes without panic");
 }

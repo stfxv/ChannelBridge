@@ -56,9 +56,9 @@ mod tests {
         assert_eq!(clock.speed(1), None);
         assert_eq!(clock.snapshot(), None);
         assert!(clock.publish(2, Some(1.000_123_456)));
-        assert!((clock.speed(2).unwrap() - 1.000_123_456).abs() <= 0.000_000_005);
+        assert!((clock.speed(2).expect("the published matching generation contains a finite positive source speed") - 1.000_123_456).abs() <= 0.000_000_005);
         assert_eq!(clock.speed(1), None);
-        assert_eq!(clock.snapshot().unwrap().0, 2);
+        assert_eq!(clock.snapshot().expect("publish installed a nonzero clock generation").0, 2);
         assert!(!clock.publish(1, Some(1.0)));
         assert!(clock.publish(3, Some(f64::NAN)));
         assert_eq!(clock.speed(3), None);

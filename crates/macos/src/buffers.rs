@@ -263,7 +263,7 @@ mod tests {
     }
     #[test]
     fn multiple_streams_map_global_channels_and_reject_short_buffers() {
-        let layout = CaptureLayout::try_new(&[format(2), format(1)]).unwrap();
+        let layout = CaptureLayout::try_new(&[format(2), format(1)]).expect("fixture formats are float32 PCM with matching positive sample rates");
         let mut first = [1_f32, 2.0, 3.0, 4.0];
         let mut second = [5_f32, 6.0];
         let mut list = TwoBuffers {
@@ -283,7 +283,7 @@ mod tests {
         };
         // SAFETY: native initialized descriptors and disjoint live float arrays.
         let input = unsafe { InputBuffers::from_raw((&list as *const TwoBuffers).cast(), &layout) }
-            .unwrap();
+            .expect("fixture formats are float32 PCM with matching positive sample rates");
         assert_eq!(input.frames(), 2);
         assert_eq!(input.channels(), 3);
         assert_eq!(input.sample(1, 0), Some(3.0));

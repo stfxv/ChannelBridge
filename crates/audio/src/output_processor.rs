@@ -211,8 +211,8 @@ mod tests {
     fn session_target_primes_complete_large_callbacks() {
         for frames in [1024, 4096] {
             let target = 48_000 * 16 / 1000;
-            let (mut producer, consumer) = stereo_queue(16384).unwrap();
-            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).unwrap();
+            let (mut producer, consumer) = stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).expect("fixture rates are positive and queue capacity covers the target and render margin");
             let incoming = vec![StereoFrame::new(0.25, -0.25); frames];
             let mut output = vec![StereoFrame::SILENCE; frames];
             let mut audible_blocks = 0;
@@ -242,8 +242,8 @@ mod tests {
 
     #[test]
     fn priming_tracks_callback_size_after_restart() {
-        let (mut producer, consumer) = stereo_queue(16384).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let (mut producer, consumer) = stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect("fixture rates are positive and queue capacity covers the target and render margin");
         let pcm = [StereoFrame::new(0.25, -0.25); 4096];
         let mut output = [StereoFrame::SILENCE; 4096];
         assert_eq!(producer.push(&pcm[..768]), 768);
@@ -265,8 +265,8 @@ mod tests {
 
     #[test]
     fn callback_larger_than_queue_capacity_reports_shortage_without_consuming() {
-        let (mut producer, consumer) = stereo_queue(1024).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let (mut producer, consumer) = stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect("fixture rates are positive and queue capacity covers the target and render margin");
         let pcm = [StereoFrame::new(0.25, -0.25); 1024];
         assert_eq!(producer.push(&pcm), pcm.len());
         let mut output = [StereoFrame::SILENCE; 4096];
@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
-        let (mut producer, consumer) = stereo_queue(8192).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
+        let (mut producer, consumer) = stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect("fixture rates are positive and queue capacity covers the target and render margin");
         let old = [StereoFrame::new(0.8, 0.8); 2048];
         producer.push_generation(&old, 1);
         let mut output = [StereoFrame::SILENCE; 512];
@@ -314,9 +314,9 @@ mod tests {
         // Four seconds of actual PCM per case, advanced without real-time waits.
         // The separate eight-hour test covers only the control/queue model.
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
-            let (mut producer, consumer) = stereo_queue(16384).unwrap();
-            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 4608).unwrap();
-            let mut estimator = ClockEstimator::new(48_000, 1_000_000_000).unwrap();
+            let (mut producer, consumer) = stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 4608).expect("fixture rates are positive and queue capacity covers the target and render margin");
+            let mut estimator = ClockEstimator::new(48_000, 1_000_000_000).expect("fixture sample rate and host clock frequency are positive");
             let mut incoming = [StereoFrame::SILENCE; 8192];
             let mut output = [StereoFrame::SILENCE; 4096];
             let physical_rate = 48_000.0 * (1.0 + ppm / 1_000_000.0);
@@ -371,10 +371,10 @@ mod tests {
     }
     #[test]
     fn startup_shortage_and_recovery_never_replay_old_samples() {
-        let (_, undersized) = stereo_queue(128).unwrap();
+        let (_, undersized) = stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
         assert!(OutputProcessor::new(undersized, 48_000, 48_000, 704).is_none());
-        let (mut producer, consumer) = stereo_queue(4096).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).unwrap();
+        let (mut producer, consumer) = stereo_queue(4096).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect("fixture rates are positive and queue capacity covers the target and render margin");
         let mut output = [StereoFrame::new(9.0, 9.0); 512];
         assert!(processor.render(&mut output, None).priming);
         assert!(output.iter().all(|f| *f == StereoFrame::SILENCE));

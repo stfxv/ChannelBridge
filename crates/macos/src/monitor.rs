@@ -166,7 +166,7 @@ mod tests {
             bits_per_channel: 32,
             reserved: 0,
         };
-        let observer = Observer::new(CaptureLayout::try_new(&[format]).unwrap());
+        let observer = Observer::new(CaptureLayout::try_new(&[format]).expect("fixture is float32 PCM with a positive sample rate and channel count"));
         let mut samples = [0.0_f32, -0.0, -0.25, 0.5, f32::NAN, f32::INFINITY];
         let list = AudioBufferList {
             count: 1,

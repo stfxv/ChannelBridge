@@ -337,14 +337,14 @@ mod tests {
             context_retained: true,
             disposition: crate::io::IoDisposition::RemovedDevice,
         };
-        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), true).unwrap_err();
+        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), true).expect_err("injected output removal is preserved in the shutdown error");
         assert!(!shutdown.requires_stop());
         assert_eq!(shutdown.retained_io_contexts(), 1);
         let startup = startup_error("device disconnected".into(), false, vec![removed()]);
         assert!(!startup.requires_stop);
         assert!(startup.context_retained);
         assert_eq!(startup.retained_io_contexts, 1);
-        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), false).unwrap_err();
+        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), false).expect_err("injected output removal and unstopped route produce a shutdown error");
         assert!(shutdown.requires_stop());
     }
     #[test]
@@ -364,12 +364,12 @@ mod tests {
             }),
             true,
         )
-        .unwrap_err();
+        .expect_err("injected input and output failures produce a combined shutdown error");
         assert!(error.output.is_some() && error.input.is_some());
         assert!(error.context_retained());
         assert!(error.route_stopped);
         assert!(shutdown_result(Ok(()), Ok(()), true).is_ok());
-        let error = shutdown_result(Ok(()), Ok(()), false).unwrap_err();
+        let error = shutdown_result(Ok(()), Ok(()), false).expect_err("an unstopped route makes shutdown fail even when I/O cleanup succeeds");
         assert!(!error.context_retained());
         assert!(!error.route_stopped);
     }
@@ -413,13 +413,13 @@ mod tests {
             bits_per_channel: 32,
             reserved: 0,
         };
-        let selection = Selection::new(2, 1, Mode::Stereo, false).unwrap();
+        let selection = Selection::new(2, 1, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
         let output = StreamFormat {
             sample_rate: 96000.0,
             ..format
         };
         let prepared =
-            PreparedSession::from_formats(&[format], &[output], selection, 24000000).unwrap();
+            PreparedSession::from_formats(&[format], &[output], selection, 24000000).expect("stereo float32 formats cover the selection and use supported positive rates");
         assert_eq!((prepared.input_rate, prepared.output_rate), (48000, 96000));
         assert!(!prepared.routing.load().sending);
         assert_eq!(prepared.routing.load().selection, selection);
@@ -427,7 +427,7 @@ mod tests {
         let generation = prepared
             .routing
             .configure(selection, true, false)
-            .unwrap()
+            .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let mut incoming = [[0.25_f32, -0.5]; 512];
         let input_buffer = channelbridge_hal_abi::AudioBufferList {
@@ -467,7 +467,7 @@ mod tests {
         assert!((outgoing[511][0] + 0.5).abs() < 0.0001);
         assert!((outgoing[511][1] - 0.25).abs() < 0.0001);
         assert_eq!(prepared.output.stats().missing, 0);
-        let missing = Selection::new(3, 1, Mode::Stereo, false).unwrap();
+        let missing = Selection::new(3, 1, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
         assert!(PreparedSession::from_formats(&[format], &[output], missing, 24000000).is_err());
     }
 }

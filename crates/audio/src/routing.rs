@@ -173,18 +173,18 @@ mod tests {
     use super::*;
     #[test]
     fn mode_edits_are_atomic_but_start_stop_retires_old_audio() {
-        let mono = Selection::new(512, 999, Mode::Mono, false).unwrap();
+        let mono = Selection::new(512, 999, Mode::Mono, false).expect("fixture channel numbers are nonzero and within the selection encoding");
         assert!(!mono.available(511));
         let settings = AtomicRouting::new(mono);
-        let start = settings.configure(mono, true, false).unwrap();
-        let stereo = Selection::new(10, 16, Mode::Stereo, true).unwrap();
-        let changed = settings.configure(stereo, true, true).unwrap();
+        let start = settings.configure(mono, true, false).expect("fixture selection is encodable and generation space is not exhausted");
+        let stereo = Selection::new(10, 16, Mode::Stereo, true).expect("fixture channel numbers are nonzero and within the selection encoding");
+        let changed = settings.configure(stereo, true, true).expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, start.generation);
         assert_eq!(settings.load().selection, stereo);
-        let stop = settings.configure(stereo, false, true).unwrap();
+        let stop = settings.configure(stereo, false, true).expect("fixture selection is encodable and generation space is not exhausted");
         assert!(stop.generation > changed.generation);
         assert!(settings.advance_generation(changed).is_none());
         assert_eq!(settings.load(), stop);
-        assert!(settings.advance_generation(stop).unwrap().generation > stop.generation);
+        assert!(settings.advance_generation(stop).expect("fixture selection is encodable and generation space is not exhausted").generation > stop.generation);
     }
 }

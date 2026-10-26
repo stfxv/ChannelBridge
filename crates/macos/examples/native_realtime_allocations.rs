@@ -61,10 +61,10 @@ mod native {
     }
 
     pub fn run() {
-        let selected = Selection::new(3, 7, Mode::Stereo, false).unwrap();
+        let selected = Selection::new(3, 7, Mode::Stereo, false).expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selected));
-        let (writer, reader) = meter_bank(10, 24000000).unwrap();
-        let (producer, consumer) = stereo_queue(8192).unwrap();
+        let (writer, reader) = meter_bank(10, 24000000).expect("fixture channel count and host clock frequency are positive");
+        let (producer, consumer) = stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
         let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48000.0,
             format_id: fourcc(b"lpcm"),
@@ -76,13 +76,13 @@ mod native {
             bits_per_channel: 32,
             reserved: 0,
         }])
-        .unwrap();
+        .expect("fixture is interleaved float32 PCM with ten channels at a positive rate");
         let processor =
-            CaptureProcessor::new(Arc::clone(&routing), writer, producer, 48000, 24000000).unwrap();
+            CaptureProcessor::new(Arc::clone(&routing), writer, producer, 48000, 24000000).expect("fixture capture rates are positive and scratch capacity covers a callback");
         let capture = CaptureCallback::new(layout, processor);
-        let processor = OutputProcessor::new(consumer, 48000, 48000, 768).unwrap();
+        let processor = OutputProcessor::new(consumer, 48000, 48000, 768).expect("fixture rates are positive and queue capacity covers the target and render margin");
         let output = OutputCallback::new(processor, Arc::clone(&routing))
-            .unwrap()
+            .expect("fixture can allocate the fixed 4096-frame callback scratch buffer")
             .with_source_clock(capture.source_clock());
         let mut incoming = [[0.25_f32; 10]; 512];
         let mut outgoing = [[0.0_f32; 2]; 512];
@@ -105,25 +105,25 @@ mod native {
         CHECKING.store(true, Ordering::Release);
         for index in 0..128_u64 {
             if index == 8 || index == 100 {
-                routing.configure(selected, true, false).unwrap();
+                routing.configure(selected, true, false).expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 16 {
-                routing.configure(selected, true, true).unwrap();
+                routing.configure(selected, true, true).expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 32 {
                 routing
                     .configure(
-                        Selection::new(3, 7, Mode::Stereo, true).unwrap(),
+                        Selection::new(3, 7, Mode::Stereo, true).expect("fixture channel numbers are nonzero and within the selection encoding"),
                         true,
                         true,
                     )
-                    .unwrap();
+                    .expect("fixture channel numbers are nonzero and within the selection encoding");
             }
             if index == 48 {
-                routing.configure(selected, true, true).unwrap();
+                routing.configure(selected, true, true).expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 96 {
-                routing.configure(selected, false, true).unwrap();
+                routing.configure(selected, false, true).expect("fixture selection is encodable and generation space is not exhausted");
             }
             let time = AudioTimestamp {
                 sample_time: (index * 512) as f64,

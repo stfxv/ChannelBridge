@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn timestamps_estimate_speed_and_discontinuities_are_not_drift() {
-        let mut estimator = ClockEstimator::new(48_000, 24_000_000).unwrap();
+        let mut estimator = ClockEstimator::new(48_000, 24_000_000).expect("fixture sample rate and host clock frequency are positive");
         for second in 0..30 {
             let frame = (second as f64 * 48_000.0 * 1.001).round() as u64;
             estimator.observe(frame, second * 24_000_000);
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn correction_is_bounded_and_invalid_observations_do_not_poison_it() {
-        let mut controller = DriftController::new(48_000, 48_000, 704).unwrap();
+        let mut controller = DriftController::new(48_000, 48_000, 704).expect("fixture rates and target buffer size are positive");
         let step = controller.update(4000, 512, Some(f64::NAN));
         assert!((step - 1.0).abs() <= 0.0002 * 512.0 / 48_000.0 + f64::EPSILON);
         for _ in 0..10_000 {
@@ -193,7 +193,7 @@ mod tests {
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
             let target = 4608.0;
             let actual_speed = 1.0 + ppm / 1_000_000.0;
-            let mut controller = DriftController::new(48_000, 48_000, target as usize).unwrap();
+            let mut controller = DriftController::new(48_000, 48_000, target as usize).expect("fixture rates and target buffer size are positive");
             let mut queue = target;
             let mut elapsed = 0.0;
             let mut iteration = 0;
