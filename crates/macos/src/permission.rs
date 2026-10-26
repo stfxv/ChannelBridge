@@ -1,12 +1,12 @@
 //! Microphone permission boundary. Querying status never requests access.
 use block2::RcBlock;
-use objc2::{MainThreadMarker, runtime::Bool};
+use objc2::MainThreadMarker;
+use objc2::runtime::Bool;
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
 use objc2_foundation::{NSBundle, ns_string};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
     NotDetermined,

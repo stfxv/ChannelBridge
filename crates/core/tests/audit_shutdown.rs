@@ -1,17 +1,17 @@
-use channelbridge_core::{
-    Command, Config,
-    controller::Backend,
-    worker::{Snapshot, Worker},
-};
-use std::{
-    sync::{
-        Arc, Barrier, Mutex,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use channelbridge_core::Command;
+use channelbridge_core::Config;
+use channelbridge_core::controller::Backend;
+use channelbridge_core::worker::Snapshot;
+use channelbridge_core::worker::Worker;
+use std::sync::Arc;
+use std::sync::Barrier;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Default)]
 struct Fake {

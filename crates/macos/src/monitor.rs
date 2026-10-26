@@ -1,16 +1,17 @@
 //! Read-only acceptance observer for the separate Rust test microphone.
 //! Output streams are disabled; samples are reduced to counters and never saved.
-use crate::{
-    buffers::{CaptureLayout, InputBuffers},
-    devices,
-    io::{Direction, Handler, Registration},
-};
+use crate::buffers::CaptureLayout;
+use crate::buffers::InputBuffers;
+use crate::devices;
+use crate::io::Direction;
+use crate::io::Handler;
+use crate::io::Registration;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, fourcc};
-use std::{
-    error::Error,
-    sync::atomic::{AtomicU32, AtomicU64, Ordering},
-    time::Duration,
-};
+use std::error::Error;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Report {

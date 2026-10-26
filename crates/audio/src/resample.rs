@@ -3,7 +3,8 @@
 //! https://dsprelated.com/freebooks/pasp/Windowed_Sinc_Interpolation.html
 //! The table is shared across fractional phases; callback work uses only table
 //! interpolation and finite sums, with no allocation or trigonometric calls.
-use crate::{StereoFrame, frame::finite};
+use crate::StereoFrame;
+use crate::frame::finite;
 
 const HALF_WIDTH: usize = 96;
 const DENSITY: usize = 512;

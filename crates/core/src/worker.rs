@@ -1,17 +1,22 @@
 //! UI-facing bounded commands and a control-thread-owned backend.
-use crate::{
-    CaptureState, Command, Config, SystemEvent,
-    controller::{Backend, Controller},
-};
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
+use crate::CaptureState;
+use crate::Command;
+use crate::Config;
+use crate::SystemEvent;
+use crate::controller::Backend;
+use crate::controller::Controller;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::TrySendError;
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::Duration;
+use std::time::Instant;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub state: CaptureState,
@@ -553,9 +558,11 @@ impl Worker {
             }),
         }
     }
+    #[must_use]
     pub fn system_events(&self) -> SystemEvents {
         self.system_events.clone()
     }
+    #[must_use]
     pub fn snapshot(&self) -> Snapshot {
         let completion = Completion::load(&self.completion);
         let completed = completion != Completion::Running;
@@ -625,7 +632,8 @@ mod tests {
             completeness: crate::view::InventoryCompleteness::Complete,
         }
     }
-    use std::{rc::Rc, sync::atomic::AtomicUsize};
+    use std::rc::Rc;
+    use std::sync::atomic::AtomicUsize;
     struct LocalBackend {
         _local: Rc<()>,
         drops: Arc<AtomicUsize>,
@@ -720,13 +728,17 @@ mod tests {
             Ok(())
         }
     }
-    fn poison<T>(mutex: &Mutex<T>, corrupt: impl FnOnce(&mut T)) {
+    fn poison<T: Send>(mutex: &Mutex<T>, corrupt: impl FnOnce(&mut T) + Send) {
         assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut guard = mutex.lock().expect("fixture mutex starts healthy");
-                corrupt(&mut guard);
-                panic!("fixture poison");
-            }))
+            thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let mut guard = mutex.lock().expect("fixture mutex starts healthy");
+                        corrupt(&mut guard);
+                        panic!("fixture poison");
+                    })
+                    .join()
+            })
             .is_err()
         );
     }

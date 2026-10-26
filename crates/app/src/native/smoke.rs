@@ -1,19 +1,22 @@
 //! Isolated non-visible checks; never request permission or open audio.
-use super::{
-    application::{AppDelegate, Runtime},
-    screen::Screen,
-};
-use channelbridge_core::{CaptureState, Command, Config, controller::Backend, worker::Worker};
+use super::application::AppDelegate;
+use super::application::Runtime;
+use super::screen::Screen;
+use channelbridge_core::CaptureState;
+use channelbridge_core::Command;
+use channelbridge_core::Config;
+use channelbridge_core::controller::Backend;
+use channelbridge_core::worker::Worker;
 use objc2::{DefinedClass, MainThreadMarker};
 use objc2_app_kit::{
     NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceScreensDidWakeNotification,
     NSWorkspaceWillSleepNotification,
 };
 use objc2_foundation::{NSDate, NSNotificationName, NSRunLoop};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 #[derive(Default)]
 struct AudioLifecycle {

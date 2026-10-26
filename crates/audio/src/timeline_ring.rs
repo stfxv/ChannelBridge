@@ -260,7 +260,8 @@ mod tests {
 #[cfg(all(test, feature = "model-check"))]
 mod model_tests {
     use super::*;
-    use loom::{sync::Arc, thread};
+    use loom::sync::Arc;
+    use loom::thread;
 
     #[test]
     fn publication_never_mixes_old_tags_with_new_samples() {

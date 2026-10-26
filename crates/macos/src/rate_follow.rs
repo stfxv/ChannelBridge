@@ -1,10 +1,9 @@
 //! Nonblocking control-thread rate negotiation for the separate test device.
 use crate::devices::{self, Error};
 use channelbridge_hal_abi::{ObjectId, PropertyAddress, fourcc};
-use std::{
-    ffi::c_void,
-    time::{Duration, Instant},
-};
+use std::ffi::c_void;
+use std::time::Duration;
+use std::time::Instant;
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioObjectSetPropertyData(

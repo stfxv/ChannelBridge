@@ -238,7 +238,8 @@ mod tests {
 #[cfg(all(test, feature = "model-check"))]
 mod model_tests {
     use super::*;
-    use loom::{sync::Arc, thread};
+    use loom::sync::Arc;
+    use loom::thread;
     #[test]
     fn overwritten_history_never_attributes_a_peak_to_the_wrong_bucket() {
         let mut model = loom::model::Builder::new();

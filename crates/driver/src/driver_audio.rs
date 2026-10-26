@@ -1,7 +1,7 @@
-use channelbridge_audio::{
-    FramePosition, StereoFrame,
-    timeline_ring::{TimelineRing, Transfer},
-};
+use channelbridge_audio::FramePosition;
+use channelbridge_audio::StereoFrame;
+use channelbridge_audio::timeline_ring::TimelineRing;
+use channelbridge_audio::timeline_ring::Transfer;
 use channelbridge_contract::DriverCounters;
 use std::sync::atomic::{AtomicU64, Ordering};
 

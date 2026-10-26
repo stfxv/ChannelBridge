@@ -1,9 +1,8 @@
 //! Test builds import production preferences read-only and save independently.
 use channelbridge_core::{Config, storage};
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 
 pub struct Settings {
     pub destination: PathBuf,

@@ -13,8 +13,8 @@ struct Edit {
     replacement: String,
 }
 
-struct Imports<'a> {
-    source: &'a str,
+struct Imports<'source> {
+    source: &'source str,
     edits: Vec<Edit>,
     findings: Vec<(usize, &'static str)>,
 }

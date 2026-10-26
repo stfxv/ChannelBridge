@@ -1,17 +1,16 @@
 //! Prepare all audio ownership before HAL registration. No I/O starts here.
-use crate::{
-    buffers::CaptureLayout,
-    capture::CaptureCallback,
-    devices::{self, Stream},
-    output::OutputCallback,
-};
-use channelbridge_audio::{
-    capture_processor::CaptureProcessor,
-    fifo::stereo_queue,
-    meters::{MeterReader, meter_bank},
-    output_processor::OutputProcessor,
-    routing::{AtomicRouting, Selection},
-};
+use crate::buffers::CaptureLayout;
+use crate::capture::CaptureCallback;
+use crate::devices;
+use crate::devices::Stream;
+use crate::output::OutputCallback;
+use channelbridge_audio::capture_processor::CaptureProcessor;
+use channelbridge_audio::fifo::stereo_queue;
+use channelbridge_audio::meters::MeterReader;
+use channelbridge_audio::meters::meter_bank;
+use channelbridge_audio::output_processor::OutputProcessor;
+use channelbridge_audio::routing::AtomicRouting;
+use channelbridge_audio::routing::Selection;
 use channelbridge_hal_abi::{ObjectId, StreamFormat, fourcc};
 use std::sync::Arc;
 

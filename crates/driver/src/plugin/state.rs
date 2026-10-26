@@ -1,20 +1,23 @@
-use super::{
-    host_boundary::{BAD_OBJECT, DEVICE, ILLEGAL, NOT_READY, UNSPECIFIED},
-    system,
-};
+use super::host_boundary::BAD_OBJECT;
+use super::host_boundary::DEVICE;
+use super::host_boundary::ILLEGAL;
+use super::host_boundary::NOT_READY;
+use super::host_boundary::UNSPECIFIED;
+use super::system;
 use crate::DriverAudio;
 use channelbridge_audio::device_clock::{DeviceClock, ZeroTimestamp};
 use channelbridge_contract::SUPPORTED_RATES;
 use channelbridge_hal_abi::interface::{HostInterface, HostRef};
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    sync::{
-        Mutex, OnceLock,
-        mpsc::{self, SyncSender},
-    },
-    thread::JoinHandle,
-};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
+use std::thread::JoinHandle;
 
 struct Worker {
     sender: SyncSender<Option<u32>>,

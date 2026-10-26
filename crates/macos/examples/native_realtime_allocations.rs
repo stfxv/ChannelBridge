@@ -1,24 +1,26 @@
 //! Test-only native buffer/allocator probe; no HAL device is opened.
 #[cfg(target_os = "macos")]
 mod native {
-    use channelbridge_audio::{
-        capture_processor::CaptureProcessor,
-        fifo::stereo_queue,
-        meters::meter_bank,
-        output_processor::OutputProcessor,
-        routing::{AtomicRouting, Mode, Selection},
-    };
+    use channelbridge_audio::capture_processor::CaptureProcessor;
+    use channelbridge_audio::fifo::stereo_queue;
+    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::output_processor::OutputProcessor;
+    use channelbridge_audio::routing::AtomicRouting;
+    use channelbridge_audio::routing::Mode;
+    use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::{
         AudioBuffer, AudioBufferList, AudioTimestamp, StreamFormat, fourcc,
     };
-    use channelbridge_macos::{
-        buffers::CaptureLayout, capture::CaptureCallback, output::OutputCallback,
-    };
+    use channelbridge_macos::buffers::CaptureLayout;
+    use channelbridge_macos::capture::CaptureCallback;
+    use channelbridge_macos::output::OutputCallback;
+    use std::alloc::GlobalAlloc;
+    use std::alloc::Layout;
+    use std::alloc::System;
     use std::sync::Arc;
-    use std::{
-        alloc::{GlobalAlloc, Layout, System},
-        sync::atomic::{AtomicBool, AtomicU64, Ordering},
-    };
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
 
     struct CheckedAllocator;
     static CHECKING: AtomicBool = AtomicBool::new(false);

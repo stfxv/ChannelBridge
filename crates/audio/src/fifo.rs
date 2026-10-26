@@ -2,10 +2,9 @@
 //! Endpoints are not Clone, and operations require exclusive access to their
 //! endpoint. No allocation, waiting, locks or retry loop occurs during transfer.
 use crate::StereoFrame;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 struct Slot {
     stereo: AtomicU64,

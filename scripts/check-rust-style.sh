@@ -11,9 +11,9 @@ esac
 if [[ $# -eq 0 ]]; then
     while IFS= read -r path; do
         set -- "$@" "$root/$path"
-    done < <(git -C "$root" ls-files 'crates/*.rs' 'crates/**/*.rs')
+    done < <(git -C "$root" ls-files '*.rs')
 fi
-cargo run --locked --manifest-path "$root/tools/rust-style/Cargo.toml" -- "$mode" "$@"
+cargo run --quiet --locked --bin channelbridge-rust-style --manifest-path "$root/tools/rust-style/Cargo.toml" -- "$mode" "$@"
 if [[ "$mode" == check ]]; then
     cargo fmt --manifest-path "$root/Cargo.toml" --all -- --check
     cargo fmt --manifest-path "$root/tools/rust-style/Cargo.toml" -- --check

@@ -1,9 +1,18 @@
 //! Property descriptions are shared by HasProperty, size, getter and setter.
 //! Allocations here run on the HAL control path, not its I/O callbacks.
-use super::{host_boundary::*, state, system};
+use super::host_boundary::{
+    BAD_OBJECT, BAD_SIZE, DEVICE, ILLEGAL, INPUT, OUTPUT, PLUGIN, UNKNOWN_PROPERTY, UNSPECIFIED,
+    guard, valid,
+};
+use super::state;
+use super::system;
 use channelbridge_contract::{DEPLOYMENT, SUPPORTED_RATES};
-use channelbridge_hal_abi::{interface::*, *};
-use core::{ffi::c_void, ptr};
+use channelbridge_hal_abi::interface::CfRef;
+use channelbridge_hal_abi::{
+    DriverRef, ObjectId, PropertyAddress, RangedFormat, StreamFormat, ValueRange, fourcc,
+};
+use core::ffi::c_void;
+use core::ptr;
 use std::mem::size_of;
 
 const GLOBAL: u32 = fourcc(b"glob");

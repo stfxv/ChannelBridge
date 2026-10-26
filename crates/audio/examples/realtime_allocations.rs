@@ -1,9 +1,13 @@
 //! Test-only allocator instrumentation; not linked into either product binary.
-use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output_processor::OutputProcessor};
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use channelbridge_audio::StereoFrame;
+use channelbridge_audio::fifo::stereo_queue;
+use channelbridge_audio::output_processor::OutputProcessor;
+use std::alloc::GlobalAlloc;
+use std::alloc::Layout;
+use std::alloc::System;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 struct CheckedAllocator;
 static CHECKING: AtomicBool = AtomicBool::new(false);

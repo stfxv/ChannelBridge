@@ -3,10 +3,9 @@
 use crate::devices::{self, Error};
 use channelbridge_contract::TEST_DEVICE_UID;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, StreamFormat, fourcc};
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Report {

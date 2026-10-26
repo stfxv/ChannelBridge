@@ -1,6 +1,7 @@
 //! Bounded property reads on the control thread, outside audio callbacks.
 use channelbridge_hal_abi::{ObjectId, PropertyAddress, StreamFormat, fourcc};
-use std::{ffi::c_void, fmt};
+use std::ffi::c_void;
+use std::fmt;
 
 const GLOBAL: u32 = fourcc(b"glob");
 const MAX_PROPERTY_BYTES: u32 = 1_048_576;

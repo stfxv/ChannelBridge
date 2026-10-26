@@ -2,12 +2,17 @@
 #![allow(clippy::too_many_arguments)] // Apple's fixed C callback signatures.
 
 use super::{properties, state, system};
-use channelbridge_hal_abi::{interface::*, *};
-use core::{ffi::c_void, ptr};
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+use channelbridge_hal_abi::interface::{
+    CfRef, DRIVER_INTERFACE_UUID, DriverInterface, HostRef, IUNKNOWN_UUID, PLUGIN_TYPE_UUID,
 };
+use channelbridge_hal_abi::{ClientInfo, DriverRef, IoCycleInfo, ObjectId, UuidBytes, fourcc};
+use core::ffi::c_void;
+use core::ptr;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 
 pub(super) const PLUGIN: u32 = 1;
 pub(super) const DEVICE: u32 = 2;

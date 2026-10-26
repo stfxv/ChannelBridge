@@ -1,5 +1,7 @@
 //! Main-thread screen state and transactional control bindings.
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSPopUpButton, NSTextField, NSWindow, NSWindowStyleMask,
 };

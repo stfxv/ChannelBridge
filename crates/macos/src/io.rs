@@ -1,13 +1,15 @@
 //! Control-thread IOProc ownership and callback-context lifetime.
-use crate::{capture::CaptureCallback, output::OutputCallback};
+use crate::capture::CaptureCallback;
+use crate::output::OutputCallback;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, PropertyAddress, fourcc};
-use std::{
-    ffi::c_void,
-    marker::PhantomData,
-    panic::{AssertUnwindSafe, catch_unwind},
-    rc::Rc,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 pub type IoProc = unsafe extern "C" fn(
     ObjectId,
@@ -432,10 +434,9 @@ impl<T: Handler> Drop for Registration<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicI32, AtomicUsize},
-    };
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicI32;
+    use std::sync::atomic::AtomicUsize;
     static STOP_ERROR: AtomicI32 = AtomicI32::new(0);
     static DESTROY_ERROR: AtomicI32 = AtomicI32::new(0);
     static DESTROYS: AtomicUsize = AtomicUsize::new(0);

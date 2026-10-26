@@ -1,6 +1,10 @@
 //! Menu-bar item owns its menu; targets remain weak and main-thread only.
-use channelbridge_core::{CaptureState, worker::Snapshot};
-use objc2::{MainThreadMarker, rc::Retained, runtime::AnyObject, sel};
+use channelbridge_core::CaptureState;
+use channelbridge_core::worker::Snapshot;
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2::sel;
 use objc2_app_kit::{NSApplication, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
 use objc2_foundation::{NSString, ns_string};
 

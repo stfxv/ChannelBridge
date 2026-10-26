@@ -1,11 +1,11 @@
 //! Save dialog on the main thread; bounded report writing on a separate thread.
-use objc2::{MainThreadMarker, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSButton, NSModalResponseOK, NSSavePanel, NSTextField};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, ns_string};
-use std::{
-    cell::RefCell,
-    sync::mpsc::{self, Receiver},
-};
+use std::cell::RefCell;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
 
 pub(super) struct Export {
     pub button: Retained<NSButton>,

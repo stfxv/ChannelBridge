@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "std::sync::PoisonError::into_inner", reason = "Do not read poisoned synchronization state; stop and report failure." },
+    { path = "std::sync::PoisonError::get_ref", reason = "Do not inspect poisoned synchronization state." },
+    { path = "std::sync::PoisonError::get_mut", reason = "Do not modify poisoned synchronization state." },
+]

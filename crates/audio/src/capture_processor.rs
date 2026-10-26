@@ -1,13 +1,14 @@
 //! Capture-owned routing, dry input meters, clock observations and FIFO writes.
 //! The HAL adapter supplies validated float samples, not OS pointers.
-use crate::{
-    FramePosition, StereoFrame,
-    drift::{ClockEstimator, Observation},
-    fifo::Producer,
-    frame::finite,
-    meters::MeterWriter,
-    routing::{AtomicRouting, Mode},
-};
+use crate::FramePosition;
+use crate::StereoFrame;
+use crate::drift::ClockEstimator;
+use crate::drift::Observation;
+use crate::fifo::Producer;
+use crate::frame::finite;
+use crate::meters::MeterWriter;
+use crate::routing::AtomicRouting;
+use crate::routing::Mode;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
@@ -176,7 +177,9 @@ impl CaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{fifo::stereo_queue, meters::meter_bank, routing::Selection};
+    use crate::fifo::stereo_queue;
+    use crate::meters::meter_bank;
+    use crate::routing::Selection;
     #[test]
     fn preview_meters_remain_live_and_modes_keep_channels_coherent() {
         let selection = Selection::new(2, 3, Mode::Stereo, true)

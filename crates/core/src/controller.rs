@@ -229,7 +229,8 @@ impl<B: Backend> Controller<B> {
             }
             Command::Overview(value) => self.overview = value,
             Command::System(event) => {
-                use crate::{SystemEvent, view::ControlEventKind};
+                use crate::SystemEvent;
+                use crate::view::ControlEventKind;
                 match event {
                     SystemEvent::Sleep => {
                         if !self.suspended {
@@ -844,7 +845,8 @@ mod tests {
 
     #[test]
     fn stop_while_device_is_absent_survives_wake_and_restores_preview() {
-        use crate::{SystemEvent, view::ControlEventKind};
+        use crate::SystemEvent;
+        use crate::view::ControlEventKind;
         let mut worker = controller();
         worker
             .command(Command::PermissionChanged(true))

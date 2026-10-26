@@ -1,15 +1,17 @@
 //! Native virtual-output buffer adapter; no device registration or rate changes.
-use crate::{buffers::stereo_output, source_clock::SourceClock};
-use channelbridge_audio::{StereoFrame, output_processor::OutputProcessor, routing::AtomicRouting};
+use crate::buffers::stereo_output;
+use crate::source_clock::SourceClock;
+use channelbridge_audio::StereoFrame;
+use channelbridge_audio::output_processor::OutputProcessor;
+use channelbridge_audio::routing::AtomicRouting;
 use channelbridge_hal_abi::AudioBufferList;
-use std::{
-    cell::UnsafeCell,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::cell::UnsafeCell;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 struct State {
     processor: OutputProcessor,
@@ -232,10 +234,9 @@ impl OutputCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use channelbridge_audio::{
-        fifo::stereo_queue,
-        routing::{Mode, Selection},
-    };
+    use channelbridge_audio::fifo::stereo_queue;
+    use channelbridge_audio::routing::Mode;
+    use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::AudioBuffer;
     #[test]
     fn diagnostics_separate_buffering_from_active_audio_shortage() {

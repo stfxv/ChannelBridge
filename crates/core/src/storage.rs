@@ -1,11 +1,14 @@
 //! Settings are committed before changing a live audio route.
 use crate::Config;
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

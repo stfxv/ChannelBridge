@@ -15,3 +15,6 @@ crate-type = ["rlib", "cdylib"]
 channelbridge-audio = { path = "../audio" }
 channelbridge-contract = { path = "../contract" }
 channelbridge-hal-abi = { path = "../hal-abi" }
+
+[lints]
+workspace = true

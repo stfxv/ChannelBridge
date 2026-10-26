@@ -1,6 +1,12 @@
 //! Workspace notifications signal the worker; no UI or HAL calls in selectors.
-use channelbridge_core::{SystemEvent, worker::SystemEvents};
-use objc2::{AnyThread, DefinedClass, define_class, msg_send, rc::Retained, sel};
+use channelbridge_core::SystemEvent;
+use channelbridge_core::worker::SystemEvents;
+use objc2::AnyThread;
+use objc2::DefinedClass;
+use objc2::define_class;
+use objc2::msg_send;
+use objc2::rc::Retained;
+use objc2::sel;
 use objc2_app_kit::{
     NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceScreensDidWakeNotification,
     NSWorkspaceWillSleepNotification,

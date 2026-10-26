@@ -1,14 +1,16 @@
 //! Native control backend for the selected deployment virtual microphone.
-use crate::{
-    devices,
-    rate_follow::{RateFollow, Status},
-    session::TestSession,
-    stream_health::StreamHealth,
-};
+use crate::devices;
+use crate::rate_follow::RateFollow;
+use crate::rate_follow::Status;
+use crate::session::TestSession;
+use crate::stream_health::StreamHealth;
 use channelbridge_audio::routing::{Mode, Selection};
-use channelbridge_core::{Config, controller::Backend, storage};
+use channelbridge_core::Config;
+use channelbridge_core::controller::Backend;
+use channelbridge_core::storage;
 use channelbridge_hal_abi::{StreamFormat, fourcc};
-use std::{path::PathBuf, time::Instant};
+use std::path::PathBuf;
+use std::time::Instant;
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioGetHostClockFrequency() -> f64;

@@ -1,10 +1,9 @@
 //! Read-only native worker smoke test. No permission grant, source or audio start.
 #[cfg(target_os = "macos")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::{
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use std::time::Instant;
     let worker = channelbridge_macos::native_backend::spawn_worker(
         PathBuf::from("work/read-only-settings.json"),
         channelbridge_core::Config::default(),

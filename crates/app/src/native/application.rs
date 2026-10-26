@@ -1,9 +1,15 @@
 //! Main-thread application lifecycle, selectors and timer ownership.
-use super::{power_observer, screen::Screen, smoke};
-use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::ProtocolObject, sel,
-};
+use super::power_observer;
+use super::screen::Screen;
+use super::smoke;
+use objc2::DefinedClass;
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::define_class;
+use objc2::msg_send;
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
+use objc2::sel;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSButton, NSMenu, NSMenuDelegate, NSPopUpButton,

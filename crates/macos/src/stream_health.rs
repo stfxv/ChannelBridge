@@ -1,6 +1,7 @@
 //! Control-thread callback progress watchdog, independent of device queries.
 //! The caller supplies time so stalled callbacks can be tested without HAL I/O.
-use crate::{capture::CaptureStats, output::OutputStats};
+use crate::capture::CaptureStats;
+use crate::output::OutputStats;
 use std::time::{Duration, Instant};
 
 const STALL_TIMEOUT: Duration = Duration::from_secs(2);
@@ -100,14 +101,16 @@ impl StreamHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{buffers::CaptureLayout, capture::CaptureCallback, output::OutputCallback};
-    use channelbridge_audio::{
-        capture_processor::CaptureProcessor,
-        fifo::stereo_queue,
-        meters::meter_bank,
-        output_processor::OutputProcessor,
-        routing::{AtomicRouting, Mode, Selection},
-    };
+    use crate::buffers::CaptureLayout;
+    use crate::capture::CaptureCallback;
+    use crate::output::OutputCallback;
+    use channelbridge_audio::capture_processor::CaptureProcessor;
+    use channelbridge_audio::fifo::stereo_queue;
+    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::output_processor::OutputProcessor;
+    use channelbridge_audio::routing::AtomicRouting;
+    use channelbridge_audio::routing::Mode;
+    use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::{
         AudioBuffer, AudioBufferList, AudioTimestamp, StreamFormat, fourcc,
     };

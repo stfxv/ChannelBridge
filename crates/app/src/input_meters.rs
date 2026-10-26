@@ -1,9 +1,10 @@
 //! Read-only input meters: dry input levels do not depend on sending or mute.
-use channelbridge_core::{
-    Config, Mode,
-    view::{AudioView, InputLevel},
-};
-use objc2::{MainThreadMarker, rc::Retained};
+use channelbridge_core::Config;
+use channelbridge_core::Mode;
+use channelbridge_core::view::AudioView;
+use channelbridge_core::view::InputLevel;
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 

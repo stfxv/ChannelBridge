@@ -1,11 +1,13 @@
 //! Real HAL rate transitions, restricted to the separately installed test UID.
 //! No physical input or default-device changes. Restore the initial test rate.
 use channelbridge_contract::TEST_DEVICE_UID;
-use channelbridge_macos::{
-    devices, loopback,
-    rate_follow::{RateFollow, Status},
-};
-use std::{error::Error, thread, time::Duration};
+use channelbridge_macos::devices;
+use channelbridge_macos::loopback;
+use channelbridge_macos::rate_follow::RateFollow;
+use channelbridge_macos::rate_follow::Status;
+use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 fn change(rate: u32) -> Result<(), Box<dyn Error>> {
     let pending = RateFollow::request_test(rate)?;

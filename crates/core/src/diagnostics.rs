@@ -1,12 +1,15 @@
 //! Explicit diagnostic export on a non-audio thread. No automatic recording.
 use crate::worker::Snapshot;
 use serde::Serialize;
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -144,7 +147,9 @@ pub fn save_new_with_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, controller::Backend, worker::Worker};
+    use crate::Config;
+    use crate::controller::Backend;
+    use crate::worker::Worker;
     struct Empty;
     impl Backend for Empty {
         type Pending = ();

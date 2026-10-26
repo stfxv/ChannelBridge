@@ -1,6 +1,8 @@
 //! A bounded, scrollable dry-input meter list, updated only while visible.
 use channelbridge_core::worker::Snapshot;
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSBackingStoreType, NSScrollView, NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };

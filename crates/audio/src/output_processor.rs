@@ -1,5 +1,8 @@
 //! Virtual-output callback's owned DSP state. No OS APIs or shared mutable state.
-use crate::{StereoFrame, drift::DriftController, fifo::Consumer, resample::StreamingResampler};
+use crate::StereoFrame;
+use crate::drift::DriftController;
+use crate::fifo::Consumer;
+use crate::resample::StreamingResampler;
 
 const MAX_BLOCK: usize = 4096;
 const FADE_FRAMES: usize = 64;

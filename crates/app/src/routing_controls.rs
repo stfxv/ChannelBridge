@@ -1,6 +1,8 @@
 //! Main-thread routing controls preserve saved channels across hot-plugging.
 use channelbridge_core::{Config, Mode};
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSPopUpButton, NSTextField, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;

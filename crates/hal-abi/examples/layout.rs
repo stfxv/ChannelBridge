@@ -1,5 +1,8 @@
 use channelbridge_hal_abi::interface::{DriverInterface, HostInterface};
-use channelbridge_hal_abi::*;
+use channelbridge_hal_abi::{
+    AudioBuffer, AudioBufferList, AudioTimestamp, ClientInfo, IoCycleInfo, PropertyAddress,
+    RangedFormat, StreamFormat,
+};
 use std::mem::offset_of;
 fn main() {
     println!("AudioTimestamp {}", size_of::<AudioTimestamp>());

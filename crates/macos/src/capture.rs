@@ -1,21 +1,18 @@
 //! Native input callback adapter. Registration and device lifecycle are separate.
-use crate::{
-    buffers::{CaptureLayout, InputBuffers},
-    source_clock::SourceClock,
-};
-use channelbridge_audio::{
-    FramePosition,
-    capture_processor::{CaptureProcessor, CaptureTimestamp},
-};
+use crate::buffers::CaptureLayout;
+use crate::buffers::InputBuffers;
+use crate::source_clock::SourceClock;
+use channelbridge_audio::FramePosition;
+use channelbridge_audio::capture_processor::CaptureProcessor;
+use channelbridge_audio::capture_processor::CaptureTimestamp;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp};
-use std::{
-    cell::UnsafeCell,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::cell::UnsafeCell;
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 /// Ownership is transferred here before IO starts. Control code may read only
 /// atomics; it cannot access the processor while callbacks can run.
@@ -203,12 +200,12 @@ impl CaptureCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use channelbridge_audio::{
-        StereoFrame,
-        fifo::stereo_queue,
-        meters::meter_bank,
-        routing::{AtomicRouting, Mode, Selection},
-    };
+    use channelbridge_audio::StereoFrame;
+    use channelbridge_audio::fifo::stereo_queue;
+    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::routing::AtomicRouting;
+    use channelbridge_audio::routing::Mode;
+    use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::{AudioBuffer, StreamFormat, fourcc};
     use std::sync::Arc;
     #[test]

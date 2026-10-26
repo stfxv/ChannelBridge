@@ -1,5 +1,6 @@
 //! Small Darwin/CoreFoundation boundary. No HAL client APIs.
-use channelbridge_hal_abi::{UuidBytes, interface::CfRef};
+use channelbridge_hal_abi::UuidBytes;
+use channelbridge_hal_abi::interface::CfRef;
 use core::ffi::{c_char, c_void};
 
 #[repr(C)]
