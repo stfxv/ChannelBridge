@@ -742,7 +742,11 @@ mod tests {
                 !before.finished,
                 "normal final publication precedes backend destruction"
             );
-            // A normal final publication remains valid even if backend Drop panics.
+            if panic_on_drop {
+                let after = worker.snapshot();
+                assert_eq!(after.state, CaptureState::Blocked);
+                assert_eq!(after.error.as_deref(), Some("control worker terminated unexpectedly"));
+            }
             assert_eq!(worker.join().is_err(), panic_on_drop);
         }
     }
