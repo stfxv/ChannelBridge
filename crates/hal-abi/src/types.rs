@@ -30,8 +30,13 @@ pub struct RangedFormat {
 
 pub type OsStatus = i32;
 pub type ObjectId = u32;
+/// Pointer to the interface-table pointer returned by the CFPlugIn factory.
+/// Dereferencing either level requires a live counted driver reference.
 pub type DriverRef = *mut *mut c_void;
 
+/// Borrowed native payload descriptor. This type neither owns nor retains data.
+/// Dereferencing `data` requires the callback's live byte extent and suitable
+/// sample alignment; writable access additionally requires exclusive ownership.
 #[repr(C)]
 pub struct AudioBuffer {
     pub channels: u32,
@@ -40,6 +45,9 @@ pub struct AudioBuffer {
 }
 
 /// C's variable-length list header. Additional buffers follow the first.
+/// `count` does not prove an allocation's extent. A raw pointer may address only
+/// the count field when empty, so read it before forming a Rust reference to the
+/// full one-buffer type. The native caller must supply all counted descriptors.
 #[repr(C)]
 pub struct AudioBufferList {
     pub count: u32,
@@ -98,6 +106,8 @@ pub struct ClientInfo {
     pub client_id: u32,
     pub process_id: i32,
     pub is_native_endian: u8,
+    /// Borrowed CFString supplied by HAL. Copying ClientInfo does not retain it;
+    /// use beyond the callback requires a separate CoreFoundation retain.
     pub bundle_id: *const c_void,
 }
 

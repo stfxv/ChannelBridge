@@ -26,6 +26,8 @@ impl Overview {
                 false,
             )
         };
+        // SAFETY: The retained window is live on the main thread; disabling release-on-
+        // close preserves Rust ownership.
         unsafe {
             window.setReleasedWhenClosed(false);
         }

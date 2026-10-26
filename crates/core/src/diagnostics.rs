@@ -20,9 +20,9 @@ pub struct ReportMetadata {
 }
 
 #[derive(Serialize)]
-struct Report<'a> {
+struct Report<'report> {
     schema_version: u32,
-    metadata: &'a ReportMetadata,
+    metadata: &'report ReportMetadata,
     state: crate::CaptureState,
     wanted_send: bool,
     finished: bool,
@@ -32,21 +32,21 @@ struct Report<'a> {
     muted: bool,
     auto_send_on_resume: bool,
     retained_io_contexts: u64,
-    session_counters: &'a Option<crate::view::AudioDiagnostics>,
-    driver: &'a Option<crate::view::DriverDiagnostics>,
+    session_counters: &'report Option<crate::view::AudioDiagnostics>,
+    driver: &'report Option<crate::view::DriverDiagnostics>,
     /// Active-session formats and dry levels; null without a session.
-    audio: &'a Option<crate::view::AudioView>,
+    audio: &'report Option<crate::view::AudioView>,
     /// Most recent device inventory, distinct from active-session evidence.
-    selected_input_inventory: Option<InputInventory<'a>>,
-    control_history: &'a [crate::view::ControlEvent],
-    error: &'a Option<String>,
-    command_error: &'a Option<String>,
+    selected_input_inventory: Option<InputInventory<'report>>,
+    control_history: &'report [crate::view::ControlEvent],
+    error: &'report Option<String>,
+    command_error: &'report Option<String>,
 }
 #[derive(Serialize)]
-struct InputInventory<'a> {
+struct InputInventory<'inventory> {
     nominal_rate: f64,
-    physical_inputs: &'a [crate::view::InputFormat],
-    format_error: &'a Option<String>,
+    physical_inputs: &'inventory [crate::view::InputFormat],
+    format_error: &'inventory Option<String>,
 }
 struct LimitedBuffer(Vec<u8>);
 impl Write for LimitedBuffer {

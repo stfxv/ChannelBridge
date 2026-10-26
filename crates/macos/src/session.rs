@@ -205,7 +205,7 @@ impl TestSession {
 }
 
 /// Preserve both directions' teardown outcomes instead of returning the first.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ShutdownError {
     pub output: Option<crate::io::IoError>,
     pub input: Option<crate::io::IoError>,

@@ -266,8 +266,8 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     reset_clock(r, Some(rate))
 }
 
-struct PendingChange<'a> {
-    pending: &'a AtomicU32,
+struct PendingChange<'pending> {
+    pending: &'pending AtomicU32,
     rate: u32,
 }
 impl Drop for PendingChange<'_> {

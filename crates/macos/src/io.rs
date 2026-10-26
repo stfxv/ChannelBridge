@@ -74,6 +74,7 @@ impl Handler for CaptureCallback {
         _output: *mut AudioBufferList,
         _output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards the same HAL input and timestamp borrows for this invocation.
         unsafe {
             CaptureCallback::process(self, input, now, input_time);
         }
@@ -88,6 +89,7 @@ impl Handler for OutputCallback {
         output: *mut AudioBufferList,
         _output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards the exclusive HAL output borrow for this invocation.
         unsafe {
             OutputCallback::process(self, output, None);
         }
@@ -100,7 +102,7 @@ struct Context<T> {
 }
 const CLOSED: usize = 1 << (usize::BITS - 1);
 const BAD_DEVICE: i32 = fourcc(b"!dev") as i32;
-struct Active<'a>(&'a AtomicUsize);
+struct Active<'invocation>(&'invocation AtomicUsize);
 impl Drop for Active<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Release);
@@ -132,7 +134,11 @@ unsafe extern "C" fn dispatch<T: Handler>(
         return 0;
     }
     let _active = Active(&context.admission);
+    // Defense in depth under panic=unwind. Failure permanently disables handler
+    // reuse, while Active still releases admission during unwinding.
     if !context.failed.load(Ordering::Acquire)
+        // SAFETY: HAL keeps all callback arguments live; admission keeps context owned
+        // until return.
         && catch_unwind(AssertUnwindSafe(|| unsafe {
             context
                 .handler
@@ -152,7 +158,7 @@ pub enum IoDisposition {
     /// is closed with no handler running, so a new independent session is safe.
     RemovedDevice,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct IoError {
     pub operation: &'static str,
     pub status: i32,
@@ -184,10 +190,7 @@ fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
     payload[0] = id as usize as u64;
     // Native-endian bytes avoid conflating the UInt32 count with the first flag.
     let bytes = (count as u32).to_ne_bytes();
-    // SAFETY: allocated words cover the full initialized header and flag array.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload.as_mut_ptr().cast::<u8>().add(8), 4);
-    }
+    payload[1] = u64::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0]);
     Some((payload, size as u32))
 }
 
@@ -212,6 +215,8 @@ impl<T: Handler> Registration<T> {
             failed: AtomicBool::new(false),
         });
         let mut id = None;
+        // SAFETY: context is a stable boxed allocation retained until deregistration; id
+        // is a writable output slot.
         let status = unsafe {
             (api.create)(
                 device,
@@ -316,6 +321,8 @@ impl<T: Handler> Registration<T> {
             .expect("live registration")
             .admission
             .store(0, Ordering::Release);
+        // SAFETY: The registered ID belongs to this device and its boxed callback
+        // context remains owned.
         let status = unsafe { (self.api.start)(self.device, self.id.expect("registered ID")) };
         if status != 0 {
             self.context
@@ -339,6 +346,8 @@ impl<T: Handler> Registration<T> {
         let context = self.context.as_ref().expect("registered context");
         context.admission.fetch_or(CLOSED, Ordering::AcqRel);
         let stop_status = if self.start_attempted {
+            // SAFETY: The ID is still registered and context remains owned through
+            // stop and deregistration.
             unsafe { (self.api.stop)(self.device, id) }
         } else {
             0
@@ -351,6 +360,8 @@ impl<T: Handler> Registration<T> {
                 disposition: IoDisposition::Fatal,
             });
         }
+        // SAFETY: The ID is still registered; context is retained until successful
+        // deregistration and no active callbacks.
         let status = unsafe { (self.api.destroy)(self.device, id) };
         if status != 0 {
             let inactive = context.admission.load(Ordering::Acquire) == CLOSED;
@@ -451,6 +462,7 @@ mod tests {
         _: *mut c_void,
         id: *mut Option<IoProc>,
     ) -> i32 {
+        // SAFETY: with_api supplies a writable Option<IoProc> slot for this mock registration call.
         unsafe {
             *id = Some(callback);
         }
@@ -497,6 +509,8 @@ mod tests {
             failed: AtomicBool::new(false),
         });
         let running = Arc::clone(&context);
+        // SAFETY: running retains the context through dispatch; BlockingHandler never
+        // dereferences the null audio arguments.
         let callback = std::thread::spawn(move || unsafe {
             dispatch::<BlockingHandler>(
                 42,
@@ -510,6 +524,8 @@ mod tests {
         });
         context.handler.entered.wait();
         assert_eq!(context.admission.fetch_or(CLOSED, Ordering::AcqRel), 1);
+        // SAFETY: context retains the allocation; closed admission prevents calling the
+        // handler with null audio arguments.
         unsafe {
             dispatch::<BlockingHandler>(
                 42,
@@ -536,6 +552,8 @@ mod tests {
             dispatch::<TestHandler> as *const () as usize as u64
         );
         let bytes =
+            // SAFETY: The initialized word allocation covers size bytes and remains
+            // borrowed throughout this inspection.
             unsafe { std::slice::from_raw_parts(payload.as_ptr().cast::<u8>(), size as usize) };
         assert_eq!(u32::from_ne_bytes(bytes[8..12].try_into().unwrap()), 3);
         assert!(bytes[12..].iter().all(|byte| *byte == 0));
@@ -599,6 +617,8 @@ mod tests {
         assert_eq!(error.disposition, IoDisposition::RemovedDevice);
         assert!(error.context_retained);
         // HAL can still call the retained pointer; its handler is closed forever.
+        // SAFETY: Failed teardown retained the boxed context; closed admission rejects
+        // all null audio arguments.
         unsafe {
             dispatch::<TestHandler>(
                 42,

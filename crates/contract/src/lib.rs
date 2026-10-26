@@ -88,7 +88,7 @@ pub struct DriverCounters {
     pub invalid_timestamps: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticError {
     Size(usize),
     Version(u32),

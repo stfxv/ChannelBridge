@@ -64,13 +64,13 @@ impl CaptureLayout {
 }
 
 #[derive(Clone, Copy)]
-struct FloatBuffer<'a> {
+struct FloatBuffer<'buffer> {
     channels: usize,
-    samples: &'a [f32],
+    samples: &'buffer [f32],
     first_channel: usize,
 }
-pub struct InputBuffers<'a> {
-    buffers: [Option<FloatBuffer<'a>>; 512],
+pub struct InputBuffers<'buffer> {
+    buffers: [Option<FloatBuffer<'buffer>>; 512],
     count: usize,
     frames: usize,
     channels: usize,
@@ -102,14 +102,16 @@ unsafe fn descriptor(pointer: *const AudioBufferList, index: usize) -> AudioBuff
     }
 }
 
-impl<'a> InputBuffers<'a> {
+impl<'buffer> InputBuffers<'buffer> {
     /// # Safety
     /// HAL supplies the complete descriptor list and readable native float32
-    /// storage matching layout. Storage stays immutable and alive for 'a.
+    /// storage matching layout. Storage stays immutable and alive for 'buffer.
     pub unsafe fn from_raw(
         pointer: *const AudioBufferList,
         layout: &CaptureLayout,
     ) -> Result<Self, Error> {
+        // SAFETY: The caller guarantees a live list header and descriptors for the
+        // returned buffer lifetime.
         let count = unsafe { buffer_count(pointer)? };
         if count != layout.channels.len() {
             return Err(Error::MalformedProperty);
@@ -122,6 +124,8 @@ impl<'a> InputBuffers<'a> {
         };
         let mut first_channel = 0;
         for index in 0..count {
+            // SAFETY: buffer_count bounded index; the caller guarantees that many
+            // readable descriptors.
             let buffer = unsafe { descriptor(pointer, index) };
             let channels = layout.channels[index];
             if buffer.channels as usize != channels
@@ -184,8 +188,10 @@ pub unsafe fn silence_outputs(pointer: *mut AudioBufferList) -> Result<(), Error
     if pointer.is_null() {
         return Ok(());
     }
+    // SAFETY: The caller guarantees a live list header and descriptors throughout this call.
     let count = unsafe { buffer_count(pointer)? };
     for index in 0..count {
+        // SAFETY: buffer_count bounded index; the caller guarantees that many readable descriptors.
         let buffer = unsafe { descriptor(pointer, index) };
         if buffer.byte_size as usize > 512 * 4096 * 8 {
             return Err(Error::MalformedProperty);
@@ -205,13 +211,16 @@ pub unsafe fn silence_outputs(pointer: *mut AudioBufferList) -> Result<(), Error
 
 /// # Safety
 /// HAL supplies the complete list and one unique writable interleaved stereo
-/// float32 payload, alive for 'a. This device format was checked before Start.
-pub unsafe fn stereo_output<'a>(
+/// float32 payload, alive for 'buffer. This device format was checked before Start.
+pub unsafe fn stereo_output<'buffer>(
     pointer: *mut AudioBufferList,
-) -> Result<&'a mut [[f32; 2]], Error> {
+) -> Result<&'buffer mut [[f32; 2]], Error> {
+    // SAFETY: The caller guarantees a live list header and exclusive payload storage for the
+    // returned borrow.
     if unsafe { buffer_count(pointer)? } != 1 {
         return Err(Error::MalformedProperty);
     }
+    // SAFETY: The single-descriptor count was checked; the caller keeps that descriptor readable.
     let buffer = unsafe { descriptor(pointer, 0) };
     if buffer.channels != 2 || buffer.byte_size % 8 != 0 || buffer.byte_size > 4096 * 8 {
         return Err(Error::MalformedProperty);
@@ -283,6 +292,8 @@ mod tests {
         list.buffers[1].byte_size = 4;
         // SAFETY: readable descriptors; inconsistent frame counts reject early.
         assert!(
+            // SAFETY: The repr(C) fixture owns both descriptors and all referenced
+            // sample arrays for this borrow.
             unsafe { InputBuffers::from_raw((&list as *const TwoBuffers).cast(), &layout) }
                 .is_err()
         );

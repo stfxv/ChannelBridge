@@ -34,6 +34,8 @@ pub fn status() -> Permission {
     let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
         return Permission::Unavailable;
     };
+    // SAFETY: audio is the framework-provided live media-type constant; this class method
+    // only reads authorization.
     translate(unsafe { AVCaptureDevice::authorizationStatusForMediaType(audio) })
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +72,7 @@ impl MicrophonePermission {
         {
             return Ok(Request::Pending);
         }
+        // SAFETY: AVMediaTypeAudio is an immutable framework constant borrowed for the request.
         let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
             self.pending.store(false, Ordering::Release);
             return Err("audio permission API is unavailable");

@@ -23,6 +23,7 @@ pub struct NativeBackend {
 }
 impl NativeBackend {
     pub fn try_new(settings: PathBuf) -> Result<Self, String> {
+        // SAFETY: AudioGetHostClockFrequency has no pointer or initialization preconditions.
         let frequency = unsafe { AudioGetHostClockFrequency() };
         if !frequency.is_finite()
             || frequency <= 0.0
@@ -239,6 +240,7 @@ impl Backend for NativeBackend {
         } else {
             vec![selected.left(), selected.right()]
         };
+        // SAFETY: AudioGetCurrentHostTime has no pointer or initialization preconditions.
         let now = unsafe { AudioGetCurrentHostTime() };
         let levels = indices
             .into_iter()

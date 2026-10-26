@@ -212,6 +212,7 @@ pub(super) unsafe extern "C" fn has_property(
 ) -> u8 {
     let mut found = false;
     guard(|| {
+        // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         found = unsafe { address(driver, pointer) }
             .and_then(|a| describe(object, a))
             .is_ok();
@@ -230,6 +231,7 @@ pub(super) unsafe extern "C" fn is_settable(
         if output.is_null() {
             return BAD_SIZE;
         }
+        // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         let a = match unsafe { address(driver, pointer) } {
             Ok(a) => a,
             Err(error) => return error,
@@ -237,6 +239,7 @@ pub(super) unsafe extern "C" fn is_settable(
         if let Err(error) = describe(object, a) {
             return error;
         }
+        // SAFETY: HAL grants a writable Boolean output slot for the duration of this callback.
         unsafe { output.write(u8::from(settable(object, a))) };
         0
     })
@@ -254,12 +257,14 @@ pub(super) unsafe extern "C" fn data_size(
         if output.is_null() {
             return BAD_SIZE;
         }
+        // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         let a = match unsafe { address(driver, pointer) } {
             Ok(a) => a,
             Err(error) => return error,
         };
         match describe(object, a) {
             Ok(value) => {
+                // SAFETY: HAL grants a writable UInt32 output slot for this callback.
                 unsafe { output.write(value.size()) };
                 0
             }
@@ -366,7 +371,9 @@ pub(super) unsafe extern "C" fn get_data(
         if output_size.is_null() {
             return BAD_SIZE;
         }
+        // SAFETY: HAL grants a writable UInt32 output-size slot for this callback.
         unsafe { output_size.write(0) };
+        // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         let a = match unsafe { address(driver, pointer) } {
             Ok(a) => a,
             Err(error) => return error,
@@ -406,12 +413,18 @@ pub(super) unsafe extern "C" fn get_data(
                 if qualifier_size as usize != size_of::<CfRef>() || qualifier.is_null() {
                     return BAD_SIZE;
                 }
+                // SAFETY: HAL keeps the qualifier allocation readable for
+                // qualifier_size bytes; the CFRef size was checked.
                 let uid = unsafe { qualifier.cast::<CfRef>().read_unaligned() };
+                // SAFETY: The UID qualifier is a borrowed CF object kept alive
+                // by HAL for this property callback.
                 let device = if unsafe { system::string_equals(uid, DEPLOYMENT.device_uid) } {
                     DEVICE
                 } else {
                     0
                 };
+                // SAFETY: HAL grants capacity writable bytes; size and non-null
+                // output were checked above.
                 unsafe { output.cast::<u32>().write_unaligned(device) };
             }
             other => {
@@ -420,10 +433,13 @@ pub(super) unsafe extern "C" fn get_data(
                     return UNSPECIFIED;
                 }
                 if !data.is_empty() {
+                    // SAFETY: HAL grants capacity writable bytes disjoint
+                    // from the newly allocated serialization buffer.
                     unsafe { ptr::copy_nonoverlapping(data.as_ptr(), output.cast(), data.len()) };
                 }
             }
         }
+        // SAFETY: HAL grants a writable UInt32 output-size slot for this callback.
         unsafe { output_size.write(size) };
         0
     })
@@ -440,6 +456,7 @@ pub(super) unsafe extern "C" fn set_data(
     input: *const c_void,
 ) -> i32 {
     guard(|| {
+        // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         let a = match unsafe { address(driver, pointer) } {
             Ok(a) => a,
             Err(error) => return error,
@@ -457,11 +474,14 @@ pub(super) unsafe extern "C" fn set_data(
             if size != 8 {
                 return BAD_SIZE;
             }
+            // SAFETY: HAL keeps input readable for size bytes; the f64 size was checked above.
             unsafe { input.cast::<f64>().read_unaligned() }
         } else {
             if size as usize != size_of::<StreamFormat>() {
                 return BAD_SIZE;
             }
+            // SAFETY: HAL keeps input readable for size bytes; the StreamFormat size
+            // was checked above.
             let value = unsafe { input.cast::<StreamFormat>().read_unaligned() };
             let canonical = format(state::rate());
             if value.format_id != canonical.format_id

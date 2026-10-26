@@ -138,23 +138,27 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
     assert!(lifecycle.sending.load(Ordering::Acquire));
 
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceWillSleepNotification });
     let asleep = wait("sleep must release the audio session", &|_| {
         lifecycle.closes.load(Ordering::Acquire) == 1
     });
     assert!(asleep.wanted_send);
     // Screen notifications alone must not undo system-sleep suspension.
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceScreensDidWakeNotification });
     // Leave several controller ticks available: sleep must suppress reopening.
     NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.35));
     assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
     assert!(!lifecycle.sending.load(Ordering::Acquire));
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake must reopen and restore sending", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 2 && snapshot.state == CaptureState::Sending
     });
     assert!(lifecycle.sending.load(Ordering::Acquire));
 
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceWillSleepNotification });
     wait("second sleep must release the new session", &|_| {
         lifecycle.closes.load(Ordering::Acquire) == 2
@@ -163,6 +167,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     wait("stop while asleep must update intent", &|snapshot| {
         !snapshot.wanted_send
     });
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake after stop must restore preview only", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 3 && snapshot.state == CaptureState::Previewing
@@ -174,6 +179,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     wait("sending before wake-only", &|snapshot| {
         snapshot.state == CaptureState::Sending
     });
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake-only must replace the stale session", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 4 && snapshot.state == CaptureState::Sending

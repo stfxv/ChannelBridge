@@ -30,7 +30,10 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[ivars = DelegateState]
     pub(super) struct AppDelegate;
+    // SAFETY: define_class inherits NSObject and preserves its object/protocol invariants.
     unsafe impl NSObjectProtocol for AppDelegate {}
+    // SAFETY: selectors and argument types match NSMenuDelegate; MainThreadOnly confines
+    // ivar access.
     unsafe impl NSMenuDelegate for AppDelegate {
         #[unsafe(method(menuWillOpen:))]
         fn menu_will_open(&self, _menu: &NSMenu) {
@@ -41,6 +44,8 @@ define_class!(
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.menu_open.set(false); }
         }
     }
+    // SAFETY: selectors and return types match NSApplicationDelegate; callbacks run on the
+    // main thread.
     unsafe impl NSApplicationDelegate for AppDelegate {
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn close_last_window(&self, _application: &NSApplication) -> bool { false }
@@ -305,6 +310,7 @@ pub fn run() {
             true,
         )
     };
+    // SAFETY: NSRunLoopCommonModes is an immutable framework-owned string constant.
     let mode = unsafe { NSRunLoopCommonModes };
     // SAFETY: MainThreadMarker above proves this is the timer owning run loop.
     unsafe {

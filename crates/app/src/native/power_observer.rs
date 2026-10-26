@@ -15,6 +15,7 @@ define_class!(
     #[unsafe(super(NSObject))]
     #[ivars = State]
     pub(super) struct PowerObserver;
+    // SAFETY: define_class inherits NSObject and preserves its object/protocol invariants.
     unsafe impl NSObjectProtocol for PowerObserver {}
     impl PowerObserver {
         #[unsafe(method(systemWillSleep:))]

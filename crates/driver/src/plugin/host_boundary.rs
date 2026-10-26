@@ -28,6 +28,8 @@ pub(super) fn guard(body: impl FnOnce() -> i32) -> i32 {
     if FAILED.load(Ordering::Acquire) {
         return UNSPECIFIED;
     }
+    // Defense in depth under panic=unwind. Normal failures return statuses;
+    // FAILED prevents later callbacks from reusing partially mutated state.
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(status) => status,
         Err(_) => {
@@ -101,6 +103,8 @@ pub unsafe extern "C" fn ChannelBridge_Create(
         return ptr::null_mut();
     }
     let status = guard(|| {
+        // SAFETY: The factory uses the static driver identity; add_ref only updates the
+        // atomic count.
         unsafe { add_ref(driver_ref().cast()) };
         0
     });
@@ -127,6 +131,7 @@ unsafe extern "C" fn query_interface(
     if uuid.bytes != DRIVER_INTERFACE_UUID.bytes && uuid.bytes != IUNKNOWN_UUID.bytes {
         return 0x80004002_u32 as i32;
     }
+    // SAFETY: Identity was validated; IUnknown grants a writable pointer slot for this call.
     unsafe {
         add_ref(driver);
         output.write(driver)
@@ -178,6 +183,7 @@ unsafe extern "C" fn create_device(
             return BAD_OBJECT;
         }
         if !output.is_null() {
+            // SAFETY: HAL provides a writable ObjectId slot when output is non-null.
             unsafe { output.write(0) };
         }
         UNSUPPORTED
@@ -216,6 +222,7 @@ unsafe extern "C" fn remove_device_client(
         if !valid(driver) || device != DEVICE || info.is_null() {
             return BAD_OBJECT;
         }
+        // SAFETY: HAL keeps the ClientInfo descriptor readable throughout this callback.
         state::remove_client(unsafe { info.read_unaligned() }.client_id)
     })
 }
@@ -310,6 +317,7 @@ unsafe extern "C" fn will_do_io(
         if will.is_null() || in_place.is_null() {
             return BAD_SIZE;
         }
+        // SAFETY: HAL grants distinct writable Boolean output slots for this callback.
         unsafe {
             will.write(u8::from(
                 operation == fourcc(b"read") || operation == fourcc(b"rite"),
@@ -370,6 +378,8 @@ unsafe extern "C" fn do_io(
         // and cycle is a valid IOCycleInfo for the duration of this callback.
         let cycle = unsafe { cycle.read_unaligned() };
         let buffer =
+            // SAFETY: HAL grants exclusive, aligned PCM storage for frames stereo
+            // samples during this callback.
             unsafe { core::slice::from_raw_parts_mut(main.cast::<f32>(), frames as usize * 2) };
         let mut scratch = [channelbridge_audio::StereoFrame::SILENCE; 4096];
         let scratch = &mut scratch[..frames as usize];

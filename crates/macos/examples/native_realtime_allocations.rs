@@ -137,6 +137,8 @@ mod native {
                     capture.process(&input, &time, &time);
                 }
             }
+            // SAFETY: destination describes the live, exclusively writable stereo
+            // array for this call.
             unsafe {
                 output.process(&mut destination, None);
             }

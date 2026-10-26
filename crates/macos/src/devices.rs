@@ -5,7 +5,7 @@ use std::{ffi::c_void, fmt};
 const GLOBAL: u32 = fourcc(b"glob");
 const MAX_PROPERTY_BYTES: u32 = 1_048_576;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Error {
     Hal(i32),
     MalformedProperty,
@@ -279,6 +279,7 @@ pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Ve
     if unsafe { CFGetTypeID(owned.0) != CFDataGetTypeID() } {
         return Err(Error::MalformedProperty);
     }
+    // SAFETY: The type check established CFData; owned retains it throughout this function.
     let length = unsafe { CFDataGetLength(owned.0) };
     if length < 0 || length as usize > maximum {
         return Err(Error::PropertyTooLarge);
@@ -286,6 +287,7 @@ pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Ve
     if length == 0 {
         return Ok(Vec::new());
     }
+    // SAFETY: owned retains the CFData, so its immutable bytes remain live until they are copied.
     let source = unsafe { CFDataGetBytePtr(owned.0) };
     if source.is_null() {
         return Err(Error::MalformedProperty);

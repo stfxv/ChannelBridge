@@ -53,7 +53,7 @@ pub struct CaptureStats {
     pub source_speed: Option<f64>,
     pub failed: bool,
 }
-struct Gate<'a>(&'a AtomicBool);
+struct Gate<'gate>(&'gate AtomicBool);
 impl Drop for Gate<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
@@ -117,6 +117,8 @@ impl CaptureCallback {
             return;
         }
         let _gate = Gate(&self.busy);
+        // Defense in depth under panic=unwind. A panic permanently disables
+        // processor reuse; the gate remains valid and releases during unwinding.
         let result = catch_unwind(AssertUnwindSafe(|| {
             if now.is_null() {
                 return false;
@@ -126,12 +128,15 @@ impl CaptureCallback {
             if now.flags & 2 == 0 {
                 return false;
             }
+            // SAFETY: The process caller grants live immutable input payloads
+            // matching the prepared layout for this invocation.
             let Ok(buffers) = (unsafe { InputBuffers::from_raw(input, &self.layout) }) else {
                 return false;
             };
             let timestamp = if input_time.is_null() {
                 None
             } else {
+                // SAFETY: The caller keeps the non-null timestamp readable for this invocation.
                 let time = unsafe { input_time.read_unaligned() };
                 if time.flags & 3 != 3 {
                     None
@@ -258,6 +263,8 @@ mod tests {
             .generation;
         stamp.sample_time = 64.75;
         stamp.host_time = 64;
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe {
             callback.process(&input, &now, &stamp);
         }
@@ -273,6 +280,8 @@ mod tests {
         );
         // A nested/concurrent invocation returns immediately without touching DSP.
         callback.busy.store(true, Ordering::Release);
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe {
             callback.process(&input, &now, &stamp);
         }
@@ -282,6 +291,8 @@ mod tests {
         assert_eq!(callback.stats().accepted_frames, 128);
         assert_eq!(callback.stats().clock_generation, Some(generation));
         assert_eq!(callback.stats().source_speed, Some(1.0));
+        // SAFETY: The fixture owns input and stamp; a null now is explicitly accepted
+        // and rejected before dereference.
         unsafe {
             callback.process(&input, std::ptr::null(), &stamp);
         }
@@ -298,12 +309,15 @@ mod tests {
             .unwrap();
         stamp.sample_time = 128.0;
         stamp.host_time = 128;
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe { callback.process(&input, &now, &stamp) };
         assert_eq!(callback.stats().unavailable_channel, 1);
         assert_eq!(callback.stats().discontinuities, 0);
         routing.configure(selection, true, false).unwrap();
         // A missing input timestamp reaches DSP clock validation, unlike a
         // null callback host-time descriptor rejected by the native adapter.
+        // SAFETY: The fixture owns input and now; the API permits an absent input timestamp.
         unsafe { callback.process(&input, &now, std::ptr::null()) };
         assert_eq!(callback.stats().invalid_clock, 1);
         assert_eq!(callback.stats().discontinuities, 1);

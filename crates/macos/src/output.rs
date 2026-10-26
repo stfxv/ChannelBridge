@@ -40,7 +40,7 @@ pub struct OutputCallback {
 // SAFETY: State is Send and accessed only under the single-attempt exclusive
 // gate. Control code cannot obtain a reference to State; other fields are atomic.
 unsafe impl Sync for OutputCallback {}
-struct Gate<'a>(&'a AtomicBool);
+struct Gate<'gate>(&'gate AtomicBool);
 impl Drop for Gate<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
@@ -135,6 +135,8 @@ impl OutputCallback {
         self.callbacks.fetch_add(1, Ordering::Relaxed);
         // Validate and silence even when processing is rejected. The caller's
         // exclusive output-buffer ownership does not depend on the DSP gate.
+        // SAFETY: The process caller grants exclusive, live output storage for the
+        // duration of this invocation.
         let Ok(output) = (unsafe { stereo_output(output) }) else {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return;
@@ -150,6 +152,8 @@ impl OutputCallback {
             return;
         }
         let _gate = Gate(&self.busy);
+        // Defense in depth under panic=unwind. A panic permanently disables
+        // processor reuse; the gate remains valid and releases during unwinding.
         let result = catch_unwind(AssertUnwindSafe(|| {
             let route = self.routing.load();
             // SAFETY: this callback owns the state gate, including across unwind.
@@ -267,6 +271,8 @@ mod tests {
             2048
         );
         for _ in 0..6 {
+            // SAFETY: The fixture owns the complete stereo descriptor and
+            // exclusively borrows its samples for this call.
             unsafe { callback.process(&mut buffer, None) };
         }
         let stats = callback.stats();
@@ -316,6 +322,8 @@ mod tests {
         let fresh = [StereoFrame::new(-0.25, -0.125); 512];
         for _ in 0..32 {
             assert_eq!(producer.push_generation(&fresh, generation), 512);
+            // SAFETY: The fixture owns the complete stereo descriptor and
+            // exclusively borrows its samples for this call.
             unsafe {
                 callback.process(&mut buffer, None);
             }
@@ -324,11 +332,15 @@ mod tests {
         routing.configure(selection, true, false).unwrap();
         assert_eq!(callback.stats().peak, Some([0.0; 2]));
         producer.push_generation(&fresh, generation);
+        // SAFETY: The fixture owns the complete stereo descriptor and exclusively
+        // borrows its samples for this call.
         unsafe {
             callback.process(&mut buffer, None);
         }
         assert!((samples[511][0] + 0.25).abs() < 0.0001);
         routing.configure(selection, false, false).unwrap();
+        // SAFETY: The fixture owns the complete stereo descriptor and exclusively
+        // borrows its samples for this call.
         unsafe {
             callback.process(&mut buffer, None);
         }
@@ -339,11 +351,15 @@ mod tests {
             .unwrap()
             .generation;
         producer.push_generation(&old, restarted);
+        // SAFETY: The fixture owns the complete stereo descriptor and exclusively
+        // borrows its samples for this call.
         unsafe {
             callback.process(&mut buffer, None);
         }
         assert!((samples[511][0] - 0.5).abs() < 0.0001);
         callback.busy.store(true, Ordering::Release);
+        // SAFETY: The fixture owns the complete stereo descriptor and exclusively
+        // borrows its samples for this call.
         unsafe {
             callback.process(&mut buffer, None);
         }

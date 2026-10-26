@@ -66,6 +66,7 @@ impl crate::io::Handler for Context {
         output: *mut AudioBufferList,
         output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards HAL callback borrows without retaining them after this call.
         if !unsafe { process(self, input, input_time, output, output_time) } {
             self.invalid.fetch_add(1, Ordering::Relaxed);
         }
@@ -84,7 +85,9 @@ unsafe fn process(
     }
     // An empty C buffer-list header is smaller than the Rust one-buffer type.
     // Check the count before constructing a reference to the complete structure.
+    // SAFETY: HAL supplies live buffer-list headers for this invocation; this reads only the count.
     if unsafe { input.cast::<u32>().read_unaligned() } != 1
+        // SAFETY: HAL supplies a live output header for this invocation; this reads only the count.
         || unsafe { output.cast::<u32>().read_unaligned() } != 1
     {
         return false;
@@ -135,6 +138,8 @@ unsafe fn process(
     let incoming = unsafe {
         std::slice::from_raw_parts(input.data.cast::<f32>(), input.byte_size as usize / 4)
     };
+    // SAFETY: HAL grants exclusive output storage; the checked range is disjoint from
+    // incoming and has f32 alignment.
     let outgoing = unsafe {
         std::slice::from_raw_parts_mut(output.data.cast::<f32>(), output.byte_size as usize / 4)
     };
