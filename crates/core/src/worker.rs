@@ -36,12 +36,21 @@ pub struct Worker {
     quit: Arc<AtomicBool>,
     system_events: SystemEvents,
     snapshot: Arc<Mutex<Snapshot>>,
+    completed: Arc<AtomicBool>,
+    initial_config: Config,
     thread: Option<JoinHandle<()>>,
 }
 fn seal(commands: &Mutex<Option<SyncSender<Command>>>, quit: &AtomicBool) -> bool {
-    let mut admission = commands.lock().unwrap_or_else(|error| error.into_inner());
-    quit.store(true, Ordering::Release);
-    admission.take().is_some()
+    match commands.lock() {
+        Ok(mut admission) => {
+            quit.store(true, Ordering::Release);
+            admission.take().is_some()
+        }
+        Err(_) => {
+            quit.store(true, Ordering::Release);
+            false
+        }
+    }
 }
 /// Notification callbacks only publish atomics; they never access UI or HAL.
 /// The latest sleep/wake state wins if notifications arrive before a worker turn.
@@ -83,23 +92,11 @@ impl SystemEvents {
 /// Declared before the backend so it publishes only after stack unwinding has
 /// dropped the backend/session owners. Preserve join's panic result as well.
 struct WorkerExit {
-    snapshot: Arc<Mutex<Snapshot>>,
+    completed: Arc<AtomicBool>,
 }
 impl Drop for WorkerExit {
     fn drop(&mut self) {
-        let mut snapshot = self
-            .snapshot
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if !snapshot.finished {
-            snapshot.finished = true;
-            snapshot.state = CaptureState::Blocked;
-            snapshot.wanted_send = false;
-            snapshot.audio = None;
-            snapshot.diagnostics = None;
-            snapshot.driver_diagnostics = None;
-            snapshot.error = Some("control worker terminated unexpectedly".into());
-        }
+        self.completed.store(true, Ordering::Release);
     }
 }
 fn apply_command<B: Backend>(
@@ -218,6 +215,9 @@ impl Worker {
         let commands = Arc::new(Mutex::new(Some(sender)));
         let intent = Arc::new(AtomicU8::new(0));
         let quit = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let completion = Arc::clone(&completed);
+        let initial_config = config.clone();
         let system_events = SystemEvents {
             pending: Arc::new(AtomicU8::new(0)),
             quit: Arc::clone(&quit),
@@ -247,17 +247,18 @@ impl Worker {
             .name("channelbridge-control".into())
             .spawn(move || {
                 let _exit = WorkerExit {
-                    snapshot: Arc::clone(&shared),
+                    completed: completion,
                 };
-                let publish = |value: Snapshot| {
-                    *shared.lock().unwrap_or_else(|error| error.into_inner()) = value;
+                let publish = |value: Snapshot| match shared.lock() {
+                    Ok(mut snapshot) => *snapshot = value,
+                    Err(_) => exiting.store(true, Ordering::Release),
                 };
                 let backend = match factory() {
                     Ok(backend) => backend,
                     Err(error) => {
                         seal(&admission, &exiting);
                         let configuration_attempt = receiver
-                            .iter()
+                            .try_iter()
                             .filter(|command| matches!(command, Command::Configure(_)))
                             .count() as u64;
                         publish(Snapshot {
@@ -455,9 +456,10 @@ impl Worker {
                     });
                 }
                 seal(&admission, &exiting);
+                // Sealing waits for accepted sends, even if poison retains the sender.
                 let shutdown_error = finish_shutdown(
                     &mut controller,
-                    held_command.into_iter().chain(receiver.iter()),
+                    held_command.into_iter().chain(receiver.try_iter()),
                     &mut command_error,
                     &mut configuration_attempt,
                 );
@@ -484,6 +486,8 @@ impl Worker {
             quit,
             system_events,
             snapshot,
+            completed,
+            initial_config,
             thread: Some(thread),
         })
     }
@@ -498,10 +502,16 @@ impl Worker {
                 Err("control worker has stopped".into())
             };
         }
-        let admission = self
-            .commands
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let admission = match self.commands.lock() {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.quit.store(true, Ordering::Release);
+                return Err("control worker command admission is unavailable".into());
+            }
+        };
+        if self.quit.load(Ordering::Acquire) {
+            return Err("control worker has stopped".into());
+        }
         let sender = admission.as_ref().ok_or("control worker has stopped")?;
         match command {
             Command::System(event) => {
@@ -526,10 +536,44 @@ impl Worker {
         self.system_events.clone()
     }
     pub fn snapshot(&self) -> Snapshot {
-        self.snapshot
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        let completed = self.completed.load(Ordering::Acquire);
+        let mut value = match self.snapshot.lock() {
+            Ok(snapshot) => {
+                let mut value = snapshot.clone();
+                // Stored finished marks normal final publication, not owner destruction.
+                if completed && !value.finished {
+                    value.state = CaptureState::Blocked;
+                    value.wanted_send = false;
+                    value.audio = None;
+                    value.diagnostics = None;
+                    value.retained_io_contexts = 0;
+                    value.driver_diagnostics = None;
+                    value.error = Some("control worker terminated unexpectedly".into());
+                }
+                value
+            }
+            Err(_) => {
+                self.quit.store(true, Ordering::Release);
+                Snapshot {
+                    state: CaptureState::Blocked,
+                    config: self.initial_config.clone(),
+                    wanted_send: false,
+                    error: Some("control worker snapshot is unavailable".into()),
+                    command_error: None,
+                    configuration_attempt: 0,
+                    finished: false,
+                    audio: None,
+                    diagnostics: None,
+                    retained_io_contexts: 0,
+                    driver_diagnostics: None,
+                    control_history: Arc::from([]),
+                    devices: Arc::from([]),
+                    device_error: None,
+                }
+            }
+        };
+        value.finished = completed;
+        value
     }
     /// Signal without blocking AppKit. Poll snapshot.finished before joining.
     pub fn request_shutdown(&self) {
@@ -613,8 +657,12 @@ mod tests {
     }
     impl Drop for ExitBackend {
         fn drop(&mut self) {
-            self.entered.send(()).expect("test observes backend destruction");
-            self.release.recv().expect("test releases backend destruction");
+            self.entered
+                .send(())
+                .expect("test observes backend destruction");
+            self.release
+                .recv()
+                .expect("test releases backend destruction");
             assert!(!self.panic_on_drop, "fixture backend drop panic");
         }
     }
@@ -623,45 +671,77 @@ mod tests {
         type Session = ();
         fn save(&mut self, config: &Config) -> Result<(), String> {
             assert!(!self.panic_on_save, "fixture save panic");
-            self.saves.lock().expect("save log remains healthy").push(config.device_uid.clone());
+            self.saves
+                .lock()
+                .expect("save log remains healthy")
+                .push(config.device_uid.clone());
             Ok(())
         }
-        fn negotiate(&mut self, _: &Config) -> Result<(), String> { Ok(()) }
-        fn ready(&mut self, _: &()) -> Result<bool, String> { Ok(true) }
-        fn open(&mut self, _: &Config) -> Result<(), String> { Ok(()) }
-        fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> { Ok(true) }
-        fn route(&mut self, _: &(), _: &Config, _: bool, _: bool) -> Result<(), String> { Ok(()) }
-        fn close(&mut self, _: ()) -> Result<(), String> { Ok(()) }
+        fn negotiate(&mut self, _: &Config) -> Result<(), String> {
+            Ok(())
+        }
+        fn ready(&mut self, _: &()) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn open(&mut self, _: &Config) -> Result<(), String> {
+            Ok(())
+        }
+        fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn route(&mut self, _: &(), _: &Config, _: bool, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn close(&mut self, _: ()) -> Result<(), String> {
+            Ok(())
+        }
     }
     fn poison<T>(mutex: &Mutex<T>, corrupt: impl FnOnce(&mut T)) {
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut guard = mutex.lock().expect("fixture mutex starts healthy");
-            corrupt(&mut guard);
-            panic!("fixture poison");
-        })).is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut guard = mutex.lock().expect("fixture mutex starts healthy");
+                corrupt(&mut guard);
+                panic!("fixture poison");
+            }))
+            .is_err()
+        );
     }
     fn wait_finished(worker: &Worker) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !worker.snapshot().finished {
-            assert!(Instant::now() < deadline, "worker teardown did not complete");
+            assert!(
+                Instant::now() < deadline,
+                "worker teardown did not complete"
+            );
             thread::sleep(Duration::from_millis(1));
         }
     }
     #[test]
-    fn normal_completion_waits_for_backend_drop_and_drop_panic_is_unexpected() {
+    fn normal_completion_waits_for_backend_drop_including_drop_panic() {
         for panic_on_drop in [false, true] {
             let (entered, observed) = mpsc::channel();
             let (release, gate) = mpsc::channel();
-            let worker = Worker::spawn(Config::default(), move || Ok(ExitBackend {
-                entered, release: gate, saves: Arc::new(Mutex::new(Vec::new())),
-                panic_on_save: false, panic_on_drop,
-            })).expect("worker starts");
+            let worker = Worker::spawn(Config::default(), move || {
+                Ok(ExitBackend {
+                    entered,
+                    release: gate,
+                    saves: Arc::new(Mutex::new(Vec::new())),
+                    panic_on_save: false,
+                    panic_on_drop,
+                })
+            })
+            .expect("worker starts");
             worker.request_shutdown();
-            observed.recv_timeout(Duration::from_secs(2)).expect("backend drop starts");
+            observed
+                .recv_timeout(Duration::from_secs(2))
+                .expect("backend drop starts");
             let before = worker.snapshot();
             release.send(()).expect("backend drop is waiting");
             wait_finished(&worker);
-            assert!(!before.finished, "normal final publication precedes backend destruction");
+            assert!(
+                !before.finished,
+                "normal final publication precedes backend destruction"
+            );
             // A normal final publication remains valid even if backend Drop panics.
             assert_eq!(worker.join().is_err(), panic_on_drop);
         }
@@ -673,15 +753,29 @@ mod tests {
             let (factory_release, factory_gate) = mpsc::channel();
             let (entered, observed) = mpsc::channel();
             let (release, gate) = mpsc::channel();
-            let original = Config { device_uid: "original".into(), ..Config::default() };
+            let original = Config {
+                device_uid: "original".into(),
+                ..Config::default()
+            };
             let worker = Worker::spawn(original.clone(), move || {
                 factory_entered.send(()).expect("factory barrier observed");
                 factory_gate.recv().expect("factory released");
-                Ok(ExitBackend { entered, release: gate, saves: Arc::new(Mutex::new(Vec::new())), panic_on_save, panic_on_drop: false })
-            }).expect("worker starts");
-            factory_observed.recv_timeout(Duration::from_secs(2)).expect("factory waits");
+                Ok(ExitBackend {
+                    entered,
+                    release: gate,
+                    saves: Arc::new(Mutex::new(Vec::new())),
+                    panic_on_save,
+                    panic_on_drop: false,
+                })
+            })
+            .expect("worker starts");
+            factory_observed
+                .recv_timeout(Duration::from_secs(2))
+                .expect("factory waits");
             if panic_on_save {
-                worker.send(Command::Configure(original.clone())).expect("configure accepted before poison");
+                worker
+                    .send(Command::Configure(original.clone()))
+                    .expect("configure accepted before poison");
             }
             poison(&worker.snapshot, |value| {
                 value.config.device_uid = "corrupt".into();
@@ -691,8 +785,12 @@ mod tests {
             });
             // In the panic case, let the queued command unwind before observing poison.
             factory_release.send(()).expect("factory waits for release");
-            if !panic_on_save { let _ = worker.snapshot(); }
-            observed.recv_timeout(Duration::from_secs(2)).expect("backend teardown starts");
+            if !panic_on_save {
+                let _ = worker.snapshot();
+            }
+            observed
+                .recv_timeout(Duration::from_secs(2))
+                .expect("backend teardown starts");
             let before = worker.snapshot();
             release.send(()).expect("backend teardown is gated");
             wait_finished(&worker);
@@ -700,11 +798,20 @@ mod tests {
             assert_eq!(before.state, CaptureState::Blocked);
             assert!(!before.finished);
             assert!(!before.wanted_send);
-            assert!(before.audio.is_none() && before.diagnostics.is_none() && before.driver_diagnostics.is_none());
+            assert!(
+                before.audio.is_none()
+                    && before.diagnostics.is_none()
+                    && before.driver_diagnostics.is_none()
+            );
             assert_eq!(before.configuration_attempt, 0);
             assert_eq!(before.retained_io_contexts, 0);
             assert!(before.control_history.is_empty() && before.devices.is_empty());
-            assert!(before.error.as_deref().is_some_and(|error| error.contains("unavailable")));
+            assert!(
+                before
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("unavailable"))
+            );
             assert_eq!(worker.join().is_err(), panic_on_save);
         }
     }
@@ -717,26 +824,53 @@ mod tests {
             let (entered, observed) = mpsc::channel();
             let (drop_release, drop_gate) = mpsc::channel();
             let worker = Worker::spawn(Config::default(), move || {
-                gate.recv().expect("factory released after admission poison");
-                if factory_fails { return Err("fixture factory error".into()); }
-                Ok(ExitBackend { entered, release: drop_gate, saves: backend_saves, panic_on_save: false, panic_on_drop: false })
-            }).expect("worker starts");
+                gate.recv()
+                    .expect("factory released after admission poison");
+                if factory_fails {
+                    return Err("fixture factory error".into());
+                }
+                Ok(ExitBackend {
+                    entered,
+                    release: drop_gate,
+                    saves: backend_saves,
+                    panic_on_save: false,
+                    panic_on_drop: false,
+                })
+            })
+            .expect("worker starts");
             for uid in ["first", "second"] {
-                worker.send(Command::Configure(Config { device_uid: uid.into(), ..Config::default() })).expect("queued configure accepted");
+                worker
+                    .send(Command::Configure(Config {
+                        device_uid: uid.into(),
+                        ..Config::default()
+                    }))
+                    .expect("queued configure accepted");
             }
             poison(&worker.commands, |_| {});
-            let rejected = worker.send(Command::Configure(Config { device_uid: "late".into(), ..Config::default() }));
+            let rejected = worker.send(Command::Configure(Config {
+                device_uid: "late".into(),
+                ..Config::default()
+            }));
             worker.request_shutdown();
             release.send(()).expect("factory waits");
             if !factory_fails {
-                observed.recv_timeout(Duration::from_secs(2)).expect("finite drain reaches backend drop");
+                observed
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("finite drain reaches backend drop");
                 drop_release.send(()).expect("backend drop waits");
             }
             wait_finished(&worker);
             assert!(rejected.is_err(), "poisoned admission must reject commands");
             assert_eq!(worker.snapshot().configuration_attempt, 2);
-            if !factory_fails { assert_eq!(*saves.lock().expect("save log remains healthy"), ["first", "second"]); }
-            worker.join().expect("poison refusal permits orderly return");
+            if !factory_fails {
+                assert_eq!(
+                    *saves.lock().expect("save log remains healthy"),
+                    ["first", "second"]
+                );
+            }
+            worker
+                .join()
+                .expect("poison refusal permits orderly return");
         }
     }
     #[test]
