@@ -287,6 +287,7 @@ impl std::fmt::Display for StartupError {
     }
 }
 impl std::error::Error for StartupError {}
+#[must_use]
 fn failed_start(
     cause: Box<dyn std::error::Error>,
     capture: Option<crate::io::Registration<CaptureCallback>>,
@@ -308,6 +309,7 @@ fn failed_start(
     }
     Box::new(startup_error(cause.to_string(), retained, outcomes))
 }
+#[must_use]
 fn startup_error(cause: String, retained: bool, outcomes: Vec<crate::io::IoError>) -> StartupError {
     StartupError {
         cause,

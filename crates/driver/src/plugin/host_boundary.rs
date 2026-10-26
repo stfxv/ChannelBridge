@@ -29,6 +29,7 @@ pub(super) const UNSPECIFIED: i32 = fourcc(b"what") as i32;
 static FAILED: AtomicBool = AtomicBool::new(false);
 static REFERENCES: AtomicU32 = AtomicU32::new(0);
 
+#[must_use]
 pub(super) fn guard(body: impl FnOnce() -> i32) -> i32 {
     if FAILED.load(Ordering::Acquire) {
         return UNSPECIFIED;
@@ -81,11 +82,13 @@ static INTERFACE: ImmutableInterface = ImmutableInterface(DriverInterface {
 });
 static INTERFACE_POINTER: ImmutablePointer = ImmutablePointer(&INTERFACE.0);
 
+#[must_use]
 fn driver_ref() -> DriverRef {
     ptr::addr_of!(INTERFACE_POINTER.0)
         .cast::<*mut c_void>()
         .cast_mut()
 }
+#[must_use]
 pub(super) fn valid(driver: DriverRef) -> bool {
     driver == driver_ref()
 }
@@ -399,7 +402,7 @@ unsafe extern "C" fn do_io(
                 buffer.fill(0.0);
                 return ILLEGAL;
             }
-            runtime.audio.read(cycle.input_time.sample_time, scratch);
+            let _ = runtime.audio.read(cycle.input_time.sample_time, scratch);
             let output_frames = buffer.chunks_exact_mut(2).zip(scratch.iter());
             for (pair, value) in output_frames {
                 pair[0] = value.left;
@@ -413,7 +416,7 @@ unsafe extern "C" fn do_io(
             for (pair, value) in input_frames {
                 *value = channelbridge_audio::StereoFrame::new(pair[0], pair[1]);
             }
-            runtime.audio.write(cycle.output_time.sample_time, scratch);
+            let _ = runtime.audio.write(cycle.output_time.sample_time, scratch);
         }
         0
     })

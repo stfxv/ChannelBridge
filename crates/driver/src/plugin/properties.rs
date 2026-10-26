@@ -38,6 +38,7 @@ enum Value {
     Identity,
 }
 impl Value {
+    #[must_use]
     fn size(&self) -> u32 {
         match self {
             Self::Integer(_) | Self::TranslateUid => 4,
@@ -182,12 +183,14 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
     }
 }
 
+#[must_use]
 fn settable(object: ObjectId, address: PropertyAddress) -> bool {
     (object == DEVICE && address.selector == fourcc(b"nsrt"))
         || ([INPUT, OUTPUT].contains(&object)
             && [fourcc(b"sfmt"), fourcc(b"pft ")].contains(&address.selector))
 }
 
+#[must_use]
 fn format(rate: u32) -> StreamFormat {
     StreamFormat {
         sample_rate: f64::from(rate),
@@ -220,7 +223,7 @@ pub(super) unsafe extern "C" fn has_property(
     pointer: *const PropertyAddress,
 ) -> u8 {
     let mut found = false;
-    guard(|| {
+    let _ = guard(|| {
         // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         found = unsafe { address(driver, pointer) }
             .and_then(|a| describe(object, a))
@@ -284,6 +287,7 @@ pub(super) unsafe extern "C" fn data_size(
 
 /// Caller has already checked the exact available size. Only explicit initialized
 /// fields are serialized, never struct padding or an internal Rust enum layout.
+#[must_use]
 fn bytes(value: Value) -> Vec<u8> {
     let mut result = Vec::new();
     match value {

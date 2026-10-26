@@ -69,6 +69,7 @@ pub struct OutputStats {
 }
 impl OutputCallback {
     /// Allocate working storage on the control thread before registering I/O.
+    #[must_use]
     pub fn new(processor: OutputProcessor, routing: Arc<AtomicRouting>) -> Option<Self> {
         let mut scratch = Vec::new();
         scratch.try_reserve_exact(4096).ok()?;
@@ -359,7 +360,7 @@ mod tests {
             .configure(selection, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(callback.stats().peak, Some([0.0; 2]));
-        producer.push_generation(&fresh, generation);
+        let _ = producer.push_generation(&fresh, generation);
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
         // borrows its samples for this call.
         unsafe {
@@ -380,7 +381,7 @@ mod tests {
             .configure(selection, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
-        producer.push_generation(&old, restarted);
+        let _ = producer.push_generation(&old, restarted);
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
         // borrows its samples for this call.
         unsafe {

@@ -6,6 +6,7 @@ pub use driver_audio::DriverAudio;
 #[cfg(target_os = "macos")]
 mod plugin;
 
+#[must_use]
 pub(crate) fn kernel() -> Option<DriverAudio> {
     DriverAudio::new(65_536)
 }

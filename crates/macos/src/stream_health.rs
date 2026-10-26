@@ -19,6 +19,7 @@ struct Progress {
 }
 
 impl Progress {
+    #[must_use]
     fn new(frames: u64, now: Instant) -> Self {
         Self {
             frames,
@@ -26,6 +27,7 @@ impl Progress {
         }
     }
 
+    #[must_use]
     fn stalled(&mut self, frames: u64, now: Instant) -> bool {
         if frames != self.frames {
             self.frames = frames;

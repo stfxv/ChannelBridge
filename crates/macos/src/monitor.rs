@@ -41,6 +41,7 @@ struct Observer {
     invalid_samples: AtomicU64,
 }
 impl Observer {
+    #[must_use]
     fn new(layout: CaptureLayout) -> Self {
         Self {
             layout,
@@ -77,6 +78,7 @@ impl Observer {
             .fetch_add(input.frames() as u64, Ordering::Relaxed);
         self.callbacks.fetch_add(1, Ordering::Relaxed);
     }
+    #[must_use]
     fn report(&self) -> Report {
         Report {
             callbacks: self.callbacks.load(Ordering::Acquire),

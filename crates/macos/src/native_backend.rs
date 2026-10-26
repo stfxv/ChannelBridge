@@ -128,6 +128,7 @@ fn selection(config: &Config) -> Result<Selection, String> {
     Selection::new(config.left, config.right, mode, config.muted)
         .ok_or("invalid input selection".into())
 }
+#[must_use]
 fn same_format(a: &StreamFormat, b: &StreamFormat) -> bool {
     a.sample_rate == b.sample_rate
         && a.format_id == b.format_id

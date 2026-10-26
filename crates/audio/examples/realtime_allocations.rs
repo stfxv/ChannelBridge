@@ -59,9 +59,9 @@ fn main() {
     CHECKING.store(true, Ordering::Release);
     for index in 0..128 {
         if !(64..68).contains(&index) {
-            producer.push(&incoming[..512]);
+            let _ = producer.push(&incoming[..512]);
         }
-        processor.render(&mut outgoing, Some(1.001));
+        let _ = processor.render(&mut outgoing, Some(1.001));
     }
     CHECKING.store(false, Ordering::Release);
     let allocated = ALLOCATIONS.load(Ordering::Acquire);

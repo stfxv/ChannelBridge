@@ -16,6 +16,7 @@ struct Slot {
     peak: AtomicU32,
 }
 impl Slot {
+    #[must_use]
     fn new() -> Self {
         Self {
             sequence: AtomicU64::new(0),
@@ -31,6 +32,7 @@ impl Slot {
         self.peak.store(peak.to_bits(), Ordering::Release);
         self.sequence.store(sequence, Ordering::Release);
     }
+    #[must_use]
     fn read(&self, expected: u64) -> Option<f32> {
         let before = self.sequence.load(Ordering::Acquire);
         if before & 1 != 0 {
@@ -71,6 +73,7 @@ pub struct Level {
     pub fresh: bool,
 }
 
+#[must_use]
 fn allocated<T>(count: usize, mut make: impl FnMut() -> T) -> Option<Box<[T]>> {
     let mut values = Vec::new();
     values.try_reserve_exact(count).ok()?;
@@ -80,6 +83,7 @@ fn allocated<T>(count: usize, mut make: impl FnMut() -> T) -> Option<Box<[T]>> {
 /// Allocates a callback-owned writer and a reader that can be cloned for views.
 /// Returns `None` unless channels is in `1..=512` and tick frequency is nonzero,
 /// or if meter storage cannot be reserved. Both endpoints use the same clock.
+#[must_use]
 pub fn meter_bank(channels: usize, ticks_per_second: u64) -> Option<(MeterWriter, MeterReader)> {
     if !(1..=512).contains(&channels) || ticks_per_second == 0 {
         return None;
@@ -108,6 +112,7 @@ pub fn meter_bank(channels: usize, ticks_per_second: u64) -> Option<(MeterWriter
     ))
 }
 impl Shared {
+    #[must_use]
     fn bucket(&self, tick: u64) -> Option<u64> {
         u64::try_from(
             u128::from(tick) * u128::from(BUCKETS_PER_SECOND) / u128::from(self.ticks_per_second),

@@ -21,6 +21,7 @@ impl Permission {
         self == Self::Authorized
     }
 }
+#[must_use]
 fn translate(status: AVAuthorizationStatus) -> Permission {
     match status {
         AVAuthorizationStatus::NotDetermined => Permission::NotDetermined,

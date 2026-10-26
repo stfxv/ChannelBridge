@@ -67,6 +67,7 @@ pub struct Routing {
 const GENERATION_SHIFT: u32 = 23;
 const MAX_GENERATION: u64 = u64::MAX >> GENERATION_SHIFT;
 impl Routing {
+    #[must_use]
     fn encode(self) -> u64 {
         let mode = match self.selection.mode {
             Mode::Mono => 0,
@@ -81,6 +82,7 @@ impl Routing {
             | (u64::from(self.sending) << 22)
             | (self.generation << GENERATION_SHIFT)
     }
+    #[must_use]
     fn decode(word: u64) -> Self {
         Self {
             selection: Selection {
@@ -125,6 +127,7 @@ impl AtomicRouting {
 
     /// Control-thread update. Source discontinuities can also change the word;
     /// retry only a bounded number of times, preserving their newer generation.
+    #[must_use]
     pub fn configure(
         &self,
         selection: Selection,
@@ -158,6 +161,7 @@ impl AtomicRouting {
     }
 
     /// Single attempt from capture on a clock/FIFO discontinuity. No RT retry.
+    #[must_use]
     pub fn advance_generation(&self, expected: Routing) -> Option<Routing> {
         let generation = expected.generation.checked_add(1)?;
         if generation > MAX_GENERATION {

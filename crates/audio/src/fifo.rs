@@ -54,10 +54,12 @@ pub fn stereo_queue(capacity: usize) -> Option<(Producer, Consumer)> {
 impl Producer {
     /// Return the accepted prefix. Full queues never overwrite unread samples.
     /// The capture callback owns the policy/counter for the remaining frames.
+    #[must_use]
     pub fn push(&mut self, input: &[StereoFrame]) -> usize {
         self.push_generation(input, 1)
     }
 
+    #[must_use]
     pub fn push_generation(&mut self, input: &[StereoFrame], generation: u64) -> usize {
         if generation == 0 {
             return 0;
@@ -87,6 +89,7 @@ impl Producer {
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[must_use]
 pub struct PopResult {
     pub received: usize,
     pub discarded: usize,
@@ -105,6 +108,7 @@ impl Consumer {
     }
 
     /// Return the valid prefix. The remainder of output is untouched.
+    #[must_use]
     pub fn pop(&mut self, output: &mut [StereoFrame]) -> usize {
         self.pop_generation(output, 1).received
     }
@@ -164,8 +168,8 @@ mod tests {
             stereo_queue(8).expect("fixture queue capacity is a nonzero power of two");
         let old = [StereoFrame::new(0.1, -0.1); 3];
         let new = [StereoFrame::new(0.7, -0.7); 3];
-        producer.push_generation(&old, 1);
-        producer.push_generation(&new, 2);
+        let _ = producer.push_generation(&old, 1);
+        let _ = producer.push_generation(&new, 2);
         let mut output = [StereoFrame::SILENCE; 8];
         assert_eq!(
             consumer.pop_generation(&mut output, 1),
@@ -183,8 +187,8 @@ mod tests {
             }
         );
         assert_eq!(&output[..3], &new);
-        producer.push_generation(&old, 2);
-        producer.push_generation(&new, 3);
+        let _ = producer.push_generation(&old, 2);
+        let _ = producer.push_generation(&new, 3);
         assert_eq!(
             consumer.pop_generation(&mut [], 3),
             PopResult {

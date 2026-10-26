@@ -15,6 +15,7 @@ struct Slot {
 }
 
 impl Slot {
+    #[must_use]
     fn new() -> Self {
         Self {
             sequence: AtomicU64::new(0),
@@ -24,6 +25,7 @@ impl Slot {
         }
     }
 
+    #[must_use]
     fn write(&self, generation: u64, frame: u64, value: StereoFrame) -> bool {
         let sequence = self.sequence.load(Ordering::Acquire);
         if sequence & 1 != 0 {
@@ -57,6 +59,7 @@ impl Slot {
         true
     }
 
+    #[must_use]
     fn read(&self, generation: u64, frame: u64) -> Option<StereoFrame> {
         let before = self.sequence.load(Ordering::Acquire);
         if before & 1 != 0 {
@@ -74,6 +77,7 @@ impl Slot {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[must_use]
 pub struct Transfer {
     pub valid: usize,
     pub missing: usize,
@@ -97,7 +101,6 @@ impl TimelineRing {
         Some(Self { slots })
     }
 
-    #[must_use]
     pub fn write(&self, generation: u64, start: FramePosition, audio: &[StereoFrame]) -> Transfer {
         let mut result = Transfer::default();
         if generation == 0 || audio.len() > self.slots.len() {
@@ -185,7 +188,7 @@ mod tests {
         assert_eq!(out[0], tone());
         assert_eq!(out[254], tone());
         assert_eq!(out[255], StereoFrame::SILENCE);
-        ring.read(1, at(400), &mut out);
+        let _ = ring.read(1, at(400), &mut out);
         assert_eq!(ring.read(1, at(128), &mut out).valid, 255);
     }
 

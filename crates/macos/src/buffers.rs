@@ -91,6 +91,7 @@ unsafe fn buffer_count(pointer: *const AudioBufferList) -> Result<usize, Error> 
     }
     Ok(count)
 }
+#[must_use]
 unsafe fn descriptor(pointer: *const AudioBufferList, index: usize) -> AudioBuffer {
     // SAFETY: index is below the list count; 8-byte first-buffer offset and
     // 16-byte entries are compared with Apple's SDK by test_rust_abi.c.

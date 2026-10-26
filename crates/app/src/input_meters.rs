@@ -88,11 +88,13 @@ impl InputMeters {
         assert!(self.right.isHidden());
     }
 }
+#[must_use]
 fn decibels(value: Option<f32>) -> String {
     value
         .filter(|value| value.is_finite())
         .map_or_else(|| "−∞".into(), |value| format!("{value:.1}"))
 }
+#[must_use]
 pub(crate) fn channel_text(channel: u32, audio: Option<&AudioView>) -> String {
     match audio.and_then(|audio| audio.levels.iter().find(|level| level.channel == channel)) {
         Some(InputLevel {

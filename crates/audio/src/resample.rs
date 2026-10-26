@@ -64,6 +64,7 @@ impl SincKernel {
         self.radius
     }
 
+    #[must_use]
     fn weight(&self, distance: f64) -> f64 {
         let position = distance.abs() * self.scale * DENSITY as f64;
         if position > (HALF_WIDTH * DENSITY) as f64 {
@@ -79,6 +80,7 @@ impl SincKernel {
 
     /// sample receives an index in the 2*radius+1 input window. All phases have
     /// unity DC gain; left and right use exactly the same weights and position.
+    #[must_use]
     fn interpolate(
         &self,
         fraction: f64,
@@ -101,6 +103,7 @@ impl SincKernel {
     }
 }
 
+#[must_use]
 fn bessel_i0(x: f64) -> f64 {
     let mut sum = 1.0;
     let mut term = 1.0;
@@ -183,6 +186,7 @@ impl StreamingResampler {
 
     /// Copies the accepted prefix into history without allocation.
     /// A full history leaves the remaining input for the caller to retain.
+    #[must_use]
     pub fn push(&mut self, input: &[StereoFrame]) -> usize {
         let count = input.len().min(self.writable_frames());
         let mut accepted = 0;
@@ -203,6 +207,7 @@ impl StreamingResampler {
 
     /// Return the produced prefix. A shortage leaves the unwritten suffix alone;
     /// caller owns silence/fade/diagnostic policy and must not repeat old output.
+    #[must_use]
     pub fn render(&mut self, output: &mut [StereoFrame], step: f64) -> usize {
         if !step.is_finite() || step <= 0.0 || step > self.kernel.maximum_step {
             return 0;

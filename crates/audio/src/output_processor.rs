@@ -8,6 +8,7 @@ const MAX_BLOCK: usize = 4096;
 const FADE_FRAMES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[must_use]
 pub struct RenderReport {
     pub produced: usize,
     pub missing: usize,
@@ -92,6 +93,7 @@ impl OutputProcessor {
         discarded
     }
 
+    #[must_use]
     fn queued(&self) -> usize {
         self.input
             .available()
@@ -315,14 +317,14 @@ mod tests {
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
         let old = [StereoFrame::new(0.8, 0.8); 2048];
-        producer.push_generation(&old, 1);
+        let _ = producer.push_generation(&old, 1);
         let mut output = [StereoFrame::SILENCE; 512];
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(output[511].left > 0.79);
         processor.set_generation(2);
-        producer.push_generation(&old[..64], 1);
+        let _ = producer.push_generation(&old[..64], 1);
         let fresh = [StereoFrame::new(-0.25, -0.25); 2048];
-        producer.push_generation(&fresh, 2);
+        let _ = producer.push_generation(&fresh, 2);
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(
             output
@@ -355,7 +357,7 @@ mod tests {
             let mut elapsed = 0.0;
             let mut iteration = 0;
             let mut output_frames = 0;
-            estimator.observe(prefix, 1_000_000_000);
+            let _ = estimator.observe(prefix, 1_000_000_000);
             while elapsed < 4.0 {
                 let frames = [64, 128, 256, 512, 1024, 4096][iteration % 6];
                 elapsed += frames as f64 / 48_000.0;
@@ -378,7 +380,7 @@ mod tests {
                 supplied = next;
                 let host_tick = 1_000_000_000
                     + ((supplied - prefix) as f64 / physical_rate * 1_000_000_000.0).round() as u64;
-                estimator.observe(supplied, host_tick);
+                let _ = estimator.observe(supplied, host_tick);
                 let report = processor.render(&mut output[..frames], Some(estimator.speed()));
                 assert_eq!(report.produced, frames, "ppm={ppm} report={report:?}");
                 assert_eq!(report.missing, 0);

@@ -25,10 +25,12 @@ unsafe extern "C" {
     fn CFStringGetTypeID() -> usize;
 }
 
+#[must_use]
 pub fn now() -> u64 {
     // SAFETY: mach_absolute_time has no pointer or initialization preconditions.
     unsafe { mach_absolute_time() }
 }
+#[must_use]
 pub fn frequency() -> Option<u64> {
     let mut base = Timebase::default();
     // SAFETY: base is a writable structure matching mach_timebase_info_data_t.
@@ -45,11 +47,13 @@ pub fn frequency() -> Option<u64> {
 ///
 /// # Safety
 /// `uuid` must be a live CFUUID object for the duration of this call.
+#[must_use]
 pub unsafe fn uuid_bytes(uuid: CfRef) -> UuidBytes {
     // SAFETY: the caller supplies a live CFUUID for this call.
     unsafe { CFUUIDGetUUIDBytes(uuid) }
 }
 
+#[must_use]
 pub fn string(text: &str) -> Option<CfRef> {
     let text = std::ffi::CString::new(text).ok()?;
     // SAFETY: CString is NUL-terminated and lives through the call. CF returns a
@@ -65,6 +69,7 @@ pub fn string(text: &str) -> Option<CfRef> {
 /// # Safety
 /// A non-null `value` must be a live CoreFoundation object throughout the call.
 /// The object is borrowed and its retain count is unchanged.
+#[must_use]
 pub unsafe fn string_equals(value: CfRef, expected: &str) -> bool {
     if value.is_null() {
         return false;
@@ -86,6 +91,7 @@ pub unsafe fn string_equals(value: CfRef, expected: &str) -> bool {
     actual.to_bytes() == expected.as_bytes()
 }
 
+#[must_use]
 pub fn data(bytes: &[u8]) -> Option<CfRef> {
     // SAFETY: CFData copies the live slice and transfers a +1 reference to caller.
     let result = unsafe { CFDataCreate(core::ptr::null(), bytes.as_ptr(), bytes.len() as isize) };

@@ -117,6 +117,7 @@ impl Export {
         *completion = None;
         self.button.setEnabled(true);
     }
+    #[must_use]
     pub fn pending(&self) -> bool {
         self.completion.borrow().is_some()
     }

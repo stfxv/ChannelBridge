@@ -29,6 +29,7 @@ impl DriverAudio {
 
     /// Called while HAL I/O is quiescent. A new generation invalidates old audio
     /// without clearing shared slots that might still be inspected by readers.
+    #[must_use]
     pub fn next_generation(&self) -> Option<u64> {
         self.generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
@@ -95,14 +96,14 @@ mod tests {
         let audio =
             DriverAudio::new(512).expect("fixture timeline capacity is a nonzero power of two");
         let input = [StereoFrame::new(0.25, -0.25); 255];
-        audio.write(128.25, &input);
+        let _ = audio.write(128.25, &input);
         let mut out = [StereoFrame::SILENCE; 256];
         assert_eq!(audio.read(128.5, &mut out).valid, 255);
         assert_eq!(audio.counters().missing_read_frames, 1);
-        audio.next_generation();
+        let _ = audio.next_generation();
         assert_eq!(audio.read(128.0, &mut out).valid, 0);
         assert_eq!(audio.counters().generation, 2);
-        audio.read(f64::NAN, &mut out);
+        let _ = audio.read(f64::NAN, &mut out);
         assert_eq!(audio.counters().invalid_timestamps, 1);
     }
 }

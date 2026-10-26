@@ -87,6 +87,7 @@ impl RoutingControls {
     }
     /// Interpret indices using the exact list that was displayed, not a newly
     /// enumerated device. Unavailable placeholder entries never become Ch 1.
+    #[must_use]
     pub fn selected_config(&self, sender: &NSPopUpButton, config: &Config) -> Option<Config> {
         let mut next = config.clone();
         if std::ptr::eq(sender, &*self.mode) {

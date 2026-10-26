@@ -17,6 +17,7 @@ pub struct CaptureTimestamp {
     pub host_tick: u64,
 }
 #[derive(Clone, Copy, Debug, Default)]
+#[must_use]
 pub struct CaptureReport {
     pub written: usize,
     pub overflow: usize,
@@ -41,6 +42,7 @@ impl CaptureProcessor {
     /// Takes ownership of the meter writer and queue producer for one callback.
     /// Returns `None` for a zero sample rate or tick frequency, or a failed
     /// reservation of the 4096-frame scratch buffer.
+    #[must_use]
     pub fn new(
         routing: Arc<AtomicRouting>,
         meters: MeterWriter,
@@ -219,7 +221,7 @@ mod tests {
         let started = routing
             .configure(selection, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted");
-        capture.process(
+        let _ = capture.process(
             64,
             3,
             128,
@@ -243,7 +245,7 @@ mod tests {
             .configure(mix, true, true)
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, started.generation);
-        capture.process(
+        let _ = capture.process(
             64,
             3,
             192,
@@ -253,7 +255,7 @@ mod tests {
             }),
             sample,
         );
-        consumer.pop_generation(&mut audio, changed.generation);
+        let _ = consumer.pop_generation(&mut audio, changed.generation);
         assert!(audio.iter().all(|f| *f == StereoFrame::new(-0.15, -0.15)));
         assert_eq!(reader.level(0, 192).current, 0.1);
     }
@@ -279,7 +281,7 @@ mod tests {
         .expect(
             "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
         );
-        capture.process(
+        let _ = capture.process(
             64,
             2,
             64,

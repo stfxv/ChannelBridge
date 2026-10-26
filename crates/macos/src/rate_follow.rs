@@ -138,6 +138,7 @@ impl RateFollow {
         Ok(Status::Pending)
     }
 }
+#[must_use]
 fn confirmed(desired: u32, nominal: f64, stream_rates: &[f64]) -> bool {
     nominal == f64::from(desired)
         && stream_rates.len() >= 4

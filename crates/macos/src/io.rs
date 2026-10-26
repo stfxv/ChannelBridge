@@ -183,6 +183,7 @@ pub enum Direction {
     Input,
     Output,
 }
+#[must_use]
 fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
     if !(1..=512).contains(&count) {
         return None;

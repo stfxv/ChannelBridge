@@ -38,6 +38,7 @@ struct Context {
     first_missing: AtomicU64,
 }
 impl Context {
+    #[must_use]
     fn new(rate: f64) -> Self {
         Self {
             rate,
@@ -52,6 +53,7 @@ impl Context {
     }
 }
 
+#[must_use]
 fn tone(frame: f64, rate: f64) -> [f32; 2] {
     let phase = frame * (997.0 * std::f64::consts::TAU / rate);
     [(0.25 * phase.sin()) as f32, (0.125 * phase.cos()) as f32]
@@ -73,6 +75,7 @@ impl crate::io::Handler for Context {
     }
 }
 
+#[must_use]
 unsafe fn process(
     context: &Context,
     input: *const AudioBufferList,

@@ -3,6 +3,7 @@
 //! by the future HAL adapter, rather than sharing mutable estimator state.
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
 pub enum Observation {
     Accumulating,
     Updated { speed: f64 },
@@ -168,7 +169,7 @@ mod tests {
             .expect("fixture sample rate and host clock frequency are positive");
         for second in 0..30 {
             let frame = (second as f64 * 48_000.0 * 1.001).round() as u64;
-            estimator.observe(frame, second * 24_000_000);
+            let _ = estimator.observe(frame, second * 24_000_000);
         }
         assert!((estimator.speed() - 1.001).abs() < 0.00001);
         assert_eq!(estimator.observe(0, 0), Observation::Discontinuity);

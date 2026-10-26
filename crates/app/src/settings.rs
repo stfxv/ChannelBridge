@@ -11,6 +11,7 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
     pub fn for_home(home: &Path) -> Self {
         let support = home.join("Library/Application Support");
         Self::read(
@@ -21,6 +22,7 @@ impl Settings {
         )
     }
 
+    #[must_use]
     fn read(destination: PathBuf, legacy: &Path) -> Self {
         let loaded = storage::load_existing(&destination)
             .and_then(|saved| match saved {
@@ -51,6 +53,7 @@ impl Settings {
         }
     }
 
+    #[must_use]
     pub fn smoke() -> Self {
         Self {
             destination: PathBuf::from("work/read-only-settings.json"),

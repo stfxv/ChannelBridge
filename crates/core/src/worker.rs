@@ -84,6 +84,7 @@ impl SystemEvents {
             }
         }
     }
+    #[must_use]
     fn take(&self) -> (Option<SystemEvent>, bool) {
         let pending = self.pending.swap(0, Ordering::AcqRel);
         let state = match pending & 3 {
@@ -102,6 +103,7 @@ enum Completion {
     Panicked = 2,
 }
 impl Completion {
+    #[must_use]
     fn load(state: &AtomicU8) -> Self {
         match state.load(Ordering::Acquire) {
             0 => Self::Running,
@@ -144,6 +146,7 @@ fn apply_command<B: Backend>(
     }
     previous_uid != controller.config().device_uid
 }
+#[must_use]
 fn finish_shutdown<B: Backend>(
     controller: &mut Controller<B>,
     commands: impl Iterator<Item = Command>,
@@ -159,6 +162,7 @@ fn finish_shutdown<B: Backend>(
     }
     shutdown_error
 }
+#[must_use]
 fn apply_system_events<B: Backend>(
     events: &SystemEvents,
     quit: &AtomicBool,
@@ -188,6 +192,7 @@ struct InputPresence {
     observed: Option<(String, bool)>,
 }
 impl InputPresence {
+    #[must_use]
     fn observe(&mut self, uid: &str, inventory: &crate::view::DeviceInventory) -> bool {
         if self
             .observed
@@ -1226,7 +1231,7 @@ mod tests {
             },
         );
         let mut presence = InputPresence::default();
-        presence.observe("source", &complete(&[]));
+        let _ = presence.observe("source", &complete(&[]));
         let mut error = None;
         let mut attempt = 0;
         for uid in ["other", "source"] {
@@ -1243,7 +1248,7 @@ mod tests {
             );
         }
         assert!(presence.observed.is_none());
-        presence.observe("source", &complete(&[]));
+        let _ = presence.observe("source", &complete(&[]));
         let config = Config {
             auto_send_on_resume: true,
             ..controller.config().clone()
