@@ -604,6 +604,141 @@ mod tests {
             Ok(())
         }
     }
+    struct ExitBackend {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        saves: Arc<Mutex<Vec<String>>>,
+        panic_on_save: bool,
+        panic_on_drop: bool,
+    }
+    impl Drop for ExitBackend {
+        fn drop(&mut self) {
+            self.entered.send(()).expect("test observes backend destruction");
+            self.release.recv().expect("test releases backend destruction");
+            assert!(!self.panic_on_drop, "fixture backend drop panic");
+        }
+    }
+    impl Backend for ExitBackend {
+        type Pending = ();
+        type Session = ();
+        fn save(&mut self, config: &Config) -> Result<(), String> {
+            assert!(!self.panic_on_save, "fixture save panic");
+            self.saves.lock().expect("save log remains healthy").push(config.device_uid.clone());
+            Ok(())
+        }
+        fn negotiate(&mut self, _: &Config) -> Result<(), String> { Ok(()) }
+        fn ready(&mut self, _: &()) -> Result<bool, String> { Ok(true) }
+        fn open(&mut self, _: &Config) -> Result<(), String> { Ok(()) }
+        fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> { Ok(true) }
+        fn route(&mut self, _: &(), _: &Config, _: bool, _: bool) -> Result<(), String> { Ok(()) }
+        fn close(&mut self, _: ()) -> Result<(), String> { Ok(()) }
+    }
+    fn poison<T>(mutex: &Mutex<T>, corrupt: impl FnOnce(&mut T)) {
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = mutex.lock().expect("fixture mutex starts healthy");
+            corrupt(&mut guard);
+            panic!("fixture poison");
+        })).is_err());
+    }
+    fn wait_finished(worker: &Worker) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.snapshot().finished {
+            assert!(Instant::now() < deadline, "worker teardown did not complete");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn normal_completion_waits_for_backend_drop_and_drop_panic_is_unexpected() {
+        for panic_on_drop in [false, true] {
+            let (entered, observed) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            let worker = Worker::spawn(Config::default(), move || Ok(ExitBackend {
+                entered, release: gate, saves: Arc::new(Mutex::new(Vec::new())),
+                panic_on_save: false, panic_on_drop,
+            })).expect("worker starts");
+            worker.request_shutdown();
+            observed.recv_timeout(Duration::from_secs(2)).expect("backend drop starts");
+            let before = worker.snapshot();
+            release.send(()).expect("backend drop is waiting");
+            wait_finished(&worker);
+            assert!(!before.finished, "normal final publication precedes backend destruction");
+            // A normal final publication remains valid even if backend Drop panics.
+            assert_eq!(worker.join().is_err(), panic_on_drop);
+        }
+    }
+    #[test]
+    fn poisoned_snapshot_is_independent_and_completion_survives_unwind() {
+        for panic_on_save in [false, true] {
+            let (factory_entered, factory_observed) = mpsc::channel();
+            let (factory_release, factory_gate) = mpsc::channel();
+            let (entered, observed) = mpsc::channel();
+            let (release, gate) = mpsc::channel();
+            let original = Config { device_uid: "original".into(), ..Config::default() };
+            let worker = Worker::spawn(original.clone(), move || {
+                factory_entered.send(()).expect("factory barrier observed");
+                factory_gate.recv().expect("factory released");
+                Ok(ExitBackend { entered, release: gate, saves: Arc::new(Mutex::new(Vec::new())), panic_on_save, panic_on_drop: false })
+            }).expect("worker starts");
+            factory_observed.recv_timeout(Duration::from_secs(2)).expect("factory waits");
+            if panic_on_save {
+                worker.send(Command::Configure(original.clone())).expect("configure accepted before poison");
+            }
+            poison(&worker.snapshot, |value| {
+                value.config.device_uid = "corrupt".into();
+                value.finished = true;
+                value.configuration_attempt = 99;
+                value.retained_io_contexts = 99;
+            });
+            // In the panic case, let the queued command unwind before observing poison.
+            factory_release.send(()).expect("factory waits for release");
+            if !panic_on_save { let _ = worker.snapshot(); }
+            observed.recv_timeout(Duration::from_secs(2)).expect("backend teardown starts");
+            let before = worker.snapshot();
+            release.send(()).expect("backend teardown is gated");
+            wait_finished(&worker);
+            assert_eq!(before.config, original);
+            assert_eq!(before.state, CaptureState::Blocked);
+            assert!(!before.finished);
+            assert!(!before.wanted_send);
+            assert!(before.audio.is_none() && before.diagnostics.is_none() && before.driver_diagnostics.is_none());
+            assert_eq!(before.configuration_attempt, 0);
+            assert_eq!(before.retained_io_contexts, 0);
+            assert!(before.control_history.is_empty() && before.devices.is_empty());
+            assert!(before.error.as_deref().is_some_and(|error| error.contains("unavailable")));
+            assert_eq!(worker.join().is_err(), panic_on_save);
+        }
+    }
+    #[test]
+    fn poisoned_admission_drains_accepted_prefix_even_with_retained_sender() {
+        for factory_fails in [false, true] {
+            let (release, gate) = mpsc::channel();
+            let saves = Arc::new(Mutex::new(Vec::new()));
+            let backend_saves = Arc::clone(&saves);
+            let (entered, observed) = mpsc::channel();
+            let (drop_release, drop_gate) = mpsc::channel();
+            let worker = Worker::spawn(Config::default(), move || {
+                gate.recv().expect("factory released after admission poison");
+                if factory_fails { return Err("fixture factory error".into()); }
+                Ok(ExitBackend { entered, release: drop_gate, saves: backend_saves, panic_on_save: false, panic_on_drop: false })
+            }).expect("worker starts");
+            for uid in ["first", "second"] {
+                worker.send(Command::Configure(Config { device_uid: uid.into(), ..Config::default() })).expect("queued configure accepted");
+            }
+            poison(&worker.commands, |_| {});
+            let rejected = worker.send(Command::Configure(Config { device_uid: "late".into(), ..Config::default() }));
+            worker.request_shutdown();
+            release.send(()).expect("factory waits");
+            if !factory_fails {
+                observed.recv_timeout(Duration::from_secs(2)).expect("finite drain reaches backend drop");
+                drop_release.send(()).expect("backend drop waits");
+            }
+            wait_finished(&worker);
+            assert!(rejected.is_err(), "poisoned admission must reject commands");
+            assert_eq!(worker.snapshot().configuration_attempt, 2);
+            if !factory_fails { assert_eq!(*saves.lock().expect("save log remains healthy"), ["first", "second"]); }
+            worker.join().expect("poison refusal permits orderly return");
+        }
+    }
     #[test]
     fn shutdown_includes_the_command_held_outside_the_receiver_before_its_fifo_tail() {
         let mut controller = Controller::new(
