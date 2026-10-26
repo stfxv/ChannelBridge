@@ -1,6 +1,9 @@
 //! HAL buffer validation. Construct borrows only for the current callback.
 use crate::devices::Error;
-use channelbridge_hal_abi::{AudioBuffer, AudioBufferList, StreamFormat, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBuffer;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::StreamFormat;
 
 pub struct CaptureLayout {
     channels: Box<[usize]>,
@@ -18,7 +21,7 @@ impl CaptureLayout {
             let count = format.channels_per_frame as usize;
             if count == 0
                 || count > 512
-                || format.format_id != fourcc(b"lpcm")
+                || format.format_id != hal_abi::fourcc(b"lpcm")
                 || format.bits_per_channel != 32
                 || format.format_flags & 1 == 0
                 || format.format_flags & 2 != 0
@@ -258,7 +261,7 @@ mod tests {
     fn format(channels: u32) -> StreamFormat {
         StreamFormat {
             sample_rate: 48_000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: channels * 4,
             frames_per_packet: 1,
@@ -310,8 +313,8 @@ mod tests {
     fn zero_buffer_header_is_not_read_as_a_full_buffer_list() {
         let mut header = 0_u32;
         // SAFETY: count is zero; no bytes beyond the initialized count are read.
-        assert!(unsafe { silence_outputs((&mut header as *mut u32).cast()) }.is_ok());
+        assert!(unsafe { super::silence_outputs((&mut header as *mut u32).cast()) }.is_ok());
         // SAFETY: zero header is valid but cannot describe stereo output.
-        assert!(unsafe { stereo_output((&mut header as *mut u32).cast()) }.is_err());
+        assert!(unsafe { super::stereo_output((&mut header as *mut u32).cast()) }.is_err());
     }
 }

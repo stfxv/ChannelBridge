@@ -1,6 +1,6 @@
 //! Test-only allocator instrumentation; not linked into either product binary.
 use channelbridge_audio::StereoFrame;
-use channelbridge_audio::fifo::stereo_queue;
+use channelbridge_audio::fifo;
 use channelbridge_audio::output_processor::OutputProcessor;
 use std::alloc::GlobalAlloc;
 use std::alloc::Layout;
@@ -50,7 +50,7 @@ unsafe impl GlobalAlloc for CheckedAllocator {
 }
 
 fn main() {
-    let (mut producer, consumer) = stereo_queue(8192).expect("test queue");
+    let (mut producer, consumer) = fifo::stereo_queue(8192).expect("test queue");
     let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect("test DSP");
     let incoming = [StereoFrame::new(0.25, -0.25); 1024];
     let mut outgoing = [StereoFrame::SILENCE; 512];

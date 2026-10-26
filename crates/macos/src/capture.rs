@@ -7,8 +7,8 @@ use channelbridge_audio::capture_processor::CaptureProcessor;
 use channelbridge_audio::capture_processor::CaptureTimestamp;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp};
 use std::cell::UnsafeCell;
+use std::panic;
 use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -119,7 +119,7 @@ impl CaptureCallback {
         let _gate = Gate(&self.busy);
         // Defense in depth under panic=unwind. A panic permanently disables
         // processor reuse; the gate remains valid and releases during unwinding.
-        let result = catch_unwind(AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
             if now.is_null() {
                 return false;
             }
@@ -201,22 +201,24 @@ impl CaptureCallback {
 mod tests {
     use super::*;
     use channelbridge_audio::StereoFrame;
-    use channelbridge_audio::fifo::stereo_queue;
-    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::fifo;
+    use channelbridge_audio::meters;
     use channelbridge_audio::routing::AtomicRouting;
     use channelbridge_audio::routing::Mode;
     use channelbridge_audio::routing::Selection;
-    use channelbridge_hal_abi::{AudioBuffer, StreamFormat, fourcc};
+    use channelbridge_hal_abi as hal_abi;
+    use channelbridge_hal_abi::AudioBuffer;
+    use channelbridge_hal_abi::StreamFormat;
     use std::sync::Arc;
     #[test]
     fn native_buffers_reach_preview_and_fifo_without_reentrant_state_access() {
         let selection = Selection::new(2, 1, Mode::Stereo, false)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (meters, reader) = meter_bank(2, 48_000)
+        let (meters, reader) = meters::meter_bank(2, 48_000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         let (producer, mut consumer) =
-            stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
         let processor = CaptureProcessor::new(
             Arc::clone(&routing),
             meters,
@@ -229,7 +231,7 @@ mod tests {
         );
         let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48_000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 8,
             frames_per_packet: 1,

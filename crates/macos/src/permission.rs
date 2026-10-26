@@ -107,8 +107,8 @@ mod tests {
             AVAuthorizationStatus::Denied,
             AVAuthorizationStatus(-1),
         ] {
-            assert!(!translate(state).allowed());
+            assert!(!super::translate(state).allowed());
         }
-        assert!(translate(AVAuthorizationStatus::Authorized).allowed());
+        assert!(super::translate(AVAuthorizationStatus::Authorized).allowed());
     }
 }

@@ -5,13 +5,18 @@ use crate::devices;
 use crate::devices::Stream;
 use crate::output::OutputCallback;
 use channelbridge_audio::capture_processor::CaptureProcessor;
-use channelbridge_audio::fifo::stereo_queue;
+use channelbridge_audio::fifo;
+use channelbridge_audio::meters;
 use channelbridge_audio::meters::MeterReader;
-use channelbridge_audio::meters::meter_bank;
 use channelbridge_audio::output_processor::OutputProcessor;
 use channelbridge_audio::routing::AtomicRouting;
 use channelbridge_audio::routing::Selection;
-use channelbridge_hal_abi::{ObjectId, StreamFormat, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::StreamFormat;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 pub struct PreparedSession {
@@ -31,12 +36,12 @@ impl PreparedSession {
         target: ObjectId,
         selection: Selection,
         ticks_per_second: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn Error>> {
         if source == target {
             return Err("input and virtual output must be different devices".into());
         }
-        let source_streams = devices::streams(source, fourcc(b"inpt"))?;
-        let target_streams = devices::streams(target, fourcc(b"outp"))?;
+        let source_streams = devices::streams(source, hal_abi::fourcc(b"inpt"))?;
+        let target_streams = devices::streams(target, hal_abi::fourcc(b"outp"))?;
         let input = source_streams
             .iter()
             .map(|stream| stream.virtual_format)
@@ -54,7 +59,7 @@ impl PreparedSession {
         output: &[StreamFormat],
         selection: Selection,
         ticks_per_second: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn Error>> {
         let layout = CaptureLayout::try_new(input)?;
         if !selection.available(layout.channels()) {
             return Err("selected input channel is unavailable".into());
@@ -62,7 +67,7 @@ impl PreparedSession {
         let [format] = output else {
             return Err("virtual output must have one stereo stream".into());
         };
-        if format.format_id != fourcc(b"lpcm")
+        if format.format_id != hal_abi::fourcc(b"lpcm")
             || format.format_flags != 9
             || format.bits_per_channel != 32
             || format.channels_per_frame != 2
@@ -72,7 +77,7 @@ impl PreparedSession {
         {
             return Err("virtual output must be native interleaved float32 stereo".into());
         }
-        let rate = |value: f64| -> Result<u32, Box<dyn std::error::Error>> {
+        let rate = |value: f64| -> Result<u32, Box<dyn Error>> {
             if !value.is_finite() || value.fract() != 0.0 || !(8000.0..=768000.0).contains(&value) {
                 return Err("unsupported audio rate".into());
             }
@@ -81,13 +86,14 @@ impl PreparedSession {
         let input_rate = rate(layout.sample_rate())?;
         let output_rate = rate(format.sample_rate)?;
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (writer, meters) = meter_bank(layout.channels(), ticks_per_second)
+        let (writer, meters) = meters::meter_bank(layout.channels(), ticks_per_second)
             .ok_or("cannot allocate input meters")?;
         // A provisional 16 ms input target. Actual latency/jitter margins must be
         // measured, including driver's latency and filter history.
         let target = (input_rate as usize * 16 / 1000).max(256);
         let capacity = (target + 8192).next_power_of_two();
-        let (producer, consumer) = stereo_queue(capacity).ok_or("cannot allocate input queue")?;
+        let (producer, consumer) =
+            fifo::stereo_queue(capacity).ok_or("cannot allocate input queue")?;
         let processor = CaptureProcessor::new(
             Arc::clone(&routing),
             writer,
@@ -131,9 +137,9 @@ impl TestSession {
         source_uid: &str,
         selection: Selection,
         ticks_per_second: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn Error>> {
         let devices = devices::list()?;
-        let find = |uid: &str| -> Result<ObjectId, Box<dyn std::error::Error>> {
+        let find = |uid: &str| -> Result<ObjectId, Box<dyn Error>> {
             let mut matching = devices
                 .iter()
                 .filter_map(|entry| entry.as_ref().ok())
@@ -150,8 +156,8 @@ impl TestSession {
         if prepared.input_rate != prepared.output_rate {
             return Err("virtual rate must follow source before starting preview".into());
         }
-        let mut virtual_streams = devices::streams(target, fourcc(b"inpt"))?;
-        virtual_streams.extend(devices::streams(target, fourcc(b"outp"))?);
+        let mut virtual_streams = devices::streams(target, hal_abi::fourcc(b"inpt"))?;
+        virtual_streams.extend(devices::streams(target, hal_abi::fourcc(b"outp"))?);
         let mut capture = crate::io::Registration::try_new(source, prepared.capture)?;
         if let Err(error) = capture.disable_streams(crate::io::Direction::Output) {
             return Err(failed_start(error, Some(capture), None));
@@ -237,8 +243,8 @@ impl ShutdownError {
             .any(|error| error.context_retained)
     }
 }
-impl std::fmt::Display for ShutdownError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ShutdownError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "session shutdown failed; route stopped: {}; output: {:?}; input: {:?}; context retained: {}",
@@ -249,7 +255,7 @@ impl std::fmt::Display for ShutdownError {
         )
     }
 }
-impl std::error::Error for ShutdownError {}
+impl Error for ShutdownError {}
 fn shutdown_result<O, I>(
     output: Result<O, crate::io::IoError>,
     input: Result<I, crate::io::IoError>,
@@ -277,8 +283,8 @@ pub struct StartupError {
     pub requires_stop: bool,
     pub retained_io_contexts: u64,
 }
-impl std::fmt::Display for StartupError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for StartupError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}; cleanup: {:?}; callback context retained: {}",
@@ -286,13 +292,13 @@ impl std::fmt::Display for StartupError {
         )
     }
 }
-impl std::error::Error for StartupError {}
+impl Error for StartupError {}
 #[must_use]
 fn failed_start(
-    cause: Box<dyn std::error::Error>,
+    cause: Box<dyn Error>,
     capture: Option<crate::io::Registration<CaptureCallback>>,
     output: Option<crate::io::Registration<OutputCallback>>,
-) -> Box<dyn std::error::Error> {
+) -> Box<dyn Error> {
     let retained = cause
         .downcast_ref::<crate::io::IoError>()
         .is_some_and(|error| error.context_retained);
@@ -342,21 +348,21 @@ mod tests {
             context_retained: true,
             disposition: crate::io::IoDisposition::RemovedDevice,
         };
-        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), true)
+        let shutdown = super::shutdown_result::<(), ()>(Err(removed()), Ok(()), true)
             .expect_err("injected output removal is preserved in the shutdown error");
         assert!(!shutdown.requires_stop());
         assert_eq!(shutdown.retained_io_contexts(), 1);
-        let startup = startup_error("device disconnected".into(), false, vec![removed()]);
+        let startup = super::startup_error("device disconnected".into(), false, vec![removed()]);
         assert!(!startup.requires_stop);
         assert!(startup.context_retained);
         assert_eq!(startup.retained_io_contexts, 1);
-        let shutdown = shutdown_result::<(), ()>(Err(removed()), Ok(()), false)
+        let shutdown = super::shutdown_result::<(), ()>(Err(removed()), Ok(()), false)
             .expect_err("injected output removal and unstopped route produce a shutdown error");
         assert!(shutdown.requires_stop());
     }
     #[test]
     fn shutdown_preserves_both_failures_and_retained_context_information() {
-        let error = shutdown_result::<(), ()>(
+        let error = super::shutdown_result::<(), ()>(
             Err(crate::io::IoError {
                 operation: "callback panic",
                 status: 0,
@@ -375,17 +381,17 @@ mod tests {
         assert!(error.output.is_some() && error.input.is_some());
         assert!(error.context_retained());
         assert!(error.route_stopped);
-        assert!(shutdown_result(Ok(()), Ok(()), true).is_ok());
-        let error = shutdown_result(Ok(()), Ok(()), false)
+        assert!(super::shutdown_result(Ok(()), Ok(()), true).is_ok());
+        let error = super::shutdown_result(Ok(()), Ok(()), false)
             .expect_err("an unstopped route makes shutdown fail even when I/O cleanup succeeds");
         assert!(!error.context_retained());
         assert!(!error.route_stopped);
     }
     #[test]
     fn startup_error_distinguishes_clean_failure_from_retained_callbacks() {
-        let clean = startup_error("start failed".into(), false, Vec::new());
+        let clean = super::startup_error("start failed".into(), false, Vec::new());
         assert!(!clean.context_retained);
-        let retained = startup_error(
+        let retained = super::startup_error(
             "start failed".into(),
             false,
             vec![
@@ -406,13 +412,15 @@ mod tests {
         assert!(retained.context_retained);
         assert_eq!(retained.cleanup_errors.len(), 2);
         assert_eq!(retained.cause, "start failed");
-        assert!(startup_error("registration failed".into(), true, Vec::new()).context_retained);
+        assert!(
+            super::startup_error("registration failed".into(), true, Vec::new()).context_retained
+        );
     }
     #[test]
     fn preparation_preserves_rates_and_rejects_missing_channels() {
         let format = StreamFormat {
             sample_rate: 48000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 8,
             frames_per_packet: 1,

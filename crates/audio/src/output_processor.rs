@@ -222,13 +222,13 @@ impl OutputProcessor {
 mod tests {
     use super::*;
     use crate::drift::ClockEstimator;
-    use crate::fifo::stereo_queue;
+    use crate::fifo;
     #[test]
     fn session_target_primes_complete_large_callbacks() {
         for frames in [1024, 4096] {
             let target = 48_000 * 16 / 1000;
-            let (mut producer, consumer) =
-                stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+            let (mut producer, consumer) = fifo::stereo_queue(16384)
+                .expect("fixture queue capacity is a nonzero power of two");
             let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).expect(
                 "fixture rates are supported and the target lies above lookahead within queue capacity",
             );
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn priming_tracks_callback_size_after_restart() {
         let (mut producer, consumer) =
-            stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
         let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn callback_larger_than_queue_capacity_reports_shortage_without_consuming() {
         let (mut producer, consumer) =
-            stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
         let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
         let (mut producer, consumer) =
-            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
         let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
@@ -342,8 +342,8 @@ mod tests {
         // Four seconds of actual PCM per case, advanced without real-time waits.
         // The separate eight-hour test covers only the control/queue model.
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
-            let (mut producer, consumer) =
-                stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+            let (mut producer, consumer) = fifo::stereo_queue(16384)
+                .expect("fixture queue capacity is a nonzero power of two");
             let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 4608).expect(
                 "fixture rates are supported and the target lies above lookahead within queue capacity",
             );
@@ -406,10 +406,10 @@ mod tests {
     #[test]
     fn startup_shortage_and_recovery_never_replay_old_samples() {
         let (_, undersized) =
-            stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
         assert!(OutputProcessor::new(undersized, 48_000, 48_000, 704).is_none());
         let (mut producer, consumer) =
-            stereo_queue(4096).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(4096).expect("fixture queue capacity is a nonzero power of two");
         let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );

@@ -1,23 +1,33 @@
 //! Property descriptions are shared by HasProperty, size, getter and setter.
 //! Allocations here run on the HAL control path, not its I/O callbacks.
-use super::host_boundary::{
-    BAD_OBJECT, BAD_SIZE, DEVICE, ILLEGAL, INPUT, OUTPUT, PLUGIN, UNKNOWN_PROPERTY, UNSPECIFIED,
-    guard, valid,
-};
+use super::host_boundary;
+use super::host_boundary::BAD_OBJECT;
+use super::host_boundary::BAD_SIZE;
+use super::host_boundary::DEVICE;
+use super::host_boundary::ILLEGAL;
+use super::host_boundary::INPUT;
+use super::host_boundary::OUTPUT;
+use super::host_boundary::PLUGIN;
+use super::host_boundary::UNKNOWN_PROPERTY;
+use super::host_boundary::UNSPECIFIED;
 use super::state;
 use super::system;
 use channelbridge_contract::{DEPLOYMENT, SUPPORTED_RATES};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::DriverRef;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::PropertyAddress;
+use channelbridge_hal_abi::RangedFormat;
+use channelbridge_hal_abi::StreamFormat;
+use channelbridge_hal_abi::ValueRange;
 use channelbridge_hal_abi::interface::CfRef;
-use channelbridge_hal_abi::{
-    DriverRef, ObjectId, PropertyAddress, RangedFormat, StreamFormat, ValueRange, fourcc,
-};
 use core::ffi::c_void;
 use core::ptr;
-use std::mem::size_of;
+use std::mem;
 
-const GLOBAL: u32 = fourcc(b"glob");
-const IN: u32 = fourcc(b"inpt");
-const OUT: u32 = fourcc(b"outp");
+const GLOBAL: u32 = hal_abi::fourcc(b"glob");
+const IN: u32 = hal_abi::fourcc(b"inpt");
+const OUT: u32 = hal_abi::fourcc(b"outp");
 const _: () = assert!(
     !env!("CARGO_PKG_VERSION").is_empty()
         && env!("CARGO_PKG_VERSION").len() <= channelbridge_contract::DRIVER_IDENTITY_MAX_BYTES
@@ -43,15 +53,15 @@ impl Value {
         match self {
             Self::Integer(_) | Self::TranslateUid => 4,
             Self::Number(_) => 8,
-            Self::Text(_) => size_of::<CfRef>() as u32,
+            Self::Text(_) => mem::size_of::<CfRef>() as u32,
             Self::Objects(objects) => objects.len() as u32 * 4,
-            Self::Rates => SUPPORTED_RATES.len() as u32 * size_of::<ValueRange>() as u32,
-            Self::Format => size_of::<StreamFormat>() as u32,
-            Self::Formats => SUPPORTED_RATES.len() as u32 * size_of::<RangedFormat>() as u32,
+            Self::Rates => SUPPORTED_RATES.len() as u32 * mem::size_of::<ValueRange>() as u32,
+            Self::Format => mem::size_of::<StreamFormat>() as u32,
+            Self::Formats => SUPPORTED_RATES.len() as u32 * mem::size_of::<RangedFormat>() as u32,
             Self::Layout => 12,
-            Self::Diagnostics => size_of::<CfRef>() as u32,
+            Self::Diagnostics => mem::size_of::<CfRef>() as u32,
             Self::CustomProperties => 24,
-            Self::Identity => size_of::<CfRef>() as u32,
+            Self::Identity => mem::size_of::<CfRef>() as u32,
         }
     }
 }
@@ -65,14 +75,14 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
     }
     let selector = address.selector;
     let stream = object == INPUT || object == OUTPUT;
-    if object == DEVICE && selector == fourcc(b"cust") && address.scope == GLOBAL {
+    if object == DEVICE && selector == hal_abi::fourcc(b"cust") && address.scope == GLOBAL {
         return Ok(Value::CustomProperties);
     }
-    if selector == fourcc(b"bcls") {
-        return Ok(Value::Integer(fourcc(b"aobj")));
+    if selector == hal_abi::fourcc(b"bcls") {
+        return Ok(Value::Integer(hal_abi::fourcc(b"aobj")));
     }
-    if selector == fourcc(b"clas") {
-        return Ok(Value::Integer(fourcc(if object == PLUGIN {
+    if selector == hal_abi::fourcc(b"clas") {
+        return Ok(Value::Integer(hal_abi::fourcc(if object == PLUGIN {
             b"aplg"
         } else if object == DEVICE {
             b"adev"
@@ -80,7 +90,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
             b"astr"
         })));
     }
-    if selector == fourcc(b"stdv") {
+    if selector == hal_abi::fourcc(b"stdv") {
         return Ok(Value::Integer(if object == PLUGIN {
             0
         } else if object == DEVICE {
@@ -89,7 +99,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
             DEVICE
         }));
     }
-    if selector == fourcc(b"lnam") {
+    if selector == hal_abi::fourcc(b"lnam") {
         return Ok(Value::Text(if object == PLUGIN {
             "ChannelBridge Rust"
         } else if object == INPUT {
@@ -100,10 +110,10 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
             DEPLOYMENT.device_name
         }));
     }
-    if selector == fourcc(b"lmak") {
+    if selector == hal_abi::fourcc(b"lmak") {
         return Ok(Value::Text("ChannelBridge"));
     }
-    if selector == fourcc(b"ownd") {
+    if selector == hal_abi::fourcc(b"ownd") {
         return Ok(Value::Objects(match object {
             PLUGIN => &[DEVICE],
             DEVICE if address.scope == IN => &[INPUT],
@@ -117,67 +127,79 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
             return Err(UNKNOWN_PROPERTY);
         }
         return match selector {
-            s if s == fourcc(b"piid") => Ok(Value::Text(DEPLOYMENT.driver_bundle_id)),
-            s if s == fourcc(b"dev#") => Ok(Value::Objects(&[DEVICE])),
-            s if [fourcc(b"box#"), fourcc(b"clk#")].contains(&s) => Ok(Value::Objects(&[])),
-            s if s == fourcc(b"uidd") => Ok(Value::TranslateUid),
-            s if s == fourcc(b"rsrc") => Ok(Value::Text("")),
+            s if s == hal_abi::fourcc(b"piid") => Ok(Value::Text(DEPLOYMENT.driver_bundle_id)),
+            s if s == hal_abi::fourcc(b"dev#") => Ok(Value::Objects(&[DEVICE])),
+            s if [hal_abi::fourcc(b"box#"), hal_abi::fourcc(b"clk#")].contains(&s) => {
+                Ok(Value::Objects(&[]))
+            }
+            s if s == hal_abi::fourcc(b"uidd") => Ok(Value::TranslateUid),
+            s if s == hal_abi::fourcc(b"rsrc") => Ok(Value::Text("")),
             _ => Err(UNKNOWN_PROPERTY),
         };
     }
     if stream {
         return match selector {
-            s if s == fourcc(b"sact") => Ok(Value::Integer(1)),
-            s if s == fourcc(b"sdir") => Ok(Value::Integer(u32::from(object == INPUT))),
-            s if s == fourcc(b"term") => Ok(Value::Integer(fourcc(if object == INPUT {
-                b"micr"
-            } else {
-                b"spkr"
-            }))),
-            s if s == fourcc(b"schn") => Ok(Value::Integer(1)),
-            s if s == fourcc(b"ltnc") => Ok(Value::Integer(0)),
-            s if [fourcc(b"sfmt"), fourcc(b"pft ")].contains(&s) => Ok(Value::Format),
-            s if [fourcc(b"sfma"), fourcc(b"pfta")].contains(&s) => Ok(Value::Formats),
+            s if s == hal_abi::fourcc(b"sact") => Ok(Value::Integer(1)),
+            s if s == hal_abi::fourcc(b"sdir") => Ok(Value::Integer(u32::from(object == INPUT))),
+            s if s == hal_abi::fourcc(b"term") => {
+                Ok(Value::Integer(hal_abi::fourcc(if object == INPUT {
+                    b"micr"
+                } else {
+                    b"spkr"
+                })))
+            }
+            s if s == hal_abi::fourcc(b"schn") => Ok(Value::Integer(1)),
+            s if s == hal_abi::fourcc(b"ltnc") => Ok(Value::Integer(0)),
+            s if [hal_abi::fourcc(b"sfmt"), hal_abi::fourcc(b"pft ")].contains(&s) => {
+                Ok(Value::Format)
+            }
+            s if [hal_abi::fourcc(b"sfma"), hal_abi::fourcc(b"pfta")].contains(&s) => {
+                Ok(Value::Formats)
+            }
             _ => Err(UNKNOWN_PROPERTY),
         };
     }
     match selector {
-        s if s == fourcc(b"uid ") => Ok(Value::Text(DEPLOYMENT.device_uid)),
-        s if s == fourcc(b"muid") => Ok(Value::Text("ChannelBridge_Rust_2ch")),
-        s if s == fourcc(b"tran") => Ok(Value::Integer(fourcc(b"virt"))),
-        s if s == fourcc(b"akin") => Ok(Value::Objects(&[DEVICE])),
-        s if s == fourcc(b"clkd") => Ok(Value::Integer(0)),
-        s if s == fourcc(b"livn") || s == fourcc(b"cstb") => Ok(Value::Integer(1)),
-        s if s == fourcc(b"goin") => Ok(Value::Integer(state::running())),
-        s if s == fourcc(b"dflt") => Ok(Value::Integer(u32::from(address.scope == IN))),
+        s if s == hal_abi::fourcc(b"uid ") => Ok(Value::Text(DEPLOYMENT.device_uid)),
+        s if s == hal_abi::fourcc(b"muid") => Ok(Value::Text("ChannelBridge_Rust_2ch")),
+        s if s == hal_abi::fourcc(b"tran") => Ok(Value::Integer(hal_abi::fourcc(b"virt"))),
+        s if s == hal_abi::fourcc(b"akin") => Ok(Value::Objects(&[DEVICE])),
+        s if s == hal_abi::fourcc(b"clkd") => Ok(Value::Integer(0)),
+        s if s == hal_abi::fourcc(b"livn") || s == hal_abi::fourcc(b"cstb") => {
+            Ok(Value::Integer(1))
+        }
+        s if s == hal_abi::fourcc(b"goin") => Ok(Value::Integer(state::running())),
+        s if s == hal_abi::fourcc(b"dflt") => Ok(Value::Integer(u32::from(address.scope == IN))),
         s if [
-            fourcc(b"sflt"),
-            fourcc(b"hidn"),
-            fourcc(b"resc"),
-            fourcc(b"resf"),
+            hal_abi::fourcc(b"sflt"),
+            hal_abi::fourcc(b"hidn"),
+            hal_abi::fourcc(b"resc"),
+            hal_abi::fourcc(b"resf"),
         ]
         .contains(&s) =>
         {
             Ok(Value::Integer(0))
         }
-        s if s == fourcc(b"ltnc") => Ok(Value::Integer(if address.scope == IN { 512 } else { 0 })),
-        s if s == fourcc(b"saft") => Ok(Value::Integer(64)),
-        s if s == fourcc(b"stm#") => Ok(Value::Objects(if address.scope == IN {
+        s if s == hal_abi::fourcc(b"ltnc") => {
+            Ok(Value::Integer(if address.scope == IN { 512 } else { 0 }))
+        }
+        s if s == hal_abi::fourcc(b"saft") => Ok(Value::Integer(64)),
+        s if s == hal_abi::fourcc(b"stm#") => Ok(Value::Objects(if address.scope == IN {
             &[INPUT]
         } else if address.scope == OUT {
             &[OUTPUT]
         } else {
             &[INPUT, OUTPUT]
         })),
-        s if s == fourcc(b"ctrl") => Ok(Value::Objects(&[])),
-        s if s == fourcc(b"nsrt") => Ok(Value::Number(f64::from(state::rate()))),
-        s if s == fourcc(b"nsr#") => Ok(Value::Rates),
-        s if s == fourcc(b"ring") => Ok(Value::Integer(512)),
-        s if s == fourcc(b"clok") => Ok(Value::Integer(fourcc(b"raww"))),
-        s if s == fourcc(b"dch2") => Ok(Value::Objects(&[1, 2])),
-        s if s == fourcc(b"srnd") => Ok(Value::Layout),
-        s if s == fourcc(b"capp") => Ok(Value::Text("")),
-        s if s == fourcc(b"cbst") => Ok(Value::Diagnostics),
+        s if s == hal_abi::fourcc(b"ctrl") => Ok(Value::Objects(&[])),
+        s if s == hal_abi::fourcc(b"nsrt") => Ok(Value::Number(f64::from(state::rate()))),
+        s if s == hal_abi::fourcc(b"nsr#") => Ok(Value::Rates),
+        s if s == hal_abi::fourcc(b"ring") => Ok(Value::Integer(512)),
+        s if s == hal_abi::fourcc(b"clok") => Ok(Value::Integer(hal_abi::fourcc(b"raww"))),
+        s if s == hal_abi::fourcc(b"dch2") => Ok(Value::Objects(&[1, 2])),
+        s if s == hal_abi::fourcc(b"srnd") => Ok(Value::Layout),
+        s if s == hal_abi::fourcc(b"capp") => Ok(Value::Text("")),
+        s if s == hal_abi::fourcc(b"cbst") => Ok(Value::Diagnostics),
         s if s == channelbridge_contract::DRIVER_IDENTITY_SELECTOR => Ok(Value::Identity),
         _ => Err(UNKNOWN_PROPERTY),
     }
@@ -185,16 +207,16 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
 
 #[must_use]
 fn settable(object: ObjectId, address: PropertyAddress) -> bool {
-    (object == DEVICE && address.selector == fourcc(b"nsrt"))
+    (object == DEVICE && address.selector == hal_abi::fourcc(b"nsrt"))
         || ([INPUT, OUTPUT].contains(&object)
-            && [fourcc(b"sfmt"), fourcc(b"pft ")].contains(&address.selector))
+            && [hal_abi::fourcc(b"sfmt"), hal_abi::fourcc(b"pft ")].contains(&address.selector))
 }
 
 #[must_use]
 fn format(rate: u32) -> StreamFormat {
     StreamFormat {
         sample_rate: f64::from(rate),
-        format_id: fourcc(b"lpcm"),
+        format_id: hal_abi::fourcc(b"lpcm"),
         format_flags: 9,
         bytes_per_packet: 8,
         frames_per_packet: 1,
@@ -209,7 +231,7 @@ unsafe fn address(
     driver: DriverRef,
     pointer: *const PropertyAddress,
 ) -> Result<PropertyAddress, i32> {
-    if !valid(driver) || pointer.is_null() {
+    if !host_boundary::valid(driver) || pointer.is_null() {
         return Err(BAD_OBJECT);
     }
     // SAFETY: HAL guarantees readable C ABI property addresses for this call.
@@ -223,7 +245,7 @@ pub(super) unsafe extern "C" fn has_property(
     pointer: *const PropertyAddress,
 ) -> u8 {
     let mut found = false;
-    let _ = guard(|| {
+    let _ = host_boundary::guard(|| {
         // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         found = unsafe { address(driver, pointer) }
             .and_then(|a| describe(object, a))
@@ -239,7 +261,7 @@ pub(super) unsafe extern "C" fn is_settable(
     pointer: *const PropertyAddress,
     output: *mut u8,
 ) -> i32 {
-    guard(|| {
+    host_boundary::guard(|| {
         if output.is_null() {
             return BAD_SIZE;
         }
@@ -265,7 +287,7 @@ pub(super) unsafe extern "C" fn data_size(
     _qualifier: *const c_void,
     output: *mut u32,
 ) -> i32 {
-    guard(|| {
+    host_boundary::guard(|| {
         if output.is_null() {
             return BAD_SIZE;
         }
@@ -337,11 +359,11 @@ fn bytes(value: Value) -> Vec<u8> {
             // AudioServerPlugInCustomPropertyInfo: CFData property list / CFString, no qualifier.
             // The host needs this descriptor to marshal our diagnostic property.
             for field in [
-                fourcc(b"cbst"),
-                fourcc(b"plst"),
+                hal_abi::fourcc(b"cbst"),
+                hal_abi::fourcc(b"plst"),
                 0,
                 channelbridge_contract::DRIVER_IDENTITY_SELECTOR,
-                fourcc(b"cfst"),
+                hal_abi::fourcc(b"cfst"),
                 0,
             ] {
                 result.extend(field.to_ne_bytes());
@@ -380,7 +402,7 @@ pub(super) unsafe extern "C" fn get_data(
     output_size: *mut u32,
     output: *mut c_void,
 ) -> i32 {
-    guard(|| {
+    host_boundary::guard(|| {
         if output_size.is_null() {
             return BAD_SIZE;
         }
@@ -423,7 +445,7 @@ pub(super) unsafe extern "C" fn get_data(
                 unsafe { output.cast::<CfRef>().write_unaligned(value) };
             }
             Value::TranslateUid => {
-                if qualifier_size as usize != size_of::<CfRef>() || qualifier.is_null() {
+                if qualifier_size as usize != mem::size_of::<CfRef>() || qualifier.is_null() {
                     return BAD_SIZE;
                 }
                 // SAFETY: HAL keeps the qualifier allocation readable for
@@ -468,7 +490,7 @@ pub(super) unsafe extern "C" fn set_data(
     size: u32,
     input: *const c_void,
 ) -> i32 {
-    guard(|| {
+    host_boundary::guard(|| {
         // SAFETY: HAL supplies a readable property address for this callback; address rejects null.
         let a = match unsafe { address(driver, pointer) } {
             Ok(a) => a,
@@ -490,7 +512,7 @@ pub(super) unsafe extern "C" fn set_data(
             // SAFETY: HAL keeps input readable for size bytes; the f64 size was checked above.
             unsafe { input.cast::<f64>().read_unaligned() }
         } else {
-            if size as usize != size_of::<StreamFormat>() {
+            if size as usize != mem::size_of::<StreamFormat>() {
                 return BAD_SIZE;
             }
             // SAFETY: HAL keeps input readable for size bytes; the StreamFormat size

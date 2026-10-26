@@ -1,5 +1,7 @@
 //! Read-only inventory: no microphone capture or default-device changes.
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+use std::error::Error;
+use std::time::Duration;
+fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args().nth(1).as_deref() == Some("--ready") {
         let identity = channelbridge_macos::diagnostics::read_target_driver_identity()?;
         let counters = channelbridge_macos::diagnostics::read_target_driver()?;
@@ -28,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let show_formats = std::env::args().nth(1).as_deref() == Some("--formats");
     if std::env::args().nth(1).as_deref() == Some("--loopback") {
-        let report = channelbridge_macos::loopback::run(std::time::Duration::from_secs(3))?;
+        let report = channelbridge_macos::loopback::run(Duration::from_secs(3))?;
         println!("{report:?}");
         if !report.passed() {
             return Err("synthetic loopback did not pass".into());

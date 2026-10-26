@@ -107,15 +107,17 @@ mod tests {
     use crate::capture::CaptureCallback;
     use crate::output::OutputCallback;
     use channelbridge_audio::capture_processor::CaptureProcessor;
-    use channelbridge_audio::fifo::stereo_queue;
-    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::fifo;
+    use channelbridge_audio::meters;
     use channelbridge_audio::output_processor::OutputProcessor;
     use channelbridge_audio::routing::AtomicRouting;
     use channelbridge_audio::routing::Mode;
     use channelbridge_audio::routing::Selection;
-    use channelbridge_hal_abi::{
-        AudioBuffer, AudioBufferList, AudioTimestamp, StreamFormat, fourcc,
-    };
+    use channelbridge_hal_abi as hal_abi;
+    use channelbridge_hal_abi::AudioBuffer;
+    use channelbridge_hal_abi::AudioBufferList;
+    use channelbridge_hal_abi::AudioTimestamp;
+    use channelbridge_hal_abi::StreamFormat;
     use std::sync::Arc;
 
     struct SyntheticStream {
@@ -134,14 +136,14 @@ mod tests {
             routing
                 .configure(selection, sending, false)
                 .expect("fixture selection is encodable and generation space is not exhausted");
-            let (meters, _) = meter_bank(2, 48_000)
+            let (meters, _) = meters::meter_bank(2, 48_000)
                 .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
             let (producer, consumer) =
-                stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+                fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
             let capture = CaptureCallback::new(
                 CaptureLayout::try_new(&[StreamFormat {
                     sample_rate: 48_000.0,
-                    format_id: fourcc(b"lpcm"),
+                    format_id: hal_abi::fourcc(b"lpcm"),
                     format_flags: 9,
                     bytes_per_packet: 8,
                     frames_per_packet: 1,

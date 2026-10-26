@@ -1,18 +1,19 @@
 //! Read-only control-path diagnostic access. Never opens a device or clears totals.
 use crate::devices;
 use channelbridge_contract::{DIAGNOSTICS_SELECTOR, DriverCounters};
+use std::error::Error;
 
-pub fn read_target_driver() -> Result<DriverCounters, Box<dyn std::error::Error>> {
+pub fn read_target_driver() -> Result<DriverCounters, Box<dyn Error>> {
     Ok(DriverCounters::decode(&read_property(
         DIAGNOSTICS_SELECTOR,
     )?)?)
 }
-pub fn read_target_driver_identity() -> Result<String, Box<dyn std::error::Error>> {
+pub fn read_target_driver_identity() -> Result<String, Box<dyn Error>> {
     decode_identity(&read_property(
         channelbridge_contract::DRIVER_IDENTITY_SELECTOR,
     )?)
 }
-fn decode_identity(bytes: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+fn decode_identity(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
     if bytes.is_empty()
         || bytes.len() > channelbridge_contract::DRIVER_IDENTITY_MAX_BYTES
         || !bytes.iter().all(u8::is_ascii_graphic)
@@ -21,7 +22,7 @@ fn decode_identity(bytes: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
     }
     Ok(std::str::from_utf8(bytes)?.to_owned())
 }
-fn read_property(selector: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn read_property(selector: u32) -> Result<Vec<u8>, Box<dyn Error>> {
     let inventory = devices::list()?;
     let mut selected = inventory
         .iter()
@@ -41,17 +42,16 @@ fn read_property(selector: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn identity_is_bounded_non_nul_ascii_and_preserves_prerelease() {
         assert_eq!(
-            decode_identity(b"0.5.0-alpha.1+build.2").expect(
+            super::decode_identity(b"0.5.0-alpha.1+build.2").expect(
                 "fixture is a nonempty UTF-8 package version within the identity size limit"
             ),
             "0.5.0-alpha.1+build.2"
         );
         for bytes in [b"".as_slice(), b"1.0\0", b"1.0\n", &[255], &[b'a'; 65]] {
-            assert!(decode_identity(bytes).is_err());
+            assert!(super::decode_identity(bytes).is_err());
         }
     }
 }

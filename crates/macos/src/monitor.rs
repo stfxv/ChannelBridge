@@ -6,7 +6,9 @@ use crate::devices;
 use crate::io::Direction;
 use crate::io::Handler;
 use crate::io::Registration;
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
 use std::error::Error;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -134,7 +136,7 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn Error>> {
     if matches.next().is_some() {
         return Err("duplicate Rust test UID".into());
     }
-    let formats = devices::streams(device.id, fourcc(b"inpt"))?
+    let formats = devices::streams(device.id, hal_abi::fourcc(b"inpt"))?
         .into_iter()
         .map(|stream| stream.virtual_format)
         .collect::<Vec<_>>();
@@ -161,7 +163,7 @@ mod tests {
     fn observer_distinguishes_channels_silence_invalid_samples_and_headers() {
         let format = StreamFormat {
             sample_rate: 48000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 8,
             frames_per_packet: 1,

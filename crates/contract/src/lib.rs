@@ -1,5 +1,8 @@
 //! Versioned app/driver identifiers. Never reuse the production UID in a test driver.
 #![forbid(unsafe_code)]
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DIAGNOSTICS_SELECTOR: u32 = u32::from_be_bytes(*b"cbst");
@@ -94,8 +97,8 @@ pub enum DiagnosticError {
     Version(u32),
     Reserved,
 }
-impl std::fmt::Display for DiagnosticError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DiagnosticError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Size(size) => write!(
                 formatter,
@@ -109,7 +112,7 @@ impl std::fmt::Display for DiagnosticError {
         }
     }
 }
-impl std::error::Error for DiagnosticError {}
+impl Error for DiagnosticError {}
 impl DriverCounters {
     /// Decode the HAL's native-endian protocol v1 bytes, never Rust struct layout.
     /// Counters are independently sampled cumulative totals, not an atomic epoch.

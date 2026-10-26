@@ -126,13 +126,13 @@ mod tests {
                 held_dbfs: Some(-6.0),
             }],
         };
-        assert!(channel_text(9, Some(&audio)).contains("−∞ dBFS"));
-        assert!(channel_text(9, Some(&audio)).contains("ピーク -6.0"));
-        assert!(channel_text(16, Some(&audio)).contains("未取得"));
-        assert!(channel_text(9, None).contains("未取得"));
+        assert!(super::channel_text(9, Some(&audio)).contains("−∞ dBFS"));
+        assert!(super::channel_text(9, Some(&audio)).contains("ピーク -6.0"));
+        assert!(super::channel_text(16, Some(&audio)).contains("未取得"));
+        assert!(super::channel_text(9, None).contains("未取得"));
         audio.levels[0].current_dbfs = Some(0.0);
-        assert!(channel_text(9, Some(&audio)).contains("0.0 dBFS"));
+        assert!(super::channel_text(9, Some(&audio)).contains("0.0 dBFS"));
         audio.levels[0].fresh = false;
-        assert!(channel_text(9, Some(&audio)).contains("未取得"));
+        assert!(super::channel_text(9, Some(&audio)).contains("未取得"));
     }
 }

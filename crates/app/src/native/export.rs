@@ -4,6 +4,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSButton, NSModalResponseOK, NSSavePanel, NSTextField};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, ns_string};
 use std::cell::RefCell;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 
@@ -52,7 +54,7 @@ impl Export {
             .URL()
             .filter(|url| url.isFileURL())
             .and_then(|url| url.path())
-            .map(|path| std::path::PathBuf::from(path.to_string()));
+            .map(|path| PathBuf::from(path.to_string()));
         let Some(path) = path else {
             self.label
                 .setStringValue(ns_string!("保存先を取得できません"));
@@ -80,7 +82,7 @@ impl Export {
                     &path, &snapshot, &metadata,
                 )
                 .map_err(|error| {
-                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    if error.kind() == ErrorKind::AlreadyExists {
                         "同名のファイルがあります".into()
                     } else {
                         format!("診断の保存に失敗しました: {error}")

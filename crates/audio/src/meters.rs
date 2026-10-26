@@ -1,7 +1,7 @@
 //! Single capture writer, independent read-only UI snapshots. A 50 ms history
 //! keeps a three-second peak even if the UI skips a refresh. Readers never clear
 //! shared peaks. All fields are atomic and all retry/work bounds are finite.
-use crate::frame::finite;
+use crate::frame;
 #[cfg(feature = "model-check")]
 use loom::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -135,7 +135,7 @@ impl MeterWriter {
         if tick < state.tick {
             return false;
         }
-        let peak = finite(peak).abs();
+        let peak = frame::finite(peak).abs();
         let sequence = match state.sequence.checked_add(2) {
             Some(v) => v,
             None => return false,
@@ -208,10 +208,9 @@ impl MeterReader {
 }
 #[cfg(all(test, not(feature = "model-check")))]
 mod tests {
-    use super::*;
     #[test]
     fn fresh_silence_is_distinct_from_missing_and_stale_callbacks() {
-        let (mut writer, reader) = meter_bank(1, 1000)
+        let (mut writer, reader) = super::meter_bank(1, 1000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         assert!(!reader.level(0, 0).fresh);
         assert!(writer.record(0, 0.0, 0));
@@ -223,7 +222,7 @@ mod tests {
     }
     #[test]
     fn readers_do_not_clear_peaks_and_old_ring_slots_expire() {
-        let (mut writer, reader) = meter_bank(10, 1000)
+        let (mut writer, reader) = super::meter_bank(10, 1000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         assert_eq!(reader.level(9, 100).held_peak, 0.0);
         writer.record(9, 0.8, 100);

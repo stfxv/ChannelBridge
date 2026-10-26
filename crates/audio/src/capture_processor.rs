@@ -5,7 +5,7 @@ use crate::StereoFrame;
 use crate::drift::ClockEstimator;
 use crate::drift::Observation;
 use crate::fifo::Producer;
-use crate::frame::finite;
+use crate::frame;
 use crate::meters::MeterWriter;
 use crate::routing::AtomicRouting;
 use crate::routing::Mode;
@@ -94,7 +94,7 @@ impl CaptureProcessor {
             if routing.overview || channel == selection.left() || channel == selection.right() {
                 let mut peak = 0_f32;
                 for frame in 0..frames {
-                    peak = peak.max(finite(sample(frame, channel)).abs());
+                    peak = peak.max(frame::finite(sample(frame, channel)).abs());
                 }
                 self.meters.record(channel, peak, now_tick);
             }
@@ -146,8 +146,8 @@ impl CaptureProcessor {
         }
         let output_frames = self.scratch.iter_mut().take(frames).enumerate();
         for (index, out) in output_frames {
-            let left = finite(sample(index, selection.left()));
-            let right = finite(sample(index, selection.right()));
+            let left = frame::finite(sample(index, selection.left()));
+            let right = frame::finite(sample(index, selection.right()));
             *out = match selection.mode() {
                 Mode::Mono => StereoFrame::new(left, left),
                 Mode::Stereo => StereoFrame::new(left, right),
@@ -179,18 +179,18 @@ impl CaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fifo::stereo_queue;
-    use crate::meters::meter_bank;
+    use crate::fifo;
+    use crate::meters;
     use crate::routing::Selection;
     #[test]
     fn preview_meters_remain_live_and_modes_keep_channels_coherent() {
         let selection = Selection::new(2, 3, Mode::Stereo, true)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (meters, reader) = meter_bank(3, 48_000)
+        let (meters, reader) = meters::meter_bank(3, 48_000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         let (producer, mut consumer) =
-            stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
         let mut capture = CaptureProcessor::new(
             Arc::clone(&routing),
             meters,
@@ -267,10 +267,10 @@ mod tests {
         routing
             .configure(valid, true, false)
             .expect("fixture selection is encodable and generation space is not exhausted");
-        let (meters, _) = meter_bank(2, 48_000)
+        let (meters, _) = meters::meter_bank(2, 48_000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         let (producer, mut consumer) =
-            stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
         let mut capture = CaptureProcessor::new(
             Arc::clone(&routing),
             meters,

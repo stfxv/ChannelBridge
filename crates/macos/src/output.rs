@@ -1,13 +1,13 @@
 //! Native virtual-output buffer adapter; no device registration or rate changes.
-use crate::buffers::stereo_output;
+use crate::buffers;
 use crate::source_clock::SourceClock;
 use channelbridge_audio::StereoFrame;
 use channelbridge_audio::output_processor::OutputProcessor;
 use channelbridge_audio::routing::AtomicRouting;
 use channelbridge_hal_abi::AudioBufferList;
 use std::cell::UnsafeCell;
+use std::panic;
 use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -142,7 +142,7 @@ impl OutputCallback {
         // exclusive output-buffer ownership does not depend on the DSP gate.
         // SAFETY: The process caller grants exclusive, live output storage for the
         // duration of this invocation.
-        let Ok(output) = (unsafe { stereo_output(output) }) else {
+        let Ok(output) = (unsafe { buffers::stereo_output(output) }) else {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return;
         };
@@ -159,7 +159,7 @@ impl OutputCallback {
         let _gate = Gate(&self.busy);
         // Defense in depth under panic=unwind. A panic permanently disables
         // processor reuse; the gate remains valid and releases during unwinding.
-        let result = catch_unwind(AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
             let route = self.routing.load();
             // SAFETY: this callback owns the state gate, including across unwind.
             let state = unsafe { &mut *self.state.get() };
@@ -235,7 +235,7 @@ impl OutputCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use channelbridge_audio::fifo::stereo_queue;
+    use channelbridge_audio::fifo;
     use channelbridge_audio::routing::Mode;
     use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::AudioBuffer;
@@ -249,7 +249,7 @@ mod tests {
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let (mut producer, consumer) =
-            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
         let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
@@ -309,7 +309,7 @@ mod tests {
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let (mut producer, consumer) =
-            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
         let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );

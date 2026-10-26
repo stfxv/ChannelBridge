@@ -4,7 +4,7 @@
 //! The table is shared across fractional phases; callback work uses only table
 //! interpolation and finite sums, with no allocation or trigonometric calls.
 use crate::StereoFrame;
-use crate::frame::finite;
+use crate::frame;
 
 const HALF_WIDTH: usize = 96;
 const DENSITY: usize = 512;
@@ -92,8 +92,8 @@ impl SincKernel {
         for index in 0..=2 * self.radius {
             let weight = self.weight(index as f64 - self.radius as f64 - fraction);
             let frame = sample(index);
-            left += f64::from(finite(frame.left)) * weight;
-            right += f64::from(finite(frame.right)) * weight;
+            left += f64::from(frame::finite(frame.left)) * weight;
+            right += f64::from(frame::finite(frame.right)) * weight;
             total += weight;
         }
         if total.abs() < 1e-12 {

@@ -4,7 +4,6 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -48,6 +47,8 @@ fn open_temporary(path: PathBuf) -> io::Result<(File, TemporaryFile)> {
 }
 
 pub fn save(path: &Path, config: &Config) -> io::Result<()> {
+    use std::io::Write;
+
     config
         .validate_selection()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
@@ -111,14 +112,14 @@ mod tests {
             muted: false,
             auto_send_on_resume: false,
         };
-        save(&path, &original).expect("original settings contain a device and nonzero channels in a writable fixture directory");
+        super::save(&path, &original).expect("original settings contain a device and nonzero channels in a writable fixture directory");
         let invalid = Config {
             left: 0,
             ..original.clone()
         };
-        assert!(save(&path, &invalid).is_err());
+        assert!(super::save(&path, &invalid).is_err());
         assert_eq!(
-            load(&path)
+            super::load(&path)
                 .expect("failed validation preserves the readable previously saved settings"),
             original
         );
@@ -133,7 +134,7 @@ mod tests {
             device_uid: "RME".into(),
             ..Config::default()
         };
-        assert!(save(&path, &config).is_err());
+        assert!(super::save(&path, &config).is_err());
         assert!(path.is_dir());
         assert_eq!(
             fs::read_dir(&dir.0)
@@ -148,12 +149,12 @@ mod tests {
         let dir = TestDirectory::new();
         let path = dir.0.join("settings.json");
         assert_eq!(
-            load(&path).expect("a missing settings file loads the default configuration"),
+            super::load(&path).expect("a missing settings file loads the default configuration"),
             Config::default()
         );
         fs::write(&path, b"broken json").expect("fixture owns this writable settings path");
         assert_eq!(
-            load(&path)
+            super::load(&path)
                 .expect_err("the fixture deliberately wrote malformed JSON")
                 .kind(),
             io::ErrorKind::InvalidData
@@ -166,7 +167,7 @@ mod tests {
         let path = dir.0.join("existing.tmp");
         fs::write(&path, b"owned by another writer")
             .expect("fixture owns this writable settings path");
-        assert!(open_temporary(path.clone()).is_err());
+        assert!(super::open_temporary(path.clone()).is_err());
         assert_eq!(
             fs::read(&path).expect("fixture file was written and remains present for inspection"),
             b"owned by another writer"

@@ -2,15 +2,17 @@
 #[cfg(target_os = "macos")]
 mod native {
     use channelbridge_audio::capture_processor::CaptureProcessor;
-    use channelbridge_audio::fifo::stereo_queue;
-    use channelbridge_audio::meters::meter_bank;
+    use channelbridge_audio::fifo;
+    use channelbridge_audio::meters;
     use channelbridge_audio::output_processor::OutputProcessor;
     use channelbridge_audio::routing::AtomicRouting;
     use channelbridge_audio::routing::Mode;
     use channelbridge_audio::routing::Selection;
-    use channelbridge_hal_abi::{
-        AudioBuffer, AudioBufferList, AudioTimestamp, StreamFormat, fourcc,
-    };
+    use channelbridge_hal_abi as hal_abi;
+    use channelbridge_hal_abi::AudioBuffer;
+    use channelbridge_hal_abi::AudioBufferList;
+    use channelbridge_hal_abi::AudioTimestamp;
+    use channelbridge_hal_abi::StreamFormat;
     use channelbridge_macos::buffers::CaptureLayout;
     use channelbridge_macos::capture::CaptureCallback;
     use channelbridge_macos::output::OutputCallback;
@@ -66,13 +68,13 @@ mod native {
         let selected = Selection::new(3, 7, Mode::Stereo, false)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selected));
-        let (writer, reader) = meter_bank(10, 24000000)
+        let (writer, reader) = meters::meter_bank(10, 24000000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
         let (producer, consumer) =
-            stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
         let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 40,
             frames_per_packet: 1,

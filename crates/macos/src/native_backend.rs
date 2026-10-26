@@ -8,7 +8,8 @@ use channelbridge_audio::routing::{Mode, Selection};
 use channelbridge_core::Config;
 use channelbridge_core::controller::Backend;
 use channelbridge_core::storage;
-use channelbridge_hal_abi::{StreamFormat, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::StreamFormat;
 use std::path::PathBuf;
 use std::time::Instant;
 #[link(name = "CoreAudio", kind = "framework")]
@@ -220,7 +221,9 @@ impl Backend for NativeBackend {
         })
     }
     fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
-        project_inventory(devices::list(), |id| devices::streams(id, fourcc(b"inpt")))
+        project_inventory(devices::list(), |id| {
+            devices::streams(id, hal_abi::fourcc(b"inpt"))
+        })
     }
 
     fn audio_view(
@@ -229,7 +232,10 @@ impl Backend for NativeBackend {
         config: &Config,
         overview: bool,
     ) -> Option<channelbridge_core::view::AudioView> {
-        use channelbridge_core::view::{AudioView, InputFormat, InputLevel, dbfs};
+        use channelbridge_core::view;
+        use channelbridge_core::view::AudioView;
+        use channelbridge_core::view::InputFormat;
+        use channelbridge_core::view::InputLevel;
         let selected = selection(config).ok()?;
         let channels = session
             .source_streams
@@ -253,8 +259,8 @@ impl Backend for NativeBackend {
                 InputLevel {
                     channel: channel as u32 + 1,
                     fresh: level.fresh,
-                    current_dbfs: dbfs(level.current),
-                    held_dbfs: dbfs(level.held_peak),
+                    current_dbfs: view::dbfs(level.current),
+                    held_dbfs: view::dbfs(level.held_peak),
                 }
             })
             .collect();
@@ -361,8 +367,8 @@ impl Backend for NativeBackend {
         config
             .validate_available(source.input_channels)
             .map_err(|error| format!("{error:?}"))?;
-        let streams =
-            devices::streams(source.id, fourcc(b"inpt")).map_err(|error| error.to_string())?;
+        let streams = devices::streams(source.id, hal_abi::fourcc(b"inpt"))
+            .map_err(|error| error.to_string())?;
         if streams.len() != session.source_streams.len()
             || !streams.iter().zip(&session.source_streams).all(|(a, b)| {
                 a.id == b.id
@@ -372,10 +378,11 @@ impl Backend for NativeBackend {
         {
             return Ok(false);
         }
-        let mut virtual_streams =
-            devices::streams(target.id, fourcc(b"inpt")).map_err(|error| error.to_string())?;
+        let mut virtual_streams = devices::streams(target.id, hal_abi::fourcc(b"inpt"))
+            .map_err(|error| error.to_string())?;
         virtual_streams.extend(
-            devices::streams(target.id, fourcc(b"outp")).map_err(|error| error.to_string())?,
+            devices::streams(target.id, hal_abi::fourcc(b"outp"))
+                .map_err(|error| error.to_string())?,
         );
         if virtual_streams.len() != session.virtual_streams.len()
             || !virtual_streams
@@ -462,7 +469,7 @@ mod tests {
             vec![Ok(input("input")), Err(devices::Error::Hal(-1))],
             vec![Err(devices::Error::Hal(-1)), Ok(input("input"))],
         ] {
-            let inventory = project_inventory(Ok(entries), |_| Ok(Vec::new())).expect(
+            let inventory = super::project_inventory(Ok(entries), |_| Ok(Vec::new())).expect(
                 "a successful device list preserves per-entry failures as partial inventory",
             );
             assert_eq!(inventory.choices.len(), 1);
@@ -476,7 +483,7 @@ mod tests {
     #[test]
     fn inventory_all_entry_failures_have_one_bounded_warning() {
         use channelbridge_core::view::InventoryCompleteness;
-        let inventory = project_inventory(
+        let inventory = super::project_inventory(
             Ok((0..100).map(|_| Err(devices::Error::Hal(-7))).collect()),
             |_| panic!("failed entries have no stream query"),
         )
@@ -491,7 +498,7 @@ mod tests {
     }
     #[test]
     fn inventory_whole_list_failure_remains_an_error() {
-        let error = project_inventory(Err(devices::Error::Hal(-8)), |_| {
+        let error = super::project_inventory(Err(devices::Error::Hal(-8)), |_| {
             panic!("failed list has no stream query")
         })
         .expect_err("the injected whole-list HAL error prevents inventory projection");
@@ -500,7 +507,7 @@ mod tests {
     #[test]
     fn inventory_stream_failure_keeps_definite_input_presence() {
         use channelbridge_core::view::InventoryCompleteness;
-        let inventory = project_inventory(Ok(vec![Ok(input("input"))]), |_| {
+        let inventory = super::project_inventory(Ok(vec![Ok(input("input"))]), |_| {
             Err(devices::Error::Hal(-9))
         })
         .expect("a stream query error stays on the listed input rather than failing inventory");
@@ -522,11 +529,11 @@ mod tests {
             rejected_write_frames: 0,
             invalid_timestamps: 0,
         };
-        assert!(initialized_driver(counters).is_err());
+        assert!(super::initialized_driver(counters).is_err());
         // A newly initialized device with no writer is compatible. Silence
         // and cumulative missing reads must not prevent recovery or startup.
         assert!(
-            initialized_driver(DriverCounters {
+            super::initialized_driver(DriverCounters {
                 generation: 1,
                 missing_read_frames: u64::MAX,
                 ..counters
@@ -542,7 +549,7 @@ mod tests {
             right: 16,
             ..Config::default()
         };
-        let selected = selection(&config).expect(
+        let selected = super::selection(&config).expect(
             "saved mono selection uses its valid left channel and ignores its stale right channel",
         );
         assert_eq!((selected.left(), selected.right()), (1, 1));
@@ -557,11 +564,11 @@ mod tests {
             channels_per_frame: 2,
             ..original
         };
-        assert!(!same_format(&original, &changed));
+        assert!(!super::same_format(&original, &changed));
         let changed = StreamFormat {
             bits_per_channel: 32,
             ..original
         };
-        assert!(!same_format(&original, &changed));
+        assert!(!super::same_format(&original, &changed));
     }
 }

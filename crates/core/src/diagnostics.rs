@@ -231,7 +231,7 @@ mod tests {
             }],
         });
         let destination = directory.join("report.json");
-        save_new(&destination, &snapshot)
+        super::save_new(&destination, &snapshot)
             .expect("bounded fixture report is published into its fresh writable directory");
         let bytes = fs::read(&destination)
             .expect("fixture file was written and remains present for inspection");
@@ -255,7 +255,7 @@ mod tests {
         assert!(json["driver"]["reading"].get("written_frames").is_none());
         assert!(!String::from_utf8_lossy(&bytes).contains("private-device-serial"));
         assert_eq!(
-            save_new(&destination, &snapshot)
+            super::save_new(&destination, &snapshot)
                 .expect_err(
                     "create-new publication rejects the report path already published above"
                 )
@@ -282,7 +282,7 @@ mod tests {
         snapshot.audio = None;
         snapshot.devices = Vec::new().into();
         let unavailable_path = directory.join("unavailable.json");
-        save_new_with_metadata(
+        super::save_new_with_metadata(
             &unavailable_path,
             &snapshot,
             &ReportMetadata {
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(unknown["metadata"]["application_bundle_version"], "0.5.1");
         assert_eq!(unknown["metadata"]["application_bundle_build"], "2");
         snapshot.error = Some("x".repeat(MAX_REPORT_BYTES));
-        assert!(save_new(&directory.join("oversize.json"), &snapshot).is_err());
+        assert!(super::save_new(&directory.join("oversize.json"), &snapshot).is_err());
         assert_eq!(
             fs::read_dir(&directory)
                 .expect("fixture directory remains present for cleanup inspection")

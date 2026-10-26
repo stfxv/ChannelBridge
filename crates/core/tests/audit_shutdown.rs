@@ -1,5 +1,6 @@
 use channelbridge_core::Command;
 use channelbridge_core::Config;
+use channelbridge_core::SystemEvent;
 use channelbridge_core::controller::Backend;
 use channelbridge_core::worker::Snapshot;
 use channelbridge_core::worker::Worker;
@@ -204,7 +205,7 @@ fn shutdown_closes_before_remaining_saves_and_preserves_independent_errors() {
         }
         worker.request_shutdown();
         worker
-            .send(Command::System(channelbridge_core::SystemEvent::Wake))
+            .send(Command::System(SystemEvent::Wake))
             .expect_err("request_shutdown seals admission before another command is sent");
         release
             .send(())
@@ -382,9 +383,7 @@ fn whole_inventory_failure_retains_choices_and_presence_history() {
         .expect("fixture threads do not panic while holding this mutex") =
         Err("whole list failed".into());
     worker
-        .send(Command::System(
-            channelbridge_core::SystemEvent::ScreensWake,
-        ))
+        .send(Command::System(SystemEvent::ScreensWake))
         .expect("worker admission is open and the fixture command sequence fits its queue");
     let failed = wait(&worker, |snapshot| {
         snapshot.device_error.as_deref() == Some("whole list failed")
@@ -394,9 +393,7 @@ fn whole_inventory_failure_retains_choices_and_presence_history() {
         .lock()
         .expect("fixture threads do not panic while holding this mutex") = Ok(complete);
     worker
-        .send(Command::System(
-            channelbridge_core::SystemEvent::ScreensWake,
-        ))
+        .send(Command::System(SystemEvent::ScreensWake))
         .expect("worker admission is open and the fixture command sequence fits its queue");
     let recovered = wait(&worker, |snapshot| snapshot.device_error.is_none());
     assert!(

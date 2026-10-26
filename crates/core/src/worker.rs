@@ -1029,7 +1029,7 @@ mod tests {
         let mut error = Some("prior error".into());
         let mut attempts = 0;
         assert_eq!(
-            finish_shutdown(
+            super::finish_shutdown(
                 &mut controller,
                 std::iter::once(held).chain(receiver.iter()),
                 &mut error,
@@ -1239,7 +1239,7 @@ mod tests {
                 device_uid: uid.into(),
                 ..controller.config().clone()
             };
-            apply_queued_command(
+            super::apply_queued_command(
                 &mut controller,
                 Command::Configure(config),
                 &mut error,
@@ -1253,7 +1253,7 @@ mod tests {
             auto_send_on_resume: true,
             ..controller.config().clone()
         };
-        apply_queued_command(
+        super::apply_queued_command(
             &mut controller,
             Command::Configure(config),
             &mut error,
@@ -1270,7 +1270,7 @@ mod tests {
             device_uid: "invalid".into(),
             ..controller.config().clone()
         };
-        apply_queued_command(
+        super::apply_queued_command(
             &mut controller,
             Command::Configure(config),
             &mut error,

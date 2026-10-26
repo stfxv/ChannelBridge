@@ -1,11 +1,18 @@
 //! Control-thread IOProc ownership and callback-context lifetime.
 use crate::capture::CaptureCallback;
 use crate::output::OutputCallback;
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, PropertyAddress, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::PropertyAddress;
+use std::error::Error;
 use std::ffi::c_void;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::marker::PhantomData;
+use std::panic;
 use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -103,7 +110,7 @@ struct Context<T> {
     failed: AtomicBool,
 }
 const CLOSED: usize = 1 << (usize::BITS - 1);
-const BAD_DEVICE: i32 = fourcc(b"!dev") as i32;
+const BAD_DEVICE: i32 = hal_abi::fourcc(b"!dev") as i32;
 struct Active<'invocation>(&'invocation AtomicUsize);
 impl Drop for Active<'_> {
     fn drop(&mut self) {
@@ -141,7 +148,7 @@ unsafe extern "C" fn dispatch<T: Handler>(
     if !context.failed.load(Ordering::Acquire)
         // SAFETY: HAL keeps all callback arguments live; admission keeps context owned
         // until return.
-        && catch_unwind(AssertUnwindSafe(|| unsafe {
+        && panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             context
                 .handler
                 .process(now, input, input_time, output, output_time);
@@ -167,8 +174,8 @@ pub struct IoError {
     pub context_retained: bool,
     pub disposition: IoDisposition,
 }
-impl std::fmt::Display for IoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for IoError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{} failed ({}, callback context retained: {})",
@@ -176,7 +183,7 @@ impl std::fmt::Display for IoError {
         )
     }
 }
-impl std::error::Error for IoError {}
+impl Error for IoError {}
 
 #[derive(Clone, Copy)]
 pub enum Direction {
@@ -261,18 +268,15 @@ impl<T: Handler> Registration<T> {
     }
     /// Disable this IOProc's streams in one direction before Start. This does
     /// not change global stream activity or other clients' stream usage.
-    pub fn disable_streams(
-        &mut self,
-        direction: Direction,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn disable_streams(&mut self, direction: Direction) -> Result<(), Box<dyn Error>> {
         if self.start_attempted {
             return Err("stream usage must be configured before Start".into());
         }
         let scope = match direction {
-            Direction::Input => fourcc(b"inpt"),
-            Direction::Output => fourcc(b"outp"),
+            Direction::Input => hal_abi::fourcc(b"inpt"),
+            Direction::Output => hal_abi::fourcc(b"outp"),
         };
-        let streams = crate::devices::property(self.device, fourcc(b"stm#"), scope)?;
+        let streams = crate::devices::property(self.device, hal_abi::fourcc(b"stm#"), scope)?;
         if streams.len() % 4 != 0 || streams.len() / 4 > 512 {
             return Err("invalid stream list".into());
         }
@@ -283,7 +287,7 @@ impl<T: Handler> Registration<T> {
         let (payload, size) = disabled_usage(self.id.expect("registered ID"), count)
             .ok_or("invalid stream usage size")?;
         let address = PropertyAddress {
-            selector: fourcc(b"suse"),
+            selector: hal_abi::fourcc(b"suse"),
             scope,
             element: 0,
         };
@@ -515,7 +519,7 @@ mod tests {
         // SAFETY: running retains the context through dispatch; BlockingHandler never
         // dereferences the null audio arguments.
         let callback = std::thread::spawn(move || unsafe {
-            dispatch::<BlockingHandler>(
+            super::dispatch::<BlockingHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -530,7 +534,7 @@ mod tests {
         // SAFETY: context retains the allocation; closed admission prevents calling the
         // handler with null audio arguments.
         unsafe {
-            dispatch::<BlockingHandler>(
+            super::dispatch::<BlockingHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -550,12 +554,12 @@ mod tests {
     }
     #[test]
     fn stream_usage_payload_includes_id_count_and_every_disabled_flag() {
-        let (payload, size) = disabled_usage(dispatch::<TestHandler>, 3)
+        let (payload, size) = super::disabled_usage(super::dispatch::<TestHandler>, 3)
             .expect("three streams fit the supported disabled-usage payload range");
         assert_eq!(size, 24);
         assert_eq!(
             payload[0],
-            dispatch::<TestHandler> as *const () as usize as u64
+            super::dispatch::<TestHandler> as *const () as usize as u64
         );
         let bytes =
             // SAFETY: The initialized word allocation covers size bytes and remains
@@ -570,8 +574,8 @@ mod tests {
             3
         );
         assert!(bytes[12..].iter().all(|byte| *byte == 0));
-        assert!(disabled_usage(dispatch::<TestHandler>, 0).is_none());
-        assert!(disabled_usage(dispatch::<TestHandler>, 513).is_none());
+        assert!(super::disabled_usage(super::dispatch::<TestHandler>, 0).is_none());
+        assert!(super::disabled_usage(super::dispatch::<TestHandler>, 513).is_none());
     }
     #[test]
     fn lifecycle_releases_only_after_deregistration_and_retains_on_errors() {
@@ -669,7 +673,7 @@ mod tests {
         // SAFETY: Failed teardown retained the boxed context; closed admission rejects
         // all null audio arguments.
         unsafe {
-            dispatch::<TestHandler>(
+            super::dispatch::<TestHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),

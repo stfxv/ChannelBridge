@@ -18,6 +18,9 @@ use objc2_foundation::{
     NSDate, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer,
     ns_string,
 };
+use std::path::Path;
+use std::time::Duration;
+use std::time::Instant;
 
 pub(super) struct Runtime {
     pub(super) menu: Option<crate::status_menu::StatusMenu>,
@@ -230,7 +233,7 @@ pub fn run() {
             eprintln!("設定保存先を取得できません: HOMEがありません");
             return;
         };
-        crate::settings::Settings::for_home(std::path::Path::new(&home))
+        crate::settings::Settings::for_home(Path::new(&home))
     };
     let screen = Screen::new(main, settings.error);
     let worker =
@@ -323,7 +326,7 @@ pub fn run() {
         NSRunLoop::mainRunLoop().addTimer_forMode(&timer, mode);
     }
     if smoke {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let ready = !delegate
                 .ivars()
@@ -338,10 +341,7 @@ pub fn run() {
             if ready && delegate.ivars().ticks.get() > 0 {
                 break;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "inventory timer timed out"
-            );
+            assert!(Instant::now() < deadline, "inventory timer timed out");
             NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
         }
         {
@@ -387,10 +387,7 @@ pub fn run() {
             .snapshot()
             .finished
         {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "worker shutdown timed out"
-            );
+            assert!(Instant::now() < deadline, "worker shutdown timed out");
             NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
         }
         timer.invalidate();

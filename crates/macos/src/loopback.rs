@@ -2,7 +2,11 @@
 //! No physical input, recording, network or default-device modification.
 use crate::devices::{self, Error};
 use channelbridge_contract::TEST_DEVICE_UID;
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, StreamFormat, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::StreamFormat;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -193,15 +197,19 @@ unsafe fn process(
 }
 
 fn verify_format(device: ObjectId, scope: u32) -> Result<(), Error> {
-    let streams = devices::property(device, fourcc(b"stm#"), scope)?;
+    let streams = devices::property(device, hal_abi::fourcc(b"stm#"), scope)?;
     let stream: [u8; 4] = streams.try_into().map_err(|_| Error::MalformedProperty)?;
-    let format = devices::property(u32::from_ne_bytes(stream), fourcc(b"sfmt"), fourcc(b"glob"))?;
+    let format = devices::property(
+        u32::from_ne_bytes(stream),
+        hal_abi::fourcc(b"sfmt"),
+        hal_abi::fourcc(b"glob"),
+    )?;
     if format.len() != size_of::<StreamFormat>() {
         return Err(Error::MalformedProperty);
     }
     // SAFETY: every bit pattern is valid for StreamFormat's integer/float fields.
     let format = unsafe { format.as_ptr().cast::<StreamFormat>().read_unaligned() };
-    if format.format_id != fourcc(b"lpcm")
+    if format.format_id != hal_abi::fourcc(b"lpcm")
         || format.format_flags != 9
         || format.channels_per_frame != 2
         || format.bits_per_channel != 32
@@ -230,8 +238,8 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
         }
     }
     let device = selected.ok_or("Rust test driver is not loaded")?;
-    verify_format(device.id, fourcc(b"inpt"))?;
-    verify_format(device.id, fourcc(b"outp"))?;
+    verify_format(device.id, hal_abi::fourcc(b"inpt"))?;
+    verify_format(device.id, hal_abi::fourcc(b"outp"))?;
     let mut registration = crate::io::Registration::try_new(device.id, Context::new(device.rate))?;
     let started = registration.start();
     if started.is_ok() {
@@ -269,7 +277,7 @@ mod tests {
         let mut outgoing = [0_f32; 128];
         let input_frames = incoming.chunks_exact_mut(2).enumerate();
         for (index, frame) in input_frames {
-            frame.copy_from_slice(&tone(128.0 + index as f64, context.rate));
+            frame.copy_from_slice(&super::tone(128.0 + index as f64, context.rate));
         }
         let input = AudioBufferList {
             count: 1,
@@ -288,7 +296,7 @@ mod tests {
             }],
         };
         // SAFETY: disjoint arrays, valid stereo buffers and live timestamps.
-        assert!(unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(unsafe { super::process(&context, &input, &time, &mut output, &time) });
         assert_eq!(context.compared.load(Ordering::Relaxed), 64);
         assert_eq!(context.mismatched.load(Ordering::Relaxed), 0);
         assert_eq!(incoming, outgoing);
@@ -304,11 +312,11 @@ mod tests {
             }],
         };
         // SAFETY: same valid storage; only test sample values changed.
-        assert!(unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(unsafe { super::process(&context, &input, &time, &mut output, &time) });
         assert_eq!(context.mismatched.load(Ordering::Relaxed), 1);
         assert_eq!(context.missing.load(Ordering::Relaxed), 1);
         output.buffers[0].byte_size = 511;
         // SAFETY: readable list; malformed size must be rejected before access.
-        assert!(!unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(!unsafe { super::process(&context, &input, &time, &mut output, &time) });
     }
 }

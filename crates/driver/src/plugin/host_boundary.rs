@@ -2,14 +2,19 @@
 #![allow(clippy::too_many_arguments)] // Apple's fixed C callback signatures.
 
 use super::{properties, state, system};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::ClientInfo;
+use channelbridge_hal_abi::DriverRef;
+use channelbridge_hal_abi::IoCycleInfo;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::UuidBytes;
 use channelbridge_hal_abi::interface::{
     CfRef, DRIVER_INTERFACE_UUID, DriverInterface, HostRef, IUNKNOWN_UUID, PLUGIN_TYPE_UUID,
 };
-use channelbridge_hal_abi::{ClientInfo, DriverRef, IoCycleInfo, ObjectId, UuidBytes, fourcc};
 use core::ffi::c_void;
 use core::ptr;
+use std::panic;
 use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -18,13 +23,13 @@ pub(super) const PLUGIN: u32 = 1;
 pub(super) const DEVICE: u32 = 2;
 pub(super) const INPUT: u32 = 3;
 pub(super) const OUTPUT: u32 = 4;
-pub(super) const BAD_OBJECT: i32 = fourcc(b"!obj") as i32;
-pub(super) const BAD_SIZE: i32 = fourcc(b"!siz") as i32;
-pub(super) const UNKNOWN_PROPERTY: i32 = fourcc(b"who?") as i32;
-pub(super) const ILLEGAL: i32 = fourcc(b"nope") as i32;
-pub(super) const NOT_READY: i32 = fourcc(b"nrdy") as i32;
-pub(super) const UNSUPPORTED: i32 = fourcc(b"unop") as i32;
-pub(super) const UNSPECIFIED: i32 = fourcc(b"what") as i32;
+pub(super) const BAD_OBJECT: i32 = hal_abi::fourcc(b"!obj") as i32;
+pub(super) const BAD_SIZE: i32 = hal_abi::fourcc(b"!siz") as i32;
+pub(super) const UNKNOWN_PROPERTY: i32 = hal_abi::fourcc(b"who?") as i32;
+pub(super) const ILLEGAL: i32 = hal_abi::fourcc(b"nope") as i32;
+pub(super) const NOT_READY: i32 = hal_abi::fourcc(b"nrdy") as i32;
+pub(super) const UNSUPPORTED: i32 = hal_abi::fourcc(b"unop") as i32;
+pub(super) const UNSPECIFIED: i32 = hal_abi::fourcc(b"what") as i32;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 static REFERENCES: AtomicU32 = AtomicU32::new(0);
@@ -36,7 +41,7 @@ pub(super) fn guard(body: impl FnOnce() -> i32) -> i32 {
     }
     // Defense in depth under panic=unwind. Normal failures return statuses;
     // FAILED prevents later callbacks from reusing partially mutated state.
-    match catch_unwind(AssertUnwindSafe(body)) {
+    match panic::catch_unwind(AssertUnwindSafe(body)) {
         Ok(status) => status,
         Err(_) => {
             FAILED.store(true, Ordering::Release);
@@ -328,7 +333,7 @@ unsafe extern "C" fn will_do_io(
         // SAFETY: HAL grants distinct writable Boolean output slots for this callback.
         unsafe {
             will.write(u8::from(
-                operation == fourcc(b"read") || operation == fourcc(b"rite"),
+                operation == hal_abi::fourcc(b"read") || operation == hal_abi::fourcc(b"rite"),
             ));
             in_place.write(1);
         }
@@ -372,11 +377,11 @@ unsafe extern "C" fn do_io(
         if frames > 4096 || cycle.is_null() || (main.is_null() && frames != 0) {
             return BAD_SIZE;
         }
-        let read = operation == fourcc(b"read");
+        let read = operation == hal_abi::fourcc(b"read");
         if (read && stream != INPUT) || (!read && stream != OUTPUT) {
             return BAD_OBJECT;
         }
-        if !read && operation != fourcc(b"rite") {
+        if !read && operation != hal_abi::fourcc(b"rite") {
             return UNSUPPORTED;
         }
         if frames == 0 {
