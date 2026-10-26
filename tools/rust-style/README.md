@@ -1,6 +1,7 @@
 Run `scripts/check-rust-style.sh check` from a checkout with stable Rust installed.
-The check scans every tracked Rust file under `crates`, including tests and examples,
-then runs stable rustfmt on the workspace and this helper. Individual source paths
+The check scans first-party Rust sources, tests, and examples under `crates` and
+this helper, including untracked files. It then runs stable rustfmt on the workspace
+and this helper. Individual source paths
 can be supplied after the mode. Missing inputs and parse errors fail with status 2;
 style findings fail with status 1. `inventory` prints findings without failing.
 

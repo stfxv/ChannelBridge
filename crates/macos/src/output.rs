@@ -245,7 +245,9 @@ mod tests {
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
         let generation = routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let (mut producer, consumer) =
@@ -305,7 +307,9 @@ mod tests {
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
         let generation = routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let (mut producer, consumer) =
@@ -357,7 +361,9 @@ mod tests {
             assert_eq!(samples[511], [0.0; 2]);
         }
         routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(callback.stats().peak, Some([0.0; 2]));
         let _ = producer.push_generation(&fresh, generation);
@@ -368,7 +374,9 @@ mod tests {
         }
         assert!((samples[511][0] + 0.25).abs() < 0.0001);
         routing
-            .configure(selection, false, false)
+            .configure(
+                selection, /* sending */ false, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
         // borrows its samples for this call.
@@ -378,7 +386,9 @@ mod tests {
         assert!(samples.iter().all(|frame| *frame == [0.0; 2]));
         assert_eq!(callback.stats().peak, Some([0.0; 2]));
         let restarted = routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let _ = producer.push_generation(&old, restarted);

@@ -134,7 +134,7 @@ mod tests {
                 .expect("fixture channel numbers are nonzero and within the selection encoding");
             let routing = Arc::new(AtomicRouting::new(selection));
             routing
-                .configure(selection, sending, false)
+                .configure(selection, sending, /* overview */ false)
                 .expect("fixture selection is encodable and generation space is not exhausted");
             let (meters, _) = meters::meter_bank(2, 48_000)
                 .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
@@ -434,7 +434,9 @@ mod tests {
         // restarted sender cannot inherit the previous generation's deadline.
         stream
             .routing
-            .configure(selection, false, false)
+            .configure(
+                selection, /* sending */ false, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         health.routed(
             false,
@@ -443,7 +445,9 @@ mod tests {
         );
         stream
             .routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         health.routed(
             true,

@@ -200,7 +200,7 @@ impl TestSession {
         let route = self.routing.load();
         let route_stopped = self
             .routing
-            .configure(route.selection, false, route.overview)
+            .configure(route.selection, /* sending */ false, route.overview)
             .is_some();
         // Attempt both cleanups even if one reports an error. Each owner retains
         // its own callback storage whenever successful teardown is unconfirmed.
@@ -443,7 +443,9 @@ mod tests {
         assert_eq!(prepared.capture.stats().callbacks, 0);
         let generation = prepared
             .routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         let mut incoming = [[0.25_f32, -0.5]; 512];

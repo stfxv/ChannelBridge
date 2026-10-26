@@ -271,7 +271,9 @@ mod tests {
         assert_eq!(reader.level(1, 64).current, 0.5);
         assert_eq!(consumer.available(), 0);
         let generation = routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         stamp.sample_time = 64.75;
@@ -318,8 +320,8 @@ mod tests {
                 Selection::new(3, 1, Mode::Stereo, false).expect(
                     "fixture channel numbers are nonzero and within the selection encoding",
                 ),
-                true,
-                false,
+                /* sending */ true,
+                /* overview */ false,
             )
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         stamp.sample_time = 128.0;
@@ -330,7 +332,9 @@ mod tests {
         assert_eq!(callback.stats().unavailable_channel, 1);
         assert_eq!(callback.stats().discontinuities, 0);
         routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         // A missing input timestamp reaches DSP clock validation, unlike a
         // null callback host-time descriptor rejected by the native adapter.

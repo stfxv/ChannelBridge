@@ -14,6 +14,7 @@ cargo test --locked --workspace
 cargo run --locked --quiet -p channelbridge-app -- --sleep-wake-smoke
 cargo run --locked --quiet -p channelbridge-audio --example realtime_allocations
 cargo run --locked --quiet -p channelbridge-macos --example native_realtime_allocations
+cargo clippy --locked -p channelbridge-audio --all-targets --features model-check -- -D warnings
 cargo test --locked -p channelbridge-audio --features model-check model_tests
 cargo test --locked --release -p channelbridge-audio response_grid -- --ignored
 clang -Wall -Wextra -Werror scripts/test_rust_abi.c -framework CoreAudio -o work/test/rust/abi

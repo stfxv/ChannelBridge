@@ -123,12 +123,12 @@ mod native {
         for index in 0..128_u64 {
             if index == 8 || index == 100 {
                 routing
-                    .configure(selected, true, false)
+                    .configure(selected, /* sending */ true, /* overview */ false)
                     .expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 16 {
                 routing
-                    .configure(selected, true, true)
+                    .configure(selected, /* sending */ true, /* overview */ true)
                     .expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 32 {
@@ -137,8 +137,8 @@ mod native {
                         Selection::new(3, 7, Mode::Stereo, true).expect(
                             "fixture channel numbers are nonzero and within the selection encoding",
                         ),
-                        true,
-                        true,
+                        /* sending */ true,
+                        /* overview */ true,
                     )
                     .expect(
                         "fixture channel numbers are nonzero and within the selection encoding",
@@ -146,12 +146,12 @@ mod native {
             }
             if index == 48 {
                 routing
-                    .configure(selected, true, true)
+                    .configure(selected, /* sending */ true, /* overview */ true)
                     .expect("fixture selection is encodable and generation space is not exhausted");
             }
             if index == 96 {
                 routing
-                    .configure(selected, false, true)
+                    .configure(selected, /* sending */ false, /* overview */ true)
                     .expect("fixture selection is encodable and generation space is not exhausted");
             }
             let time = AudioTimestamp {

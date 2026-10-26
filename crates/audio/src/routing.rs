@@ -193,17 +193,17 @@ mod tests {
         assert!(!mono.available(511));
         let settings = AtomicRouting::new(mono);
         let start = settings
-            .configure(mono, true, false)
+            .configure(mono, /* sending */ true, /* overview */ false)
             .expect("fixture selection is encodable and generation space is not exhausted");
         let stereo = Selection::new(10, 16, Mode::Stereo, true)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let changed = settings
-            .configure(stereo, true, true)
+            .configure(stereo, /* sending */ true, /* overview */ true)
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, start.generation);
         assert_eq!(settings.load().selection, stereo);
         let stop = settings
-            .configure(stereo, false, true)
+            .configure(stereo, /* sending */ false, /* overview */ true)
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert!(stop.generation > changed.generation);
         assert!(settings.advance_generation(changed).is_none());

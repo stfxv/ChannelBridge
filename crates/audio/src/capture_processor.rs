@@ -219,7 +219,9 @@ mod tests {
         assert_eq!(reader.level(1, 64).current, 0.3);
         assert_eq!(reader.level(2, 64).held_peak, 0.6);
         let started = routing
-            .configure(selection, true, false)
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
             .expect("fixture selection is encodable and generation space is not exhausted");
         let _ = capture.process(
             64,
@@ -242,7 +244,7 @@ mod tests {
         let mix = Selection::new(2, 3, Mode::Mix, false)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let changed = routing
-            .configure(mix, true, true)
+            .configure(mix, /* sending */ true, /* overview */ true)
             .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, started.generation);
         let _ = capture.process(
@@ -265,7 +267,7 @@ mod tests {
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(valid));
         routing
-            .configure(valid, true, false)
+            .configure(valid, /* sending */ true, /* overview */ false)
             .expect("fixture selection is encodable and generation space is not exhausted");
         let (meters, _) = meters::meter_bank(2, 48_000)
             .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
@@ -310,7 +312,7 @@ mod tests {
         let missing = Selection::new(3, 4, Mode::Stereo, false)
             .expect("fixture channel numbers are nonzero and within the selection encoding");
         routing
-            .configure(missing, true, false)
+            .configure(missing, /* sending */ true, /* overview */ false)
             .expect("fixture selection is encodable and generation space is not exhausted");
         let unavailable = capture.process(
             64,

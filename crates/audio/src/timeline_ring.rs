@@ -275,7 +275,7 @@ mod model_tests {
             assert!(slot.write(1, 3, StereoFrame::new(1.0, -1.0)));
             let writer_slot = slot.clone();
             let writer = thread::spawn(move || {
-                writer_slot.write(2, 7, StereoFrame::new(2.0, -2.0));
+                assert!(writer_slot.write(2, 7, StereoFrame::new(2.0, -2.0)));
             });
             let reader_slot = slot.clone();
             let reader = thread::spawn(move || {
