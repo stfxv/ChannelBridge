@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         path::PathBuf,
         time::{Duration, Instant},
     };
-    let worker = channelbridge_macos::backend::spawn_worker(
+    let worker = channelbridge_macos::native_backend::spawn_worker(
         PathBuf::from("work/read-only-settings.json"),
         channelbridge_core::Config::default(),
     )?;

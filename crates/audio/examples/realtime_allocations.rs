@@ -1,5 +1,5 @@
 //! Test-only allocator instrumentation; not linked into either product binary.
-use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output::OutputProcessor};
+use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output_processor::OutputProcessor};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},

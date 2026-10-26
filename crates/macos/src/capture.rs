@@ -5,7 +5,7 @@ use crate::{
 };
 use channelbridge_audio::{
     FramePosition,
-    capture::{CaptureProcessor, CaptureTimestamp},
+    capture_processor::{CaptureProcessor, CaptureTimestamp},
 };
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp};
 use std::{

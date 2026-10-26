@@ -1,9 +1,9 @@
 //! Native control backend for the selected deployment virtual microphone.
 use crate::{
     devices,
-    health::StreamHealth,
-    rate::{RateFollow, Status},
+    rate_follow::{RateFollow, Status},
     session::TestSession,
+    stream_health::StreamHealth,
 };
 use channelbridge_audio::routing::{Mode, Selection};
 use channelbridge_core::{Config, controller::Backend, storage};

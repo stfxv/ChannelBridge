@@ -1,6 +1,6 @@
 //! Native virtual-output buffer adapter; no device registration or rate changes.
 use crate::{buffers::stereo_output, source_clock::SourceClock};
-use channelbridge_audio::{StereoFrame, output::OutputProcessor, routing::AtomicRouting};
+use channelbridge_audio::{StereoFrame, output_processor::OutputProcessor, routing::AtomicRouting};
 use channelbridge_hal_abi::AudioBufferList;
 use std::{
     cell::UnsafeCell,

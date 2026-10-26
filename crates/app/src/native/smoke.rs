@@ -1,5 +1,8 @@
 //! Isolated non-visible checks; never request permission or open audio.
-use super::{AppDelegate, Runtime, screen::Screen};
+use super::{
+    application::{AppDelegate, Runtime},
+    screen::Screen,
+};
 use channelbridge_core::{CaptureState, Command, Config, controller::Backend, worker::Worker};
 use objc2::{DefinedClass, MainThreadMarker};
 use objc2_app_kit::{
@@ -207,7 +210,7 @@ pub(super) fn device_save(main: MainThreadMarker) {
     let destination = directory.join("settings.json");
     // A directory at the destination deliberately makes the commit fail.
     std::fs::create_dir_all(&destination).expect("fixture directory");
-    let worker = channelbridge_macos::backend::spawn_worker(
+    let worker = channelbridge_macos::native_backend::spawn_worker(
         destination.clone(),
         channelbridge_core::Config::default(),
     )

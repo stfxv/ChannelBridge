@@ -1,6 +1,9 @@
-use super::{BAD_OBJECT, DEVICE, ILLEGAL, NOT_READY, UNSPECIFIED, system};
+use super::{
+    host_boundary::{BAD_OBJECT, DEVICE, ILLEGAL, NOT_READY, UNSPECIFIED},
+    system,
+};
 use crate::DriverAudio;
-use channelbridge_audio::clock::{DeviceClock, ZeroTimestamp};
+use channelbridge_audio::device_clock::{DeviceClock, ZeroTimestamp};
 use channelbridge_contract::SUPPORTED_RATES;
 use channelbridge_hal_abi::interface::{HostInterface, HostRef};
 use std::{

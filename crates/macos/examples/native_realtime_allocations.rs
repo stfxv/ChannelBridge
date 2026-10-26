@@ -2,10 +2,10 @@
 #[cfg(target_os = "macos")]
 mod native {
     use channelbridge_audio::{
-        capture::CaptureProcessor,
+        capture_processor::CaptureProcessor,
         fifo::stereo_queue,
         meters::meter_bank,
-        output::OutputProcessor,
+        output_processor::OutputProcessor,
         routing::{AtomicRouting, Mode, Selection},
     };
     use channelbridge_hal_abi::{

@@ -102,10 +102,10 @@ mod tests {
     use super::*;
     use crate::{buffers::CaptureLayout, capture::CaptureCallback, output::OutputCallback};
     use channelbridge_audio::{
-        capture::CaptureProcessor,
+        capture_processor::CaptureProcessor,
         fifo::stereo_queue,
         meters::meter_bank,
-        output::OutputProcessor,
+        output_processor::OutputProcessor,
         routing::{AtomicRouting, Mode, Selection},
     };
     use channelbridge_hal_abi::{

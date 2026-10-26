@@ -28,13 +28,13 @@ pub mod source_clock;
 pub mod session;
 
 #[cfg(target_os = "macos")]
-pub mod rate;
+pub mod rate_follow;
 
 #[cfg(target_os = "macos")]
-pub mod backend;
+pub mod native_backend;
 
 #[cfg(target_os = "macos")]
-pub(crate) mod health;
+pub(crate) mod stream_health;
 
 #[cfg(target_os = "macos")]
 pub mod permission;

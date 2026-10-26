@@ -6,10 +6,10 @@ use crate::{
     output::OutputCallback,
 };
 use channelbridge_audio::{
-    capture::CaptureProcessor,
+    capture_processor::CaptureProcessor,
     fifo::stereo_queue,
     meters::{MeterReader, meter_bank},
-    output::OutputProcessor,
+    output_processor::OutputProcessor,
     routing::{AtomicRouting, Selection},
 };
 use channelbridge_hal_abi::{ObjectId, StreamFormat, fourcc};

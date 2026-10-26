@@ -1,6 +1,6 @@
 //! Release-mode output DSP wall-time probe. No devices or audio files are used.
 //! Excludes capture, HAL scheduling, driver, UI and construction costs.
-use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output::OutputProcessor};
+use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output_processor::OutputProcessor};
 use std::{hint::black_box, time::Instant};
 
 fn measure(rate: u32, block: usize) {

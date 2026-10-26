@@ -3,7 +3,7 @@
 use channelbridge_contract::TEST_DEVICE_UID;
 use channelbridge_macos::{
     devices, loopback,
-    rate::{RateFollow, Status},
+    rate_follow::{RateFollow, Status},
 };
 use std::{error::Error, thread, time::Duration};
 

@@ -1,7 +1,9 @@
 //! Property descriptions are shared by HasProperty, size, getter and setter.
 //! Allocations here run on the HAL control path, not its I/O callbacks.
-use super::*;
+use super::{host_boundary::*, state, system};
 use channelbridge_contract::{DEPLOYMENT, SUPPORTED_RATES};
+use channelbridge_hal_abi::{interface::*, *};
+use core::{ffi::c_void, ptr};
 use std::mem::size_of;
 
 const GLOBAL: u32 = fourcc(b"glob");
