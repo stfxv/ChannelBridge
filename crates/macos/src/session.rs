@@ -56,7 +56,7 @@ impl PreparedSession {
         selection: Selection,
         ticks_per_second: u64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let layout = CaptureLayout::new(input)?;
+        let layout = CaptureLayout::try_new(input)?;
         if !selection.available(layout.channels()) {
             return Err("selected input channel is unavailable".into());
         }
@@ -153,11 +153,11 @@ impl TestSession {
         }
         let mut virtual_streams = devices::streams(target, fourcc(b"inpt"))?;
         virtual_streams.extend(devices::streams(target, fourcc(b"outp"))?);
-        let mut capture = crate::io::Registration::new(source, prepared.capture)?;
+        let mut capture = crate::io::Registration::try_new(source, prepared.capture)?;
         if let Err(error) = capture.disable_streams(crate::io::Direction::Output) {
             return Err(failed_start(error, Some(capture), None));
         }
-        let mut output = match crate::io::Registration::new(target, prepared.output) {
+        let mut output = match crate::io::Registration::try_new(target, prepared.output) {
             Ok(output) => output,
             Err(error) => return Err(failed_start(error.into(), Some(capture), None)),
         };

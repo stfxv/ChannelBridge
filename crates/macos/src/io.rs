@@ -202,7 +202,7 @@ pub struct Registration<T: Handler> {
     _control_thread: PhantomData<Rc<()>>,
 }
 impl<T: Handler> Registration<T> {
-    pub fn new(device: ObjectId, handler: T) -> Result<Self, IoError> {
+    pub fn try_new(device: ObjectId, handler: T) -> Result<Self, IoError> {
         Self::with_api(device, handler, HAL)
     }
     fn with_api(device: ObjectId, handler: T, api: Api) -> Result<Self, IoError> {

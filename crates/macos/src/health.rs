@@ -129,7 +129,7 @@ mod tests {
             let (meters, _) = meter_bank(2, 48_000).unwrap();
             let (producer, consumer) = stereo_queue(8192).unwrap();
             let capture = CaptureCallback::new(
-                CaptureLayout::new(&[StreamFormat {
+                CaptureLayout::try_new(&[StreamFormat {
                     sample_rate: 48_000.0,
                     format_id: fourcc(b"lpcm"),
                     format_flags: 9,

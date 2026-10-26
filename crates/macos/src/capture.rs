@@ -211,7 +211,7 @@ mod tests {
         let (producer, mut consumer) = stereo_queue(1024).unwrap();
         let processor =
             CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000).unwrap();
-        let layout = CaptureLayout::new(&[StreamFormat {
+        let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48_000.0,
             format_id: fourcc(b"lpcm"),
             format_flags: 9,

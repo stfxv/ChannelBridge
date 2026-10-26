@@ -134,11 +134,11 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn Error>> {
         .into_iter()
         .map(|stream| stream.virtual_format)
         .collect::<Vec<_>>();
-    let layout = CaptureLayout::new(&formats)?;
+    let layout = CaptureLayout::try_new(&formats)?;
     if layout.channels() != 2 {
         return Err("test microphone must be stereo".into());
     }
-    let mut registration = Registration::new(device.id, Observer::new(layout))?;
+    let mut registration = Registration::try_new(device.id, Observer::new(layout))?;
     registration.disable_streams(Direction::Output)?;
     let started = registration.start();
     if started.is_ok() {
@@ -166,7 +166,7 @@ mod tests {
             bits_per_channel: 32,
             reserved: 0,
         };
-        let observer = Observer::new(CaptureLayout::new(&[format]).unwrap());
+        let observer = Observer::new(CaptureLayout::try_new(&[format]).unwrap());
         let mut samples = [0.0_f32, -0.0, -0.25, 0.5, f32::NAN, f32::INFINITY];
         let list = AudioBufferList {
             count: 1,

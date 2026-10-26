@@ -65,7 +65,7 @@ mod native {
         let routing = Arc::new(AtomicRouting::new(selected));
         let (writer, reader) = meter_bank(10, 24000000).unwrap();
         let (producer, consumer) = stereo_queue(8192).unwrap();
-        let layout = CaptureLayout::new(&[StreamFormat {
+        let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48000.0,
             format_id: fourcc(b"lpcm"),
             format_flags: 9,

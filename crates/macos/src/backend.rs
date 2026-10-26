@@ -22,7 +22,7 @@ pub struct NativeBackend {
     stream_health: StreamHealth,
 }
 impl NativeBackend {
-    pub fn new(settings: PathBuf) -> Result<Self, String> {
+    pub fn try_new(settings: PathBuf) -> Result<Self, String> {
         let frequency = unsafe { AudioGetHostClockFrequency() };
         if !frequency.is_finite()
             || frequency <= 0.0
@@ -45,7 +45,7 @@ pub fn spawn_worker(
     settings: PathBuf,
     config: Config,
 ) -> std::io::Result<channelbridge_core::worker::Worker> {
-    channelbridge_core::worker::Worker::spawn(config, move || NativeBackend::new(settings))
+    channelbridge_core::worker::Worker::spawn(config, move || NativeBackend::try_new(settings))
 }
 
 fn project_inventory(

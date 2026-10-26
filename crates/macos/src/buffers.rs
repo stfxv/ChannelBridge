@@ -10,7 +10,7 @@ pub struct CaptureLayout {
 impl CaptureLayout {
     /// Control-thread preparation. Native float32 client formats only; physical
     /// integer bit depth remains separate metadata and is converted by HAL.
-    pub fn new(formats: &[StreamFormat]) -> Result<Self, Error> {
+    pub fn try_new(formats: &[StreamFormat]) -> Result<Self, Error> {
         let mut channels = Vec::new();
         let mut total = 0;
         let mut rate = None;
@@ -254,7 +254,7 @@ mod tests {
     }
     #[test]
     fn multiple_streams_map_global_channels_and_reject_short_buffers() {
-        let layout = CaptureLayout::new(&[format(2), format(1)]).unwrap();
+        let layout = CaptureLayout::try_new(&[format(2), format(1)]).unwrap();
         let mut first = [1_f32, 2.0, 3.0, 4.0];
         let mut second = [5_f32, 6.0];
         let mut list = TwoBuffers {

@@ -221,7 +221,7 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
     let device = selected.ok_or("Rust test driver is not loaded")?;
     verify_format(device.id, fourcc(b"inpt"))?;
     verify_format(device.id, fourcc(b"outp"))?;
-    let mut registration = crate::io::Registration::new(device.id, Context::new(device.rate))?;
+    let mut registration = crate::io::Registration::try_new(device.id, Context::new(device.rate))?;
     let started = registration.start();
     if started.is_ok() {
         std::thread::sleep(duration);
