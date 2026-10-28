@@ -1,16 +1,26 @@
 //! Isolated non-visible checks; never request permission or open audio.
-use super::{AppDelegate, Runtime, screen::Screen};
-use channelbridge_core::{CaptureState, Command, Config, controller::Backend, worker::Worker};
+use super::application::AppDelegate;
+use super::application::Runtime;
+use super::screen::Screen;
+use channelbridge_core::CaptureState;
+use channelbridge_core::Command;
+use channelbridge_core::Config;
+use channelbridge_core::Mode;
+use channelbridge_core::controller::Backend;
+use channelbridge_core::worker::Worker;
 use objc2::{DefinedClass, MainThreadMarker};
 use objc2_app_kit::{
     NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceScreensDidWakeNotification,
     NSWorkspaceWillSleepNotification,
 };
 use objc2_foundation::{NSDate, NSNotificationName, NSRunLoop};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
 
 #[derive(Default)]
 struct AudioLifecycle {
@@ -94,7 +104,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
             .expect("sleep fixture command");
     };
     let wait = |label: &str, predicate: &dyn Fn(&channelbridge_core::worker::Snapshot) -> bool| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let snapshot = delegate
                 .ivars()
@@ -108,7 +118,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
                 return snapshot;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "{label}: state={:?}, opens={}, closes={}, error={:?}",
                 snapshot.state,
                 lifecycle.opens.load(Ordering::Acquire),
@@ -135,23 +145,27 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
     assert!(lifecycle.sending.load(Ordering::Acquire));
 
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceWillSleepNotification });
     let asleep = wait("sleep must release the audio session", &|_| {
         lifecycle.closes.load(Ordering::Acquire) == 1
     });
     assert!(asleep.wanted_send);
     // Screen notifications alone must not undo system-sleep suspension.
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceScreensDidWakeNotification });
     // Leave several controller ticks available: sleep must suppress reopening.
     NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.35));
     assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
     assert!(!lifecycle.sending.load(Ordering::Acquire));
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake must reopen and restore sending", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 2 && snapshot.state == CaptureState::Sending
     });
     assert!(lifecycle.sending.load(Ordering::Acquire));
 
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceWillSleepNotification });
     wait("second sleep must release the new session", &|_| {
         lifecycle.closes.load(Ordering::Acquire) == 2
@@ -160,6 +174,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     wait("stop while asleep must update intent", &|snapshot| {
         !snapshot.wanted_send
     });
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake after stop must restore preview only", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 3 && snapshot.state == CaptureState::Previewing
@@ -171,6 +186,7 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     wait("sending before wake-only", &|snapshot| {
         snapshot.state == CaptureState::Sending
     });
+    // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceDidWakeNotification });
     wait("wake-only must replace the stale session", &|snapshot| {
         lifecycle.opens.load(Ordering::Acquire) == 4 && snapshot.state == CaptureState::Sending
@@ -199,7 +215,7 @@ pub(super) fn device_save(main: MainThreadMarker) {
     let directory = std::env::temp_dir().join(format!(
         "channelbridge-ui-save-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
+        SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos()
@@ -207,25 +223,20 @@ pub(super) fn device_save(main: MainThreadMarker) {
     let destination = directory.join("settings.json");
     // A directory at the destination deliberately makes the commit fail.
     std::fs::create_dir_all(&destination).expect("fixture directory");
-    let worker = channelbridge_macos::backend::spawn_worker(
-        destination.clone(),
-        channelbridge_core::Config::default(),
-    )
-    .expect("fixture worker");
+    let worker =
+        channelbridge_macos::native_backend::spawn_worker(destination.clone(), Config::default())
+            .expect("fixture worker");
     let screen = Screen::new(main, None);
     screen.meters.smoke();
     screen.routing.smoke();
     let wait = |predicate: &dyn Fn(&channelbridge_core::worker::Snapshot) -> bool| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let snapshot = worker.snapshot();
             if predicate(&snapshot) {
                 return snapshot;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "device action timed out"
-            );
+            assert!(Instant::now() < deadline, "device action timed out");
             NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
         }
     };
@@ -239,7 +250,7 @@ pub(super) fn device_save(main: MainThreadMarker) {
     // Inventory changes while a menu is open are deferred until it closes.
     screen.menu_open.set(true);
     let mut absent = initial.clone();
-    absent.devices = std::sync::Arc::from([]);
+    absent.devices = Arc::from([]);
     screen.update(&absent);
     assert_eq!(screen.device_items.borrow()[0].0, uid);
     screen.menu_open.set(false);
@@ -273,7 +284,7 @@ pub(super) fn device_save(main: MainThreadMarker) {
     screen.select_routing(&screen.routing.mode, &worker);
     let stereo = wait(&|snapshot| snapshot.configuration_attempt == 3);
     screen.update(&stereo);
-    assert_eq!(stereo.config.mode, channelbridge_core::Mode::Stereo);
+    assert_eq!(stereo.config.mode, Mode::Stereo);
     assert!(screen.routing.right.isEnabled());
     if stereo.devices[0].channels >= 2 {
         screen.routing.left.selectItemAtIndex(2);
@@ -354,7 +365,7 @@ pub(super) fn device_save(main: MainThreadMarker) {
     );
     let mut recovery = muted.clone();
     recovery.wanted_send = true;
-    recovery.state = channelbridge_core::CaptureState::Recovering;
+    recovery.state = CaptureState::Recovering;
     screen
         .pending_attempt
         .set(Some(recovery.configuration_attempt));

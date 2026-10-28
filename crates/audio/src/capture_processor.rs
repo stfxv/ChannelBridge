@@ -1,13 +1,14 @@
 //! Capture-owned routing, dry input meters, clock observations and FIFO writes.
 //! The HAL adapter supplies validated float samples, not OS pointers.
-use crate::{
-    FramePosition, StereoFrame,
-    drift::{ClockEstimator, Observation},
-    fifo::Producer,
-    frame::finite,
-    meters::MeterWriter,
-    routing::{AtomicRouting, Mode},
-};
+use crate::FramePosition;
+use crate::StereoFrame;
+use crate::drift::ClockEstimator;
+use crate::drift::Observation;
+use crate::fifo::Producer;
+use crate::frame;
+use crate::meters::MeterWriter;
+use crate::routing::AtomicRouting;
+use crate::routing::Mode;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +17,7 @@ pub struct CaptureTimestamp {
     pub host_tick: u64,
 }
 #[derive(Clone, Copy, Debug, Default)]
+#[must_use]
 pub struct CaptureReport {
     pub written: usize,
     pub overflow: usize,
@@ -37,6 +39,10 @@ pub struct CaptureProcessor {
     pending_generation: bool,
 }
 impl CaptureProcessor {
+    /// Takes ownership of the meter writer and queue producer for one callback.
+    /// Returns `None` for a zero sample rate or tick frequency, or a failed
+    /// reservation of the 4096-frame scratch buffer.
+    #[must_use]
     pub fn new(
         routing: Arc<AtomicRouting>,
         meters: MeterWriter,
@@ -88,7 +94,7 @@ impl CaptureProcessor {
             if routing.overview || channel == selection.left() || channel == selection.right() {
                 let mut peak = 0_f32;
                 for frame in 0..frames {
-                    peak = peak.max(finite(sample(frame, channel)).abs());
+                    peak = peak.max(frame::finite(sample(frame, channel)).abs());
                 }
                 self.meters.record(channel, peak, now_tick);
             }
@@ -138,9 +144,10 @@ impl CaptureProcessor {
         {
             return report;
         }
-        for (index, out) in self.scratch.iter_mut().take(frames).enumerate() {
-            let left = finite(sample(index, selection.left()));
-            let right = finite(sample(index, selection.right()));
+        let output_frames = self.scratch.iter_mut().take(frames).enumerate();
+        for (index, out) in output_frames {
+            let left = frame::finite(sample(index, selection.left()));
+            let right = frame::finite(sample(index, selection.right()));
             *out = match selection.mode() {
                 Mode::Mono => StereoFrame::new(left, left),
                 Mode::Stereo => StereoFrame::new(left, right),
@@ -172,15 +179,28 @@ impl CaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{fifo::stereo_queue, meters::meter_bank, routing::Selection};
+    use crate::fifo;
+    use crate::meters;
+    use crate::routing::Selection;
     #[test]
     fn preview_meters_remain_live_and_modes_keep_channels_coherent() {
-        let selection = Selection::new(2, 3, Mode::Stereo, true).unwrap();
+        let selection = Selection::new(2, 3, Mode::Stereo, true)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (meters, reader) = meter_bank(3, 48_000).unwrap();
-        let (producer, mut consumer) = stereo_queue(1024).unwrap();
-        let mut capture =
-            CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000).unwrap();
+        let (meters, reader) = meters::meter_bank(3, 48_000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
+        let (producer, mut consumer) =
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let mut capture = CaptureProcessor::new(
+            Arc::clone(&routing),
+            meters,
+            producer,
+            48_000,
+            48_000,
+        )
+        .expect(
+            "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
+        );
         let empty = capture.process(0, 3, 0, None, |_, _| panic!("empty callback read"));
         assert!(!empty.format_changed && !empty.invalid_clock);
         assert_eq!(empty.generation, routing.load().generation);
@@ -198,8 +218,12 @@ mod tests {
         assert_eq!(report.written, 0);
         assert_eq!(reader.level(1, 64).current, 0.3);
         assert_eq!(reader.level(2, 64).held_peak, 0.6);
-        let started = routing.configure(selection, true, false).unwrap();
-        capture.process(
+        let started = routing
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
+            .expect("fixture selection is encodable and generation space is not exhausted");
+        let _ = capture.process(
             64,
             3,
             128,
@@ -217,10 +241,13 @@ mod tests {
             64
         );
         assert!(audio.iter().all(|f| *f == StereoFrame::new(0.3, -0.6)));
-        let mix = Selection::new(2, 3, Mode::Mix, false).unwrap();
-        let changed = routing.configure(mix, true, true).unwrap();
+        let mix = Selection::new(2, 3, Mode::Mix, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
+        let changed = routing
+            .configure(mix, /* sending */ true, /* overview */ true)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, started.generation);
-        capture.process(
+        let _ = capture.process(
             64,
             3,
             192,
@@ -230,20 +257,33 @@ mod tests {
             }),
             sample,
         );
-        consumer.pop_generation(&mut audio, changed.generation);
+        let _ = consumer.pop_generation(&mut audio, changed.generation);
         assert!(audio.iter().all(|f| *f == StereoFrame::new(-0.15, -0.15)));
         assert_eq!(reader.level(0, 192).current, 0.1);
     }
     #[test]
     fn missing_channels_do_not_fall_back_and_clock_gaps_retire_audio() {
-        let valid = Selection::new(1, 2, Mode::Mono, false).unwrap();
+        let valid = Selection::new(1, 2, Mode::Mono, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(valid));
-        routing.configure(valid, true, false).unwrap();
-        let (meters, _) = meter_bank(2, 48_000).unwrap();
-        let (producer, mut consumer) = stereo_queue(1024).unwrap();
-        let mut capture =
-            CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000).unwrap();
-        capture.process(
+        routing
+            .configure(valid, /* sending */ true, /* overview */ false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
+        let (meters, _) = meters::meter_bank(2, 48_000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
+        let (producer, mut consumer) =
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let mut capture = CaptureProcessor::new(
+            Arc::clone(&routing),
+            meters,
+            producer,
+            48_000,
+            48_000,
+        )
+        .expect(
+            "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
+        );
+        let _ = capture.process(
             64,
             2,
             64,
@@ -269,8 +309,11 @@ mod tests {
         let transferred = consumer.pop_generation(&mut audio, gap.generation);
         assert_eq!(transferred.discarded, 64);
         assert!(audio.iter().all(|f| *f == StereoFrame::new(-0.2, -0.2)));
-        let missing = Selection::new(3, 4, Mode::Stereo, false).unwrap();
-        routing.configure(missing, true, false).unwrap();
+        let missing = Selection::new(3, 4, Mode::Stereo, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
+        routing
+            .configure(missing, /* sending */ true, /* overview */ false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         let unavailable = capture.process(
             64,
             2,

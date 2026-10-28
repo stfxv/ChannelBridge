@@ -1,27 +1,34 @@
 //! Release-mode output DSP wall-time probe. No devices or audio files are used.
 //! Excludes capture, HAL scheduling, driver, UI and construction costs.
-use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output::OutputProcessor};
-use std::{hint::black_box, time::Instant};
+use channelbridge_audio::StereoFrame;
+use channelbridge_audio::fifo;
+use channelbridge_audio::output_processor::OutputProcessor;
+use std::hint;
+use std::time::Instant;
 
 fn measure(rate: u32, block: usize) {
     let target = (rate as usize * 16 / 1000).max(256);
     let capacity = (target + 8192).next_power_of_two();
-    let (mut producer, consumer) = stereo_queue(capacity).unwrap();
-    let mut processor = OutputProcessor::new(consumer, rate, rate, target).unwrap();
+    let (mut producer, consumer) =
+        fifo::stereo_queue(capacity).expect("fixture queue capacity is a nonzero power of two");
+    let mut processor = OutputProcessor::new(consumer, rate, rate, target).expect(
+        "fixture rates are supported and the target lies above lookahead within queue capacity",
+    );
     let prefill = vec![StereoFrame::new(0.25, -0.125); target];
     assert_eq!(producer.push(&prefill), target);
     let incoming = vec![StereoFrame::new(0.25, -0.125); block];
     let mut outgoing = vec![StereoFrame::SILENCE; block];
     let mut timings = Vec::with_capacity(256);
     for iteration in 0..320 {
-        assert_eq!(producer.push(black_box(&incoming)), block);
+        assert_eq!(producer.push(hint::black_box(&incoming)), block);
         let started = Instant::now();
-        let report = black_box(&mut processor).render(black_box(&mut outgoing), Some(1.0));
+        let report =
+            hint::black_box(&mut processor).render(hint::black_box(&mut outgoing), Some(1.0));
         let elapsed = started.elapsed().as_secs_f64() * 1_000_000.0;
         assert_eq!(report.produced, block);
         assert_eq!(report.missing, 0);
         assert!(!report.priming);
-        black_box(&outgoing);
+        hint::black_box(&outgoing);
         if iteration >= 64 {
             timings.push(elapsed);
         }

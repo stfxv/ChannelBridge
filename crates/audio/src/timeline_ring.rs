@@ -15,6 +15,7 @@ struct Slot {
 }
 
 impl Slot {
+    #[must_use]
     fn new() -> Self {
         Self {
             sequence: AtomicU64::new(0),
@@ -24,6 +25,7 @@ impl Slot {
         }
     }
 
+    #[must_use]
     fn write(&self, generation: u64, frame: u64, value: StereoFrame) -> bool {
         let sequence = self.sequence.load(Ordering::Acquire);
         if sequence & 1 != 0 {
@@ -57,6 +59,7 @@ impl Slot {
         true
     }
 
+    #[must_use]
     fn read(&self, generation: u64, frame: u64) -> Option<StereoFrame> {
         let before = self.sequence.load(Ordering::Acquire);
         if before & 1 != 0 {
@@ -74,6 +77,7 @@ impl Slot {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[must_use]
 pub struct Transfer {
     pub valid: usize,
     pub missing: usize,
@@ -85,6 +89,8 @@ pub struct TimelineRing {
 
 impl TimelineRing {
     /// Allocation belongs to initialization, never a HAL I/O callback.
+    /// Returns `None` outside `1..=1_048_576` frames or if storage reservation fails.
+    #[must_use]
     pub fn new(capacity_frames: usize) -> Option<Self> {
         if capacity_frames == 0 || capacity_frames > 1_048_576 {
             return None;
@@ -101,7 +107,8 @@ impl TimelineRing {
             result.missing = audio.len();
             return result;
         }
-        for (offset, value) in audio.iter().enumerate() {
+        let indexed_input_frames = audio.iter().enumerate();
+        for (offset, value) in indexed_input_frames {
             let Some(frame) = start
                 .get()
                 .checked_add(offset as u64)
@@ -129,7 +136,8 @@ impl TimelineRing {
         audio: &mut [StereoFrame],
     ) -> Transfer {
         let mut result = Transfer::default();
-        for (offset, out) in audio.iter_mut().enumerate() {
+        let indexed_output_frames = audio.iter_mut().enumerate();
+        for (offset, out) in indexed_output_frames {
             *out = StereoFrame::SILENCE;
             let frame = start
                 .get()
@@ -157,7 +165,8 @@ mod tests {
     use super::*;
 
     fn at(frame: u64) -> FramePosition {
-        FramePosition::from_integer(frame).unwrap()
+        FramePosition::from_integer(frame)
+            .expect("fixture frame index is within the representable timeline range")
     }
     fn tone() -> StereoFrame {
         StereoFrame::new(0.25, -0.5)
@@ -165,7 +174,8 @@ mod tests {
 
     #[test]
     fn shortage_preserves_available_frames_and_other_readers() {
-        let ring = TimelineRing::new(512).unwrap();
+        let ring =
+            TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
         assert_eq!(ring.write(1, at(128), &[tone(); 255]).valid, 255);
         let mut out = [StereoFrame::SILENCE; 256];
         assert_eq!(
@@ -178,34 +188,43 @@ mod tests {
         assert_eq!(out[0], tone());
         assert_eq!(out[254], tone());
         assert_eq!(out[255], StereoFrame::SILENCE);
-        ring.read(1, at(400), &mut out);
+        let _ = ring.read(1, at(400), &mut out);
         assert_eq!(ring.read(1, at(128), &mut out).valid, 255);
     }
 
     #[test]
     fn fractional_timestamps_do_not_spuriously_mute() {
-        let ring = TimelineRing::new(512).unwrap();
-        ring.write(
+        let ring =
+            TimelineRing::new(512).expect("fixture timeline capacity is a nonzero power of two");
+        let _ = ring.write(
             1,
-            FramePosition::from_sample_time(128.25).unwrap(),
+            FramePosition::from_sample_time(128.25)
+                .expect("fixture sample time is finite, nonnegative and within the timeline range"),
             &[tone(); 256],
         );
         let mut out = [StereoFrame::SILENCE; 256];
         assert_eq!(
-            ring.read(1, FramePosition::from_sample_time(128.5).unwrap(), &mut out)
-                .missing,
+            ring.read(
+                1,
+                FramePosition::from_sample_time(128.5).expect(
+                    "fixture sample time is finite, nonnegative and within the timeline range"
+                ),
+                &mut out
+            )
+            .missing,
             0
         );
     }
 
     #[test]
     fn wrap_and_restart_do_not_read_stale_audio() {
-        let ring = TimelineRing::new(4).unwrap();
-        ring.write(1, at(3), &[tone(); 4]);
+        let ring =
+            TimelineRing::new(4).expect("fixture timeline capacity is a nonzero power of two");
+        let _ = ring.write(1, at(3), &[tone(); 4]);
         let mut out = [StereoFrame::SILENCE; 4];
         assert_eq!(ring.read(1, at(3), &mut out).valid, 4);
         assert_eq!(ring.read(2, at(3), &mut out).valid, 0);
-        ring.write(1, at(7), &[tone(); 4]);
+        let _ = ring.write(1, at(7), &[tone(); 4]);
         assert_eq!(ring.read(1, at(3), &mut out).valid, 0);
         assert_eq!(ring.read(1, at(7), &mut out).valid, 4);
     }
@@ -213,14 +232,16 @@ mod tests {
     #[test]
     fn readers_cannot_observe_torn_stereo_frames() {
         use std::sync::Arc;
-        let ring = Arc::new(TimelineRing::new(64).unwrap());
+        let ring = Arc::new(
+            TimelineRing::new(64).expect("fixture timeline capacity is a nonzero power of two"),
+        );
         std::thread::scope(|scope| {
             for writer in 0..2 {
                 let ring = ring.clone();
                 scope.spawn(move || {
                     for n in 0..40_000 {
                         let v = (n + writer * 40_000 + 1) as f32;
-                        ring.write(1, at(0), &[StereoFrame::new(v, -v)]);
+                        let _ = ring.write(1, at(0), &[StereoFrame::new(v, -v)]);
                     }
                 });
             }
@@ -242,7 +263,8 @@ mod tests {
 #[cfg(all(test, feature = "model-check"))]
 mod model_tests {
     use super::*;
-    use loom::{sync::Arc, thread};
+    use loom::sync::Arc;
+    use loom::thread;
 
     #[test]
     fn publication_never_mixes_old_tags_with_new_samples() {
@@ -253,7 +275,7 @@ mod model_tests {
             assert!(slot.write(1, 3, StereoFrame::new(1.0, -1.0)));
             let writer_slot = slot.clone();
             let writer = thread::spawn(move || {
-                writer_slot.write(2, 7, StereoFrame::new(2.0, -2.0));
+                assert!(writer_slot.write(2, 7, StereoFrame::new(2.0, -2.0)));
             });
             let reader_slot = slot.clone();
             let reader = thread::spawn(move || {
@@ -261,8 +283,12 @@ mod model_tests {
                     assert_eq!(frame, StereoFrame::new(1.0, -1.0));
                 }
             });
-            writer.join().unwrap();
-            reader.join().unwrap();
+            writer
+                .join()
+                .expect("fixture worker completes without panic");
+            reader
+                .join()
+                .expect("fixture worker completes without panic");
         });
     }
 }

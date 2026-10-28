@@ -1,9 +1,10 @@
 //! Read-only input meters: dry input levels do not depend on sending or mute.
-use channelbridge_core::{
-    Config, Mode,
-    view::{AudioView, InputLevel},
-};
-use objc2::{MainThreadMarker, rc::Retained};
+use channelbridge_core::Config;
+use channelbridge_core::Mode;
+use channelbridge_core::view::AudioView;
+use channelbridge_core::view::InputLevel;
+use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -87,11 +88,13 @@ impl InputMeters {
         assert!(self.right.isHidden());
     }
 }
+#[must_use]
 fn decibels(value: Option<f32>) -> String {
     value
         .filter(|value| value.is_finite())
         .map_or_else(|| "−∞".into(), |value| format!("{value:.1}"))
 }
+#[must_use]
 pub(crate) fn channel_text(channel: u32, audio: Option<&AudioView>) -> String {
     match audio.and_then(|audio| audio.levels.iter().find(|level| level.channel == channel)) {
         Some(InputLevel {
@@ -123,13 +126,13 @@ mod tests {
                 held_dbfs: Some(-6.0),
             }],
         };
-        assert!(channel_text(9, Some(&audio)).contains("−∞ dBFS"));
-        assert!(channel_text(9, Some(&audio)).contains("ピーク -6.0"));
-        assert!(channel_text(16, Some(&audio)).contains("未取得"));
-        assert!(channel_text(9, None).contains("未取得"));
+        assert!(super::channel_text(9, Some(&audio)).contains("−∞ dBFS"));
+        assert!(super::channel_text(9, Some(&audio)).contains("ピーク -6.0"));
+        assert!(super::channel_text(16, Some(&audio)).contains("未取得"));
+        assert!(super::channel_text(9, None).contains("未取得"));
         audio.levels[0].current_dbfs = Some(0.0);
-        assert!(channel_text(9, Some(&audio)).contains("0.0 dBFS"));
+        assert!(super::channel_text(9, Some(&audio)).contains("0.0 dBFS"));
         audio.levels[0].fresh = false;
-        assert!(channel_text(9, Some(&audio)).contains("未取得"));
+        assert!(super::channel_text(9, Some(&audio)).contains("未取得"));
     }
 }

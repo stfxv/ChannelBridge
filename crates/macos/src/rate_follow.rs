@@ -1,10 +1,11 @@
 //! Nonblocking control-thread rate negotiation for the separate test device.
 use crate::devices::{self, Error};
-use channelbridge_hal_abi::{ObjectId, PropertyAddress, fourcc};
-use std::{
-    ffi::c_void,
-    time::{Duration, Instant},
-};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::PropertyAddress;
+use std::ffi::c_void;
+use std::time::Duration;
+use std::time::Instant;
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioObjectSetPropertyData(
@@ -27,9 +28,10 @@ pub struct RateFollow {
     deadline: Instant,
 }
 fn nominal_rate(device: ObjectId) -> Result<f64, Error> {
-    let bytes: [u8; 8] = devices::property(device, fourcc(b"nsrt"), fourcc(b"glob"))?
-        .try_into()
-        .map_err(|_| Error::MalformedProperty)?;
+    let bytes: [u8; 8] =
+        devices::property(device, hal_abi::fourcc(b"nsrt"), hal_abi::fourcc(b"glob"))?
+            .try_into()
+            .map_err(|_| Error::MalformedProperty)?;
     let rate = f64::from_ne_bytes(bytes);
     if !rate.is_finite() || rate <= 0.0 {
         return Err(Error::MalformedProperty);
@@ -37,6 +39,7 @@ fn nominal_rate(device: ObjectId) -> Result<f64, Error> {
     Ok(rate)
 }
 impl RateFollow {
+    #[must_use]
     pub fn desired_rate(&self) -> u32 {
         self.desired
     }
@@ -86,8 +89,8 @@ impl RateFollow {
         }
         if nominal_rate(device.id)? != f64::from(desired) {
             let address = PropertyAddress {
-                selector: fourcc(b"nsrt"),
-                scope: fourcc(b"glob"),
+                selector: hal_abi::fourcc(b"nsrt"),
+                scope: hal_abi::fourcc(b"glob"),
                 element: 0,
             };
             let rate = f64::from(desired);
@@ -114,8 +117,8 @@ impl RateFollow {
     }
     pub fn poll(&self) -> Result<Status, Box<dyn std::error::Error>> {
         let nominal = nominal_rate(self.device)?;
-        let input = devices::streams(self.device, fourcc(b"inpt"))?;
-        let output = devices::streams(self.device, fourcc(b"outp"))?;
+        let input = devices::streams(self.device, hal_abi::fourcc(b"inpt"))?;
+        let output = devices::streams(self.device, hal_abi::fourcc(b"outp"))?;
         if input.len() != 1 || output.len() != 1 {
             return Err("unexpected virtual stream layout".into());
         }
@@ -138,6 +141,7 @@ impl RateFollow {
         Ok(Status::Pending)
     }
 }
+#[must_use]
 fn confirmed(desired: u32, nominal: f64, stream_rates: &[f64]) -> bool {
     nominal == f64::from(desired)
         && stream_rates.len() >= 4
@@ -145,17 +149,16 @@ fn confirmed(desired: u32, nominal: f64, stream_rates: &[f64]) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn nominal_change_is_not_ready_until_both_stream_formats_follow() {
-        assert!(!confirmed(96000, 96000.0, &[48000.0; 4]));
-        assert!(!confirmed(96000, 48000.0, &[96000.0; 4]));
-        assert!(!confirmed(
+        assert!(!super::confirmed(96000, 96000.0, &[48000.0; 4]));
+        assert!(!super::confirmed(96000, 48000.0, &[96000.0; 4]));
+        assert!(!super::confirmed(
             96000,
             96000.0,
             &[96000.0, 96000.0, 96000.0, f64::NAN]
         ));
-        assert!(!confirmed(96000, 96000.0, &[]));
-        assert!(confirmed(96000, 96000.0, &[96000.0; 4]));
+        assert!(!super::confirmed(96000, 96000.0, &[]));
+        assert!(super::confirmed(96000, 96000.0, &[96000.0; 4]));
     }
 }

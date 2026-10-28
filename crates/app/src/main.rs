@@ -6,7 +6,7 @@ mod native;
 mod overview;
 #[cfg(target_os = "macos")]
 mod routing_controls;
-mod startup;
+mod settings;
 #[cfg(target_os = "macos")]
 mod status_menu;
 

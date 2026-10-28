@@ -1,12 +1,15 @@
 //! Explicit diagnostic export on a non-audio thread. No automatic recording.
 use crate::worker::Snapshot;
 use serde::Serialize;
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub const MAX_REPORT_BYTES: usize = 64 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -20,9 +23,9 @@ pub struct ReportMetadata {
 }
 
 #[derive(Serialize)]
-struct Report<'a> {
+struct Report<'report> {
     schema_version: u32,
-    metadata: &'a ReportMetadata,
+    metadata: &'report ReportMetadata,
     state: crate::CaptureState,
     wanted_send: bool,
     finished: bool,
@@ -32,21 +35,21 @@ struct Report<'a> {
     muted: bool,
     auto_send_on_resume: bool,
     retained_io_contexts: u64,
-    session_counters: &'a Option<crate::view::AudioDiagnostics>,
-    driver: &'a Option<crate::view::DriverDiagnostics>,
+    session_counters: &'report Option<crate::view::AudioDiagnostics>,
+    driver: &'report Option<crate::view::DriverDiagnostics>,
     /// Active-session formats and dry levels; null without a session.
-    audio: &'a Option<crate::view::AudioView>,
+    audio: &'report Option<crate::view::AudioView>,
     /// Most recent device inventory, distinct from active-session evidence.
-    selected_input_inventory: Option<InputInventory<'a>>,
-    control_history: &'a [crate::view::ControlEvent],
-    error: &'a Option<String>,
-    command_error: &'a Option<String>,
+    selected_input_inventory: Option<InputInventory<'report>>,
+    control_history: &'report [crate::view::ControlEvent],
+    error: &'report Option<String>,
+    command_error: &'report Option<String>,
 }
 #[derive(Serialize)]
-struct InputInventory<'a> {
+struct InputInventory<'inventory> {
     nominal_rate: f64,
-    physical_inputs: &'a [crate::view::InputFormat],
-    format_error: &'a Option<String>,
+    physical_inputs: &'inventory [crate::view::InputFormat],
+    format_error: &'inventory Option<String>,
 }
 struct LimitedBuffer(Vec<u8>);
 impl Write for LimitedBuffer {
@@ -144,7 +147,9 @@ pub fn save_new_with_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, controller::Backend, worker::Worker};
+    use crate::Config;
+    use crate::controller::Backend;
+    use crate::worker::Worker;
     struct Empty;
     impl Backend for Empty {
         type Pending = ();
@@ -178,7 +183,7 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir(&directory).unwrap();
+        fs::create_dir(&directory).expect("fixture owns a writable unique temporary directory");
         let worker = Worker::spawn(
             Config {
                 device_uid: "private-device-serial".into(),
@@ -186,9 +191,11 @@ mod tests {
             },
             || Ok(Empty),
         )
-        .unwrap();
+        .expect("fixture worker thread can be created with its fake backend");
         let mut snapshot = worker.snapshot();
-        worker.join().unwrap();
+        worker
+            .join()
+            .expect("fixture worker completes without panic");
         snapshot.retained_io_contexts = 3;
         snapshot.config.auto_send_on_resume = true;
         snapshot.driver_diagnostics = Some(crate::view::DriverDiagnostics {
@@ -224,9 +231,12 @@ mod tests {
             }],
         });
         let destination = directory.join("report.json");
-        save_new(&destination, &snapshot).unwrap();
-        let bytes = fs::read(&destination).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        super::save_new(&destination, &snapshot)
+            .expect("bounded fixture report is published into its fresh writable directory");
+        let bytes = fs::read(&destination)
+            .expect("fixture file was written and remains present for inspection");
+        let json: serde_json::Value = serde_json::from_slice(&bytes)
+            .expect("published report bytes conform to the diagnostic JSON schema");
         assert!(json["session_counters"].is_null());
         assert_eq!(json["retained_io_contexts"], 3);
         assert_eq!(json["auto_send_on_resume"], true);
@@ -245,22 +255,34 @@ mod tests {
         assert!(json["driver"]["reading"].get("written_frames").is_none());
         assert!(!String::from_utf8_lossy(&bytes).contains("private-device-serial"));
         assert_eq!(
-            save_new(&destination, &snapshot).unwrap_err().kind(),
+            super::save_new(&destination, &snapshot)
+                .expect_err(
+                    "create-new publication rejects the report path already published above"
+                )
+                .kind(),
             io::ErrorKind::AlreadyExists
         );
-        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        assert_eq!(
+            fs::read(&destination)
+                .expect("fixture file was written and remains present for inspection"),
+            bytes
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                fs::metadata(&destination)
+                    .expect("published fixture report remains present for permission inspection")
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o600
             );
         }
         snapshot.audio = None;
         snapshot.devices = Vec::new().into();
         let unavailable_path = directory.join("unavailable.json");
-        save_new_with_metadata(
+        super::save_new_with_metadata(
             &unavailable_path,
             &snapshot,
             &ReportMetadata {
@@ -269,9 +291,12 @@ mod tests {
                 application_bundle_build: Some("2".into()),
             },
         )
-        .unwrap();
-        let unknown: serde_json::Value =
-            serde_json::from_slice(&fs::read(unavailable_path).unwrap()).unwrap();
+        .expect("bounded metadata report is published at a fresh path in the fixture directory");
+        let unknown: serde_json::Value = serde_json::from_slice(
+            &fs::read(unavailable_path)
+                .expect("fixture file was written and remains present for inspection"),
+        )
+        .expect("published report bytes conform to the diagnostic JSON schema");
         assert!(unknown["audio"].is_null());
         assert!(unknown["selected_input_inventory"].is_null());
         assert_eq!(
@@ -281,8 +306,14 @@ mod tests {
         assert_eq!(unknown["metadata"]["application_bundle_version"], "0.5.1");
         assert_eq!(unknown["metadata"]["application_bundle_build"], "2");
         snapshot.error = Some("x".repeat(MAX_REPORT_BYTES));
-        assert!(save_new(&directory.join("oversize.json"), &snapshot).is_err());
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
-        fs::remove_dir_all(directory).unwrap();
+        assert!(super::save_new(&directory.join("oversize.json"), &snapshot).is_err());
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("fixture directory remains present for cleanup inspection")
+                .count(),
+            2
+        );
+        fs::remove_dir_all(directory)
+            .expect("fixture owns this temporary directory and has closed its files");
     }
 }

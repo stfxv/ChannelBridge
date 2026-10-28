@@ -1,21 +1,18 @@
 //! Native input callback adapter. Registration and device lifecycle are separate.
-use crate::{
-    buffers::{CaptureLayout, InputBuffers},
-    source_clock::SourceClock,
-};
-use channelbridge_audio::{
-    FramePosition,
-    capture::{CaptureProcessor, CaptureTimestamp},
-};
+use crate::buffers::CaptureLayout;
+use crate::buffers::InputBuffers;
+use crate::source_clock::SourceClock;
+use channelbridge_audio::FramePosition;
+use channelbridge_audio::capture_processor::CaptureProcessor;
+use channelbridge_audio::capture_processor::CaptureTimestamp;
 use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp};
-use std::{
-    cell::UnsafeCell,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use std::cell::UnsafeCell;
+use std::panic;
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 /// Ownership is transferred here before IO starts. Control code may read only
 /// atomics; it cannot access the processor while callbacks can run.
@@ -53,13 +50,14 @@ pub struct CaptureStats {
     pub source_speed: Option<f64>,
     pub failed: bool,
 }
-struct Gate<'a>(&'a AtomicBool);
+struct Gate<'gate>(&'gate AtomicBool);
 impl Drop for Gate<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
 }
 impl CaptureCallback {
+    #[must_use]
     pub fn new(layout: CaptureLayout, processor: CaptureProcessor) -> Self {
         Self {
             source_clock: Arc::new(SourceClock::default()),
@@ -77,9 +75,11 @@ impl CaptureCallback {
             unavailable_channel: AtomicU64::new(0),
         }
     }
+    #[must_use]
     pub fn source_clock(&self) -> Arc<SourceClock> {
         Arc::clone(&self.source_clock)
     }
+    #[must_use]
     pub fn stats(&self) -> CaptureStats {
         let clock = self.source_clock.snapshot();
         CaptureStats {
@@ -117,7 +117,9 @@ impl CaptureCallback {
             return;
         }
         let _gate = Gate(&self.busy);
-        let result = catch_unwind(AssertUnwindSafe(|| {
+        // Defense in depth under panic=unwind. A panic permanently disables
+        // processor reuse; the gate remains valid and releases during unwinding.
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
             if now.is_null() {
                 return false;
             }
@@ -126,12 +128,15 @@ impl CaptureCallback {
             if now.flags & 2 == 0 {
                 return false;
             }
+            // SAFETY: The process caller grants live immutable input payloads
+            // matching the prepared layout for this invocation.
             let Ok(buffers) = (unsafe { InputBuffers::from_raw(input, &self.layout) }) else {
                 return false;
             };
             let timestamp = if input_time.is_null() {
                 None
             } else {
+                // SAFETY: The caller keeps the non-null timestamp readable for this invocation.
                 let time = unsafe { input_time.read_unaligned() };
                 if time.flags & 3 != 3 {
                     None
@@ -195,25 +200,38 @@ impl CaptureCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use channelbridge_audio::{
-        StereoFrame,
-        fifo::stereo_queue,
-        meters::meter_bank,
-        routing::{AtomicRouting, Mode, Selection},
-    };
-    use channelbridge_hal_abi::{AudioBuffer, StreamFormat, fourcc};
+    use channelbridge_audio::StereoFrame;
+    use channelbridge_audio::fifo;
+    use channelbridge_audio::meters;
+    use channelbridge_audio::routing::AtomicRouting;
+    use channelbridge_audio::routing::Mode;
+    use channelbridge_audio::routing::Selection;
+    use channelbridge_hal_abi as hal_abi;
+    use channelbridge_hal_abi::AudioBuffer;
+    use channelbridge_hal_abi::StreamFormat;
     use std::sync::Arc;
     #[test]
     fn native_buffers_reach_preview_and_fifo_without_reentrant_state_access() {
-        let selection = Selection::new(2, 1, Mode::Stereo, false).unwrap();
+        let selection = Selection::new(2, 1, Mode::Stereo, false)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         let routing = Arc::new(AtomicRouting::new(selection));
-        let (meters, reader) = meter_bank(2, 48_000).unwrap();
-        let (producer, mut consumer) = stereo_queue(1024).unwrap();
-        let processor =
-            CaptureProcessor::new(Arc::clone(&routing), meters, producer, 48_000, 48_000).unwrap();
-        let layout = CaptureLayout::new(&[StreamFormat {
+        let (meters, reader) = meters::meter_bank(2, 48_000)
+            .expect("fixture has 1..=512 channels and a nonzero host clock frequency");
+        let (producer, mut consumer) =
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let processor = CaptureProcessor::new(
+            Arc::clone(&routing),
+            meters,
+            producer,
+            48_000,
+            48_000,
+        )
+        .expect(
+            "fixture rate and host frequency are nonzero; fixed callback scratch allocation fits",
+        );
+        let layout = CaptureLayout::try_new(&[StreamFormat {
             sample_rate: 48_000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 8,
             frames_per_packet: 1,
@@ -222,7 +240,7 @@ mod tests {
             bits_per_channel: 32,
             reserved: 0,
         }])
-        .unwrap();
+        .expect("fixture is interleaved stereo float32 PCM at 48 kHz");
         let callback = CaptureCallback::new(layout, processor);
         assert_eq!(callback.stats().clock_generation, None);
         assert_eq!(callback.stats().source_speed, None);
@@ -253,11 +271,15 @@ mod tests {
         assert_eq!(reader.level(1, 64).current, 0.5);
         assert_eq!(consumer.available(), 0);
         let generation = routing
-            .configure(selection, true, false)
-            .unwrap()
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
+            .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
         stamp.sample_time = 64.75;
         stamp.host_time = 64;
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe {
             callback.process(&input, &now, &stamp);
         }
@@ -273,6 +295,8 @@ mod tests {
         );
         // A nested/concurrent invocation returns immediately without touching DSP.
         callback.busy.store(true, Ordering::Release);
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe {
             callback.process(&input, &now, &stamp);
         }
@@ -282,6 +306,8 @@ mod tests {
         assert_eq!(callback.stats().accepted_frames, 128);
         assert_eq!(callback.stats().clock_generation, Some(generation));
         assert_eq!(callback.stats().source_speed, Some(1.0));
+        // SAFETY: The fixture owns input and stamp; a null now is explicitly accepted
+        // and rejected before dereference.
         unsafe {
             callback.process(&input, std::ptr::null(), &stamp);
         }
@@ -291,25 +317,38 @@ mod tests {
         // An unavailable saved channel is distinct from malformed callbacks.
         routing
             .configure(
-                Selection::new(3, 1, Mode::Stereo, false).unwrap(),
-                true,
-                false,
+                Selection::new(3, 1, Mode::Stereo, false).expect(
+                    "fixture channel numbers are nonzero and within the selection encoding",
+                ),
+                /* sending */ true,
+                /* overview */ false,
             )
-            .unwrap();
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
         stamp.sample_time = 128.0;
         stamp.host_time = 128;
+        // SAFETY: The fixture owns the complete input descriptor, samples and timestamps
+        // throughout this call.
         unsafe { callback.process(&input, &now, &stamp) };
         assert_eq!(callback.stats().unavailable_channel, 1);
         assert_eq!(callback.stats().discontinuities, 0);
-        routing.configure(selection, true, false).unwrap();
+        routing
+            .configure(
+                selection, /* sending */ true, /* overview */ false,
+            )
+            .expect("fixture selection is encodable and generation space is not exhausted");
         // A missing input timestamp reaches DSP clock validation, unlike a
         // null callback host-time descriptor rejected by the native adapter.
+        // SAFETY: The fixture owns input and now; the API permits an absent input timestamp.
         unsafe { callback.process(&input, &now, std::ptr::null()) };
         assert_eq!(callback.stats().invalid_clock, 1);
         assert_eq!(callback.stats().discontinuities, 1);
         assert_eq!(callback.stats().source_speed, None);
         assert_eq!(callback.stats().accepted_frames, 128);
-        assert!(callback.stats().clock_generation.unwrap() > generation);
+        assert!(
+            callback.stats().clock_generation.expect(
+                "valid capture timestamps established a clock generation before the discontinuity"
+            ) > generation
+        );
         assert!(!callback.stats().failed);
     }
 }

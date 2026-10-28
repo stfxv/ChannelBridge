@@ -1,5 +1,8 @@
 //! Versioned app/driver identifiers. Never reuse the production UID in a test driver.
 #![forbid(unsafe_code)]
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DIAGNOSTICS_SELECTOR: u32 = u32::from_be_bytes(*b"cbst");
@@ -88,14 +91,14 @@ pub struct DriverCounters {
     pub invalid_timestamps: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticError {
     Size(usize),
     Version(u32),
     Reserved,
 }
-impl std::fmt::Display for DiagnosticError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DiagnosticError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Size(size) => write!(
                 formatter,
@@ -109,10 +112,13 @@ impl std::fmt::Display for DiagnosticError {
         }
     }
 }
-impl std::error::Error for DiagnosticError {}
+impl Error for DiagnosticError {}
 impl DriverCounters {
     /// Decode the HAL's native-endian protocol v1 bytes, never Rust struct layout.
     /// Counters are independently sampled cumulative totals, not an atomic epoch.
+    /// Requires exactly 48 bytes: version and reserved `u32` fields, followed by
+    /// five `u64` fields in declaration order. Rejects incompatible versions and
+    /// nonzero reserved bytes with `DiagnosticError`.
     pub fn decode(bytes: &[u8]) -> Result<Self, DiagnosticError> {
         if bytes.len() != DIAGNOSTICS_BYTES {
             return Err(DiagnosticError::Size(bytes.len()));
@@ -154,7 +160,8 @@ mod tests {
         }
         let fixture = &mut bytes[1..];
         assert_eq!(
-            DriverCounters::decode(fixture).unwrap(),
+            DriverCounters::decode(fixture)
+                .expect("fixture bytes encode the current driver counter schema"),
             DriverCounters {
                 generation: 7,
                 written_frames: (1 << 54) + 3,

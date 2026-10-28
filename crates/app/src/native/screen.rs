@@ -1,33 +1,48 @@
 //! Main-thread screen state and transactional control bindings.
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use super::export::Export;
+use crate::input_meters::InputMeters;
+use crate::overview::Overview;
+use crate::routing_controls::RoutingControls;
+use channelbridge_core::CaptureState;
+use channelbridge_core::Command;
+use channelbridge_core::Config;
+use channelbridge_core::worker::Snapshot;
+use channelbridge_core::worker::Worker;
+use channelbridge_macos::permission::MicrophonePermission;
+use channelbridge_macos::permission::Permission;
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSPopUpButton, NSTextField, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, ns_string};
+use std::cell::Cell;
+use std::cell::RefCell;
 
 pub(super) struct Screen {
-    pub(super) export: super::export::Export,
-    overview: std::cell::RefCell<Option<crate::overview::Overview>>,
-    overview_sent: std::cell::Cell<bool>,
+    pub(super) export: Export,
+    overview: RefCell<Option<Overview>>,
+    overview_sent: Cell<bool>,
     pub(super) overview_button: Retained<NSButton>,
-    pub(super) permission: channelbridge_macos::permission::MicrophonePermission,
-    observed_permission: std::cell::Cell<Option<channelbridge_macos::permission::Permission>>,
+    pub(super) permission: MicrophonePermission,
+    observed_permission: Cell<Option<Permission>>,
     pub(super) permission_button: Retained<NSButton>,
     pub(super) send_button: Retained<NSButton>,
     pub(super) mute_button: Retained<NSButton>,
     pub(super) auto_send_button: Retained<NSButton>,
-    pub(super) meters: crate::input_meters::InputMeters,
-    pub(super) routing: crate::routing_controls::RoutingControls,
+    pub(super) meters: InputMeters,
+    pub(super) routing: RoutingControls,
     pub(super) window: Retained<NSWindow>,
     pub(super) devices: Retained<NSPopUpButton>,
     format: Retained<NSTextField>,
     status: Retained<NSTextField>,
     settings_error: Option<String>,
-    pub(super) device_items: std::cell::RefCell<Vec<(String, String)>>,
-    displayed_uid: std::cell::RefCell<String>,
-    pub(super) pending_attempt: std::cell::Cell<Option<u64>>,
-    pub(super) action_error: std::cell::RefCell<Option<String>>,
-    pub(super) menu_open: std::cell::Cell<bool>,
+    pub(super) device_items: RefCell<Vec<(String, String)>>,
+    displayed_uid: RefCell<String>,
+    pub(super) pending_attempt: Cell<Option<u64>>,
+    pub(super) action_error: RefCell<Option<String>>,
+    pub(super) menu_open: Cell<bool>,
 }
 impl Screen {
     pub(super) fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
@@ -44,6 +59,8 @@ impl Screen {
                 false,
             )
         };
+        // SAFETY: The retained window is live on the main thread; disabling release-on-
+        // close preserves Rust ownership.
         unsafe {
             window.setReleasedWhenClosed(false);
         }
@@ -68,8 +85,8 @@ impl Screen {
             NSSize::new(340.0, 25.0),
         ));
         let view = window.contentView().expect("window content view");
-        let meters = crate::input_meters::InputMeters::new(main, &view);
-        let routing = crate::routing_controls::RoutingControls::new(main, &view);
+        let meters = InputMeters::new(main, &view);
+        let routing = RoutingControls::new(main, &view);
         view.addSubview(&devices);
         view.addSubview(&format);
         view.addSubview(&status);
@@ -134,7 +151,7 @@ impl Screen {
         )));
         auto_send_button.setEnabled(false);
         view.addSubview(&auto_send_button);
-        let export = super::export::Export::new(main);
+        let export = Export::new(main);
         view.addSubview(&export.button);
         view.addSubview(&export.label);
         Self {
@@ -162,7 +179,7 @@ impl Screen {
             menu_open: Default::default(),
         }
     }
-    pub(super) fn update(&self, snapshot: &channelbridge_core::worker::Snapshot) {
+    pub(super) fn update(&self, snapshot: &Snapshot) {
         self.export.poll();
         self.meters
             .update(&snapshot.config, snapshot.audio.as_ref());
@@ -191,7 +208,6 @@ impl Screen {
             .position(|device| device.uid == snapshot.config.device_uid);
         let permission = channelbridge_macos::permission::status();
         let pending = self.permission.pending();
-        use channelbridge_macos::permission::Permission;
         let permission_title = match permission {
             Permission::NotDetermined if pending => "許可待ち",
             Permission::NotDetermined => "マイクを許可",
@@ -301,24 +317,20 @@ impl Screen {
             "選択した入力機器が接続されていません"
         } else {
             match snapshot.state {
-                channelbridge_core::CaptureState::Idle if !permission.allowed() => {
-                    "マイク権限を確認してください"
-                }
-                channelbridge_core::CaptureState::Idle => "送出停止中",
-                channelbridge_core::CaptureState::Connecting => "音声を接続しています",
-                channelbridge_core::CaptureState::Previewing => "入力確認中 · 送出停止",
-                channelbridge_core::CaptureState::Sending => "送出中",
-                channelbridge_core::CaptureState::Recovering => "音声の再接続待ち",
-                channelbridge_core::CaptureState::Suspended => "スリープ中 · 復帰を待っています",
-                channelbridge_core::CaptureState::Blocked if !permission.allowed() => {
-                    match permission {
-                        Permission::NotDetermined => "入力確認にはマイクの許可が必要です",
-                        Permission::Denied => "システム設定でマイクの許可を確認してください",
-                        Permission::Restricted => "マイクの利用が制限されています",
-                        _ => "マイク権限を確認できません",
-                    }
-                }
-                channelbridge_core::CaptureState::Blocked => "音声を開始できません",
+                CaptureState::Idle if !permission.allowed() => "マイク権限を確認してください",
+                CaptureState::Idle => "送出停止中",
+                CaptureState::Connecting => "音声を接続しています",
+                CaptureState::Previewing => "入力確認中 · 送出停止",
+                CaptureState::Sending => "送出中",
+                CaptureState::Recovering => "音声の再接続待ち",
+                CaptureState::Suspended => "スリープ中 · 復帰を待っています",
+                CaptureState::Blocked if !permission.allowed() => match permission {
+                    Permission::NotDetermined => "入力確認にはマイクの許可が必要です",
+                    Permission::Denied => "システム設定でマイクの許可を確認してください",
+                    Permission::Restricted => "マイクの利用が制限されています",
+                    _ => "マイク権限を確認できません",
+                },
+                CaptureState::Blocked => "音声を開始できません",
             }
         };
         self.status.setStringValue(&NSString::from_str(status));
@@ -329,21 +341,17 @@ impl Screen {
     pub(super) fn show_overview(&self) {
         let main = MainThreadMarker::new().expect("overview on main thread");
         let mut overview = self.overview.borrow_mut();
-        let overview = overview.get_or_insert_with(|| crate::overview::Overview::new(main));
+        let overview = overview.get_or_insert_with(|| Overview::new(main));
         overview.window.center();
         overview.window.makeKeyAndOrderFront(None);
     }
-    pub(super) fn sync_overview(
-        &self,
-        worker: &channelbridge_core::worker::Worker,
-        snapshot: &channelbridge_core::worker::Snapshot,
-    ) {
+    pub(super) fn sync_overview(&self, worker: &Worker, snapshot: &Snapshot) {
         let overview = self.overview.borrow();
         let visible = overview
             .as_ref()
             .is_some_and(|overview| overview.window.isVisible());
         if !snapshot.finished && visible != self.overview_sent.get() {
-            match worker.send(channelbridge_core::Command::Overview(visible)) {
+            match worker.send(Command::Overview(visible)) {
                 Ok(()) => self.overview_sent.set(visible),
                 Err(error) => *self.action_error.borrow_mut() = Some(error),
             }
@@ -355,32 +363,30 @@ impl Screen {
             );
         }
     }
-    pub(super) fn sync_permission(&self, worker: &channelbridge_core::worker::Worker) {
+    pub(super) fn sync_permission(&self, worker: &Worker) {
         let current = channelbridge_macos::permission::status();
         if self.observed_permission.get() != Some(current) {
-            match worker.send(channelbridge_core::Command::PermissionChanged(
-                current.allowed(),
-            )) {
+            match worker.send(Command::PermissionChanged(current.allowed())) {
                 Ok(()) => self.observed_permission.set(Some(current)),
                 Err(error) => *self.action_error.borrow_mut() = Some(error),
             }
         }
     }
-    pub(super) fn toggle_send(&self, worker: &channelbridge_core::worker::Worker) {
+    pub(super) fn toggle_send(&self, worker: &Worker) {
         let snapshot = worker.snapshot();
         let command = if snapshot.wanted_send {
-            channelbridge_core::Command::Stop
+            Command::Stop
         } else {
             if !self.send_button.isEnabled() {
                 return;
             }
-            channelbridge_core::Command::Start
+            Command::Start
         };
         if let Err(error) = worker.send(command) {
             *self.action_error.borrow_mut() = Some(error);
         }
     }
-    pub(super) fn toggle_mute(&self, worker: &channelbridge_core::worker::Worker) {
+    pub(super) fn toggle_mute(&self, worker: &Worker) {
         if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
             return;
         }
@@ -389,7 +395,7 @@ impl Screen {
         config.muted = !config.muted;
         self.submit_config(worker, &snapshot, config);
     }
-    pub(super) fn toggle_auto_send(&self, worker: &channelbridge_core::worker::Worker) {
+    pub(super) fn toggle_auto_send(&self, worker: &Worker) {
         let snapshot = worker.snapshot();
         if !self.auto_send_button.isEnabled() {
             self.update(&snapshot);
@@ -399,7 +405,7 @@ impl Screen {
         config.auto_send_on_resume = !config.auto_send_on_resume;
         self.submit_config(worker, &snapshot, config);
     }
-    pub(super) fn select_device(&self, worker: &channelbridge_core::worker::Worker) {
+    pub(super) fn select_device(&self, worker: &Worker) {
         if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
             return;
         }
@@ -436,11 +442,7 @@ impl Screen {
         self.devices.selectItemAtIndex(committed_index);
         self.submit_config(worker, &snapshot, config);
     }
-    pub(super) fn select_routing(
-        &self,
-        sender: &NSPopUpButton,
-        worker: &channelbridge_core::worker::Worker,
-    ) {
+    pub(super) fn select_routing(&self, sender: &NSPopUpButton, worker: &Worker) {
         if self.settings_error.is_some() || self.pending_attempt.get().is_some() {
             return;
         }
@@ -453,13 +455,8 @@ impl Screen {
             self.update(&snapshot);
         }
     }
-    fn submit_config(
-        &self,
-        worker: &channelbridge_core::worker::Worker,
-        snapshot: &channelbridge_core::worker::Snapshot,
-        config: channelbridge_core::Config,
-    ) {
-        match worker.send(channelbridge_core::Command::Configure(config)) {
+    fn submit_config(&self, worker: &Worker, snapshot: &Snapshot, config: Config) {
+        match worker.send(Command::Configure(config)) {
             Ok(()) => {
                 self.pending_attempt
                     .set(Some(snapshot.configuration_attempt));

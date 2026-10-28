@@ -124,18 +124,23 @@ pub struct AudioView {
     pub virtual_bits: u32,
     pub levels: Vec<InputLevel>,
 }
+#[must_use]
 pub fn dbfs(amplitude: f32) -> Option<f32> {
     (amplitude.is_finite() && amplitude > 0.0).then(|| 20.0 * amplitude.log10())
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn silence_is_distinct_from_zero_dbfs_and_invalid_levels_are_not_displayed() {
-        assert_eq!(dbfs(0.0), None);
-        assert_eq!(dbfs(1.0), Some(0.0));
-        assert!((dbfs(0.5).unwrap() + 6.0206).abs() < 0.0001);
-        assert_eq!(dbfs(f32::NAN), None);
-        assert_eq!(dbfs(f32::INFINITY), None);
+        assert_eq!(super::dbfs(0.0), None);
+        assert_eq!(super::dbfs(1.0), Some(0.0));
+        assert!(
+            (super::dbfs(0.5).expect("a positive finite amplitude has a decibel representation")
+                + 6.0206)
+                .abs()
+                < 0.0001
+        );
+        assert_eq!(super::dbfs(f32::NAN), None);
+        assert_eq!(super::dbfs(f32::INFINITY), None);
     }
 }

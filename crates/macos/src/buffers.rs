@@ -1,6 +1,9 @@
 //! HAL buffer validation. Construct borrows only for the current callback.
 use crate::devices::Error;
-use channelbridge_hal_abi::{AudioBuffer, AudioBufferList, StreamFormat, fourcc};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBuffer;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::StreamFormat;
 
 pub struct CaptureLayout {
     channels: Box<[usize]>,
@@ -10,7 +13,7 @@ pub struct CaptureLayout {
 impl CaptureLayout {
     /// Control-thread preparation. Native float32 client formats only; physical
     /// integer bit depth remains separate metadata and is converted by HAL.
-    pub fn new(formats: &[StreamFormat]) -> Result<Self, Error> {
+    pub fn try_new(formats: &[StreamFormat]) -> Result<Self, Error> {
         let mut channels = Vec::new();
         let mut total = 0;
         let mut rate = None;
@@ -18,7 +21,7 @@ impl CaptureLayout {
             let count = format.channels_per_frame as usize;
             if count == 0
                 || count > 512
-                || format.format_id != fourcc(b"lpcm")
+                || format.format_id != hal_abi::fourcc(b"lpcm")
                 || format.bits_per_channel != 32
                 || format.format_flags & 1 == 0
                 || format.format_flags & 2 != 0
@@ -55,22 +58,24 @@ impl CaptureLayout {
             rate,
         })
     }
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.total
     }
+    #[must_use]
     pub fn sample_rate(&self) -> f64 {
         self.rate
     }
 }
 
 #[derive(Clone, Copy)]
-struct FloatBuffer<'a> {
+struct FloatBuffer<'buffer> {
     channels: usize,
-    samples: &'a [f32],
+    samples: &'buffer [f32],
     first_channel: usize,
 }
-pub struct InputBuffers<'a> {
-    buffers: [Option<FloatBuffer<'a>>; 512],
+pub struct InputBuffers<'buffer> {
+    buffers: [Option<FloatBuffer<'buffer>>; 512],
     count: usize,
     frames: usize,
     channels: usize,
@@ -89,6 +94,7 @@ unsafe fn buffer_count(pointer: *const AudioBufferList) -> Result<usize, Error> 
     }
     Ok(count)
 }
+#[must_use]
 unsafe fn descriptor(pointer: *const AudioBufferList, index: usize) -> AudioBuffer {
     // SAFETY: index is below the list count; 8-byte first-buffer offset and
     // 16-byte entries are compared with Apple's SDK by test_rust_abi.c.
@@ -102,14 +108,16 @@ unsafe fn descriptor(pointer: *const AudioBufferList, index: usize) -> AudioBuff
     }
 }
 
-impl<'a> InputBuffers<'a> {
+impl<'buffer> InputBuffers<'buffer> {
     /// # Safety
     /// HAL supplies the complete descriptor list and readable native float32
-    /// storage matching layout. Storage stays immutable and alive for 'a.
+    /// storage matching layout. Storage stays immutable and alive for 'buffer.
     pub unsafe fn from_raw(
         pointer: *const AudioBufferList,
         layout: &CaptureLayout,
     ) -> Result<Self, Error> {
+        // SAFETY: The caller guarantees a live list header and descriptors for the
+        // returned buffer lifetime.
         let count = unsafe { buffer_count(pointer)? };
         if count != layout.channels.len() {
             return Err(Error::MalformedProperty);
@@ -122,6 +130,8 @@ impl<'a> InputBuffers<'a> {
         };
         let mut first_channel = 0;
         for index in 0..count {
+            // SAFETY: buffer_count bounded index; the caller guarantees that many
+            // readable descriptors.
             let buffer = unsafe { descriptor(pointer, index) };
             let channels = layout.channels[index];
             if buffer.channels as usize != channels
@@ -155,17 +165,21 @@ impl<'a> InputBuffers<'a> {
         }
         Ok(result)
     }
+    #[must_use]
     pub fn frames(&self) -> usize {
         self.frames
     }
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.channels
     }
+    #[must_use]
     pub fn sample(&self, frame: usize, channel: usize) -> Option<f32> {
         if frame >= self.frames || channel >= self.channels {
             return None;
         }
-        for buffer in self.buffers.iter().take(self.count).flatten() {
+        let active_buffers = self.buffers.iter().take(self.count).flatten();
+        for buffer in active_buffers {
             if channel >= buffer.first_channel && channel < buffer.first_channel + buffer.channels {
                 return buffer
                     .samples
@@ -184,8 +198,10 @@ pub unsafe fn silence_outputs(pointer: *mut AudioBufferList) -> Result<(), Error
     if pointer.is_null() {
         return Ok(());
     }
+    // SAFETY: The caller guarantees a live list header and descriptors throughout this call.
     let count = unsafe { buffer_count(pointer)? };
     for index in 0..count {
+        // SAFETY: buffer_count bounded index; the caller guarantees that many readable descriptors.
         let buffer = unsafe { descriptor(pointer, index) };
         if buffer.byte_size as usize > 512 * 4096 * 8 {
             return Err(Error::MalformedProperty);
@@ -205,13 +221,16 @@ pub unsafe fn silence_outputs(pointer: *mut AudioBufferList) -> Result<(), Error
 
 /// # Safety
 /// HAL supplies the complete list and one unique writable interleaved stereo
-/// float32 payload, alive for 'a. This device format was checked before Start.
-pub unsafe fn stereo_output<'a>(
+/// float32 payload, alive for 'buffer. This device format was checked before Start.
+pub unsafe fn stereo_output<'buffer>(
     pointer: *mut AudioBufferList,
-) -> Result<&'a mut [[f32; 2]], Error> {
+) -> Result<&'buffer mut [[f32; 2]], Error> {
+    // SAFETY: The caller guarantees a live list header and exclusive payload storage for the
+    // returned borrow.
     if unsafe { buffer_count(pointer)? } != 1 {
         return Err(Error::MalformedProperty);
     }
+    // SAFETY: The single-descriptor count was checked; the caller keeps that descriptor readable.
     let buffer = unsafe { descriptor(pointer, 0) };
     if buffer.channels != 2 || buffer.byte_size % 8 != 0 || buffer.byte_size > 4096 * 8 {
         return Err(Error::MalformedProperty);
@@ -242,7 +261,7 @@ mod tests {
     fn format(channels: u32) -> StreamFormat {
         StreamFormat {
             sample_rate: 48_000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: channels * 4,
             frames_per_packet: 1,
@@ -254,7 +273,8 @@ mod tests {
     }
     #[test]
     fn multiple_streams_map_global_channels_and_reject_short_buffers() {
-        let layout = CaptureLayout::new(&[format(2), format(1)]).unwrap();
+        let layout = CaptureLayout::try_new(&[format(2), format(1)])
+            .expect("fixture formats are float32 PCM with matching positive sample rates");
         let mut first = [1_f32, 2.0, 3.0, 4.0];
         let mut second = [5_f32, 6.0];
         let mut list = TwoBuffers {
@@ -274,7 +294,7 @@ mod tests {
         };
         // SAFETY: native initialized descriptors and disjoint live float arrays.
         let input = unsafe { InputBuffers::from_raw((&list as *const TwoBuffers).cast(), &layout) }
-            .unwrap();
+            .expect("fixture descriptors match the layout and cover both live two-frame buffers");
         assert_eq!(input.frames(), 2);
         assert_eq!(input.channels(), 3);
         assert_eq!(input.sample(1, 0), Some(3.0));
@@ -283,6 +303,8 @@ mod tests {
         list.buffers[1].byte_size = 4;
         // SAFETY: readable descriptors; inconsistent frame counts reject early.
         assert!(
+            // SAFETY: The repr(C) fixture owns both descriptors and all referenced
+            // sample arrays for this borrow.
             unsafe { InputBuffers::from_raw((&list as *const TwoBuffers).cast(), &layout) }
                 .is_err()
         );
@@ -291,8 +313,8 @@ mod tests {
     fn zero_buffer_header_is_not_read_as_a_full_buffer_list() {
         let mut header = 0_u32;
         // SAFETY: count is zero; no bytes beyond the initialized count are read.
-        assert!(unsafe { silence_outputs((&mut header as *mut u32).cast()) }.is_ok());
+        assert!(unsafe { super::silence_outputs((&mut header as *mut u32).cast()) }.is_ok());
         // SAFETY: zero header is valid but cannot describe stereo output.
-        assert!(unsafe { stereo_output((&mut header as *mut u32).cast()) }.is_err());
+        assert!(unsafe { super::stereo_output((&mut header as *mut u32).cast()) }.is_err());
     }
 }

@@ -76,7 +76,12 @@ Quit seals command admission and is asynchronous for AppKit. The worker closes
 audio before attempting the remaining accepted configuration saves in FIFO order.
 This persistence-only path cannot reopen or route audio. Final completion includes
 configuration acknowledgements and failures. AppKit waits for that snapshot before
-completing application termination.
+completing application termination. Completion has a separate atomic state and
+is published only after backend/session owners have been destroyed. Poisoned
+synchronization state is never inspected or repaired: admission closes, snapshot
+reads return a blocked fallback, and the worker drains the accepted finite prefix
+without waiting on an unavailable sender. Fallback configuration is initial
+presentation metadata, and fallback counters do not establish observed telemetry.
 
 ## Sleep, wake, and progress monitoring
 
@@ -132,8 +137,9 @@ Multiple readers do not consume or erase each other's frames.
 
 Audio callbacks use preallocated storage, bounded work, and atomic observations;
 normal processing does not allocate, log, wait, or take mutexes. Native callback
-adapters reject concurrent DSP reentry. Rust panics are contained before an FFI
-callback returns to HAL. Configuration I/O, enumeration, recovery, and diagnostic
+adapters reject concurrent DSP reentry. Native entry guards catch unexpected Rust panics as defense in depth when
+unwinding is enabled. Buffer bounds, lifetimes, exclusive access, and ordinary
+error reporting remain independent of those guards. Configuration I/O, enumeration, recovery, and diagnostic
 serialization remain outside the audio callbacks. No sample waveforms are
 recorded or sent outside the local virtual device.
 

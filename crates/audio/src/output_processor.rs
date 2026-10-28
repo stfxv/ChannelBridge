@@ -1,10 +1,14 @@
 //! Virtual-output callback's owned DSP state. No OS APIs or shared mutable state.
-use crate::{StereoFrame, drift::DriftController, fifo::Consumer, resample::StreamingResampler};
+use crate::StereoFrame;
+use crate::drift::DriftController;
+use crate::fifo::Consumer;
+use crate::resample::StreamingResampler;
 
 const MAX_BLOCK: usize = 4096;
 const FADE_FRAMES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[must_use]
 pub struct RenderReport {
     pub produced: usize,
     pub missing: usize,
@@ -26,6 +30,11 @@ pub struct OutputProcessor {
     stale_discarded: u64,
 }
 impl OutputProcessor {
+    /// Takes ownership of the queue consumer and preallocates callback storage.
+    /// Returns `None` for zero rates, an invalid resampler step, a target
+    /// no larger than filter lookahead or above queue capacity, or a failed
+    /// storage reservation. The target counts queue and filter history together.
+    #[must_use]
     pub fn new(input: Consumer, input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
         let controller = DriftController::new(input_rate, output_rate, target)?;
         let maximum_step = f64::from(input_rate) / f64::from(output_rate) * 1.002;
@@ -50,16 +59,20 @@ impl OutputProcessor {
         })
     }
 
+    #[must_use]
     pub fn correction_ppm(&self) -> f64 {
         self.controller.correction_ppm()
     }
+    #[must_use]
     pub fn fifo_frames(&self) -> usize {
         self.input.available()
     }
     /// Target includes FIFO and interpolation history together.
+    #[must_use]
     pub fn target_frames(&self) -> usize {
         self.target
     }
+    #[must_use]
     pub fn stale_discarded(&self) -> u64 {
         self.stale_discarded
     }
@@ -80,6 +93,7 @@ impl OutputProcessor {
         discarded
     }
 
+    #[must_use]
     fn queued(&self) -> usize {
         self.input
             .available()
@@ -168,7 +182,8 @@ impl OutputProcessor {
                 break;
             }
         }
-        for frame in output.iter_mut().take(produced) {
+        let produced_frames = output.iter_mut().take(produced);
+        for frame in produced_frames {
             if self.fade_position < FADE_FRAMES {
                 self.fade_position += 1;
                 let gain = self.fade_position as f32 / FADE_FRAMES as f32;
@@ -181,7 +196,8 @@ impl OutputProcessor {
         let mut dropped = 0;
         if missing != 0 {
             let fade = produced.min(FADE_FRAMES);
-            for (index, frame) in output[produced - fade..produced].iter_mut().enumerate() {
+            let fade_frames = output[produced - fade..produced].iter_mut().enumerate();
+            for (index, frame) in fade_frames {
                 let gain = (fade - index - 1) as f32 / FADE_FRAMES as f32;
                 frame.left *= gain;
                 frame.right *= gain;
@@ -206,13 +222,16 @@ impl OutputProcessor {
 mod tests {
     use super::*;
     use crate::drift::ClockEstimator;
-    use crate::fifo::stereo_queue;
+    use crate::fifo;
     #[test]
     fn session_target_primes_complete_large_callbacks() {
         for frames in [1024, 4096] {
             let target = 48_000 * 16 / 1000;
-            let (mut producer, consumer) = stereo_queue(16384).unwrap();
-            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).unwrap();
+            let (mut producer, consumer) = fifo::stereo_queue(16384)
+                .expect("fixture queue capacity is a nonzero power of two");
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, target).expect(
+                "fixture rates are supported and the target lies above lookahead within queue capacity",
+            );
             let incoming = vec![StereoFrame::new(0.25, -0.25); frames];
             let mut output = vec![StereoFrame::SILENCE; frames];
             let mut audible_blocks = 0;
@@ -242,8 +261,11 @@ mod tests {
 
     #[test]
     fn priming_tracks_callback_size_after_restart() {
-        let (mut producer, consumer) = stereo_queue(16384).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let (mut producer, consumer) =
+            fifo::stereo_queue(16384).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
         let pcm = [StereoFrame::new(0.25, -0.25); 4096];
         let mut output = [StereoFrame::SILENCE; 4096];
         assert_eq!(producer.push(&pcm[..768]), 768);
@@ -265,8 +287,11 @@ mod tests {
 
     #[test]
     fn callback_larger_than_queue_capacity_reports_shortage_without_consuming() {
-        let (mut producer, consumer) = stereo_queue(1024).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).unwrap();
+        let (mut producer, consumer) =
+            fifo::stereo_queue(1024).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
         let pcm = [StereoFrame::new(0.25, -0.25); 1024];
         assert_eq!(producer.push(&pcm), pcm.len());
         let mut output = [StereoFrame::SILENCE; 4096];
@@ -286,17 +311,20 @@ mod tests {
 
     #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
-        let (mut producer, consumer) = stereo_queue(8192).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).unwrap();
+        let (mut producer, consumer) =
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
         let old = [StereoFrame::new(0.8, 0.8); 2048];
-        producer.push_generation(&old, 1);
+        let _ = producer.push_generation(&old, 1);
         let mut output = [StereoFrame::SILENCE; 512];
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(output[511].left > 0.79);
         processor.set_generation(2);
-        producer.push_generation(&old[..64], 1);
+        let _ = producer.push_generation(&old[..64], 1);
         let fresh = [StereoFrame::new(-0.25, -0.25); 2048];
-        producer.push_generation(&fresh, 2);
+        let _ = producer.push_generation(&fresh, 2);
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(
             output
@@ -314,9 +342,13 @@ mod tests {
         // Four seconds of actual PCM per case, advanced without real-time waits.
         // The separate eight-hour test covers only the control/queue model.
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
-            let (mut producer, consumer) = stereo_queue(16384).unwrap();
-            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 4608).unwrap();
-            let mut estimator = ClockEstimator::new(48_000, 1_000_000_000).unwrap();
+            let (mut producer, consumer) = fifo::stereo_queue(16384)
+                .expect("fixture queue capacity is a nonzero power of two");
+            let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 4608).expect(
+                "fixture rates are supported and the target lies above lookahead within queue capacity",
+            );
+            let mut estimator = ClockEstimator::new(48_000, 1_000_000_000)
+                .expect("fixture sample rate and host clock frequency are positive");
             let mut incoming = [StereoFrame::SILENCE; 8192];
             let mut output = [StereoFrame::SILENCE; 4096];
             let physical_rate = 48_000.0 * (1.0 + ppm / 1_000_000.0);
@@ -325,7 +357,7 @@ mod tests {
             let mut elapsed = 0.0;
             let mut iteration = 0;
             let mut output_frames = 0;
-            estimator.observe(prefix, 1_000_000_000);
+            let _ = estimator.observe(prefix, 1_000_000_000);
             while elapsed < 4.0 {
                 let frames = [64, 128, 256, 512, 1024, 4096][iteration % 6];
                 elapsed += frames as f64 / 48_000.0;
@@ -334,7 +366,8 @@ mod tests {
                 let next = arrived.max(supplied);
                 let count = (next - supplied) as usize;
                 assert!(count <= incoming.len());
-                for (index, frame) in incoming.iter_mut().take(count).enumerate() {
+                let indexed_input_frames = incoming.iter_mut().take(count).enumerate();
+                for (index, frame) in indexed_input_frames {
                     let phase = (supplied + index as u64) as f64 * 997.0 * std::f64::consts::TAU
                         / physical_rate;
                     *frame = StereoFrame::new(phase.sin() as f32, phase.cos() as f32);
@@ -347,13 +380,14 @@ mod tests {
                 supplied = next;
                 let host_tick = 1_000_000_000
                     + ((supplied - prefix) as f64 / physical_rate * 1_000_000_000.0).round() as u64;
-                estimator.observe(supplied, host_tick);
+                let _ = estimator.observe(supplied, host_tick);
                 let report = processor.render(&mut output[..frames], Some(estimator.speed()));
                 assert_eq!(report.produced, frames, "ppm={ppm} report={report:?}");
                 assert_eq!(report.missing, 0);
                 assert_eq!(report.dropped_lookahead, 0);
                 assert!((3000..6500).contains(&report.queued_input));
-                for frame in output.iter().take(frames) {
+                let rendered_frames = output.iter().take(frames);
+                for frame in rendered_frames {
                     assert!(frame.left.is_finite() && frame.right.is_finite());
                     if output_frames > 256 {
                         let amplitude = frame.left.hypot(frame.right);
@@ -371,10 +405,14 @@ mod tests {
     }
     #[test]
     fn startup_shortage_and_recovery_never_replay_old_samples() {
-        let (_, undersized) = stereo_queue(128).unwrap();
+        let (_, undersized) =
+            fifo::stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
         assert!(OutputProcessor::new(undersized, 48_000, 48_000, 704).is_none());
-        let (mut producer, consumer) = stereo_queue(4096).unwrap();
-        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).unwrap();
+        let (mut producer, consumer) =
+            fifo::stereo_queue(4096).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
         let mut output = [StereoFrame::new(9.0, 9.0); 512];
         assert!(processor.render(&mut output, None).priming);
         assert!(output.iter().all(|f| *f == StereoFrame::SILENCE));

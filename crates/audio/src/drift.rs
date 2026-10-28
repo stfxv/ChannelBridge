@@ -3,6 +3,7 @@
 //! by the future HAL adapter, rather than sharing mutable estimator state.
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
 pub enum Observation {
     Accumulating,
     Updated { speed: f64 },
@@ -17,6 +18,8 @@ pub struct ClockEstimator {
     speed: f64,
 }
 impl ClockEstimator {
+    /// Returns `None` if either clock rate is zero.
+    #[must_use]
     pub fn new(nominal_rate: u32, ticks_per_second: u64) -> Option<Self> {
         if nominal_rate == 0 || ticks_per_second == 0 {
             return None;
@@ -29,6 +32,7 @@ impl ClockEstimator {
             speed: 1.0,
         })
     }
+    #[must_use]
     pub fn speed(&self) -> f64 {
         self.speed
     }
@@ -93,6 +97,8 @@ pub struct DriftController {
 impl DriftController {
     /// target is total pending input in FIFO + resampler working history.
     /// Caller sizes it for its block size, filter lookahead and arrival jitter.
+    /// Returns `None` for zero rates or a target outside `1..=1_048_576`.
+    #[must_use]
     pub fn new(input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
         if input_rate == 0 || output_rate == 0 || !(1..=1_048_576).contains(&target) {
             return None;
@@ -109,6 +115,7 @@ impl DriftController {
         })
     }
 
+    #[must_use]
     pub fn correction_ppm(&self) -> f64 {
         self.correction * 1_000_000.0
     }
@@ -118,6 +125,7 @@ impl DriftController {
         self.correction = 0.0;
         self.measured_speed = 1.0;
     }
+    #[must_use]
     pub fn step(&self) -> f64 {
         self.nominal_step * (1.0 + self.correction)
     }
@@ -157,10 +165,11 @@ mod tests {
 
     #[test]
     fn timestamps_estimate_speed_and_discontinuities_are_not_drift() {
-        let mut estimator = ClockEstimator::new(48_000, 24_000_000).unwrap();
+        let mut estimator = ClockEstimator::new(48_000, 24_000_000)
+            .expect("fixture sample rate and host clock frequency are positive");
         for second in 0..30 {
             let frame = (second as f64 * 48_000.0 * 1.001).round() as u64;
-            estimator.observe(frame, second * 24_000_000);
+            let _ = estimator.observe(frame, second * 24_000_000);
         }
         assert!((estimator.speed() - 1.001).abs() < 0.00001);
         assert_eq!(estimator.observe(0, 0), Observation::Discontinuity);
@@ -174,7 +183,8 @@ mod tests {
 
     #[test]
     fn correction_is_bounded_and_invalid_observations_do_not_poison_it() {
-        let mut controller = DriftController::new(48_000, 48_000, 704).unwrap();
+        let mut controller = DriftController::new(48_000, 48_000, 704)
+            .expect("fixture rates and target buffer size are positive");
         let step = controller.update(4000, 512, Some(f64::NAN));
         assert!((step - 1.0).abs() <= 0.0002 * 512.0 / 48_000.0 + f64::EPSILON);
         for _ in 0..10_000 {
@@ -193,7 +203,8 @@ mod tests {
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
             let target = 4608.0;
             let actual_speed = 1.0 + ppm / 1_000_000.0;
-            let mut controller = DriftController::new(48_000, 48_000, target as usize).unwrap();
+            let mut controller = DriftController::new(48_000, 48_000, target as usize)
+                .expect("fixture rates and target buffer size are positive");
             let mut queue = target;
             let mut elapsed = 0.0;
             let mut iteration = 0;

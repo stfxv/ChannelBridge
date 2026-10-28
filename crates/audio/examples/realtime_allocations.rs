@@ -1,9 +1,13 @@
 //! Test-only allocator instrumentation; not linked into either product binary.
-use channelbridge_audio::{StereoFrame, fifo::stereo_queue, output::OutputProcessor};
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use channelbridge_audio::StereoFrame;
+use channelbridge_audio::fifo;
+use channelbridge_audio::output_processor::OutputProcessor;
+use std::alloc::GlobalAlloc;
+use std::alloc::Layout;
+use std::alloc::System;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 struct CheckedAllocator;
 static CHECKING: AtomicBool = AtomicBool::new(false);
@@ -46,7 +50,7 @@ unsafe impl GlobalAlloc for CheckedAllocator {
 }
 
 fn main() {
-    let (mut producer, consumer) = stereo_queue(8192).expect("test queue");
+    let (mut producer, consumer) = fifo::stereo_queue(8192).expect("test queue");
     let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect("test DSP");
     let incoming = [StereoFrame::new(0.25, -0.25); 1024];
     let mut outgoing = [StereoFrame::SILENCE; 512];
@@ -55,9 +59,9 @@ fn main() {
     CHECKING.store(true, Ordering::Release);
     for index in 0..128 {
         if !(64..68).contains(&index) {
-            producer.push(&incoming[..512]);
+            let _ = producer.push(&incoming[..512]);
         }
-        processor.render(&mut outgoing, Some(1.001));
+        let _ = processor.render(&mut outgoing, Some(1.001));
     }
     CHECKING.store(false, Ordering::Release);
     let allocated = ALLOCATIONS.load(Ordering::Acquire);

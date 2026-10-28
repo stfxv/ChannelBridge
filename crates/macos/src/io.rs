@@ -1,13 +1,22 @@
 //! Control-thread IOProc ownership and callback-context lifetime.
-use crate::{capture::CaptureCallback, output::OutputCallback};
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, PropertyAddress, fourcc};
-use std::{
-    ffi::c_void,
-    marker::PhantomData,
-    panic::{AssertUnwindSafe, catch_unwind},
-    rc::Rc,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use crate::capture::CaptureCallback;
+use crate::output::OutputCallback;
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::PropertyAddress;
+use std::error::Error;
+use std::ffi::c_void;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::marker::PhantomData;
+use std::panic;
+use std::panic::AssertUnwindSafe;
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 pub type IoProc = unsafe extern "C" fn(
     ObjectId,
@@ -74,6 +83,7 @@ impl Handler for CaptureCallback {
         _output: *mut AudioBufferList,
         _output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards the same HAL input and timestamp borrows for this invocation.
         unsafe {
             CaptureCallback::process(self, input, now, input_time);
         }
@@ -88,6 +98,7 @@ impl Handler for OutputCallback {
         output: *mut AudioBufferList,
         _output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards the exclusive HAL output borrow for this invocation.
         unsafe {
             OutputCallback::process(self, output, None);
         }
@@ -99,8 +110,8 @@ struct Context<T> {
     failed: AtomicBool,
 }
 const CLOSED: usize = 1 << (usize::BITS - 1);
-const BAD_DEVICE: i32 = fourcc(b"!dev") as i32;
-struct Active<'a>(&'a AtomicUsize);
+const BAD_DEVICE: i32 = hal_abi::fourcc(b"!dev") as i32;
+struct Active<'invocation>(&'invocation AtomicUsize);
 impl Drop for Active<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Release);
@@ -132,8 +143,12 @@ unsafe extern "C" fn dispatch<T: Handler>(
         return 0;
     }
     let _active = Active(&context.admission);
+    // Defense in depth under panic=unwind. Failure permanently disables handler
+    // reuse, while Active still releases admission during unwinding.
     if !context.failed.load(Ordering::Acquire)
-        && catch_unwind(AssertUnwindSafe(|| unsafe {
+        // SAFETY: HAL keeps all callback arguments live; admission keeps context owned
+        // until return.
+        && panic::catch_unwind(AssertUnwindSafe(|| unsafe {
             context
                 .handler
                 .process(now, input, input_time, output, output_time);
@@ -152,15 +167,15 @@ pub enum IoDisposition {
     /// is closed with no handler running, so a new independent session is safe.
     RemovedDevice,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct IoError {
     pub operation: &'static str,
     pub status: i32,
     pub context_retained: bool,
     pub disposition: IoDisposition,
 }
-impl std::fmt::Display for IoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for IoError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{} failed ({}, callback context retained: {})",
@@ -168,13 +183,14 @@ impl std::fmt::Display for IoError {
         )
     }
 }
-impl std::error::Error for IoError {}
+impl Error for IoError {}
 
 #[derive(Clone, Copy)]
 pub enum Direction {
     Input,
     Output,
 }
+#[must_use]
 fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
     if !(1..=512).contains(&count) {
         return None;
@@ -184,10 +200,7 @@ fn disabled_usage(id: IoProc, count: usize) -> Option<(Vec<u64>, u32)> {
     payload[0] = id as usize as u64;
     // Native-endian bytes avoid conflating the UInt32 count with the first flag.
     let bytes = (count as u32).to_ne_bytes();
-    // SAFETY: allocated words cover the full initialized header and flag array.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), payload.as_mut_ptr().cast::<u8>().add(8), 4);
-    }
+    payload[1] = u64::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0]);
     Some((payload, size as u32))
 }
 
@@ -202,7 +215,7 @@ pub struct Registration<T: Handler> {
     _control_thread: PhantomData<Rc<()>>,
 }
 impl<T: Handler> Registration<T> {
-    pub fn new(device: ObjectId, handler: T) -> Result<Self, IoError> {
+    pub fn try_new(device: ObjectId, handler: T) -> Result<Self, IoError> {
         Self::with_api(device, handler, HAL)
     }
     fn with_api(device: ObjectId, handler: T, api: Api) -> Result<Self, IoError> {
@@ -212,6 +225,8 @@ impl<T: Handler> Registration<T> {
             failed: AtomicBool::new(false),
         });
         let mut id = None;
+        // SAFETY: context is a stable boxed allocation retained until deregistration; id
+        // is a writable output slot.
         let status = unsafe {
             (api.create)(
                 device,
@@ -247,23 +262,21 @@ impl<T: Handler> Registration<T> {
             _control_thread: PhantomData,
         })
     }
+    #[must_use]
     pub fn handler(&self) -> &T {
         &self.context.as_ref().expect("live registration").handler
     }
     /// Disable this IOProc's streams in one direction before Start. This does
     /// not change global stream activity or other clients' stream usage.
-    pub fn disable_streams(
-        &mut self,
-        direction: Direction,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn disable_streams(&mut self, direction: Direction) -> Result<(), Box<dyn Error>> {
         if self.start_attempted {
             return Err("stream usage must be configured before Start".into());
         }
         let scope = match direction {
-            Direction::Input => fourcc(b"inpt"),
-            Direction::Output => fourcc(b"outp"),
+            Direction::Input => hal_abi::fourcc(b"inpt"),
+            Direction::Output => hal_abi::fourcc(b"outp"),
         };
-        let streams = crate::devices::property(self.device, fourcc(b"stm#"), scope)?;
+        let streams = crate::devices::property(self.device, hal_abi::fourcc(b"stm#"), scope)?;
         if streams.len() % 4 != 0 || streams.len() / 4 > 512 {
             return Err("invalid stream list".into());
         }
@@ -274,7 +287,7 @@ impl<T: Handler> Registration<T> {
         let (payload, size) = disabled_usage(self.id.expect("registered ID"), count)
             .ok_or("invalid stream usage size")?;
         let address = PropertyAddress {
-            selector: fourcc(b"suse"),
+            selector: hal_abi::fourcc(b"suse"),
             scope,
             element: 0,
         };
@@ -316,6 +329,8 @@ impl<T: Handler> Registration<T> {
             .expect("live registration")
             .admission
             .store(0, Ordering::Release);
+        // SAFETY: The registered ID belongs to this device and its boxed callback
+        // context remains owned.
         let status = unsafe { (self.api.start)(self.device, self.id.expect("registered ID")) };
         if status != 0 {
             self.context
@@ -339,6 +354,8 @@ impl<T: Handler> Registration<T> {
         let context = self.context.as_ref().expect("registered context");
         context.admission.fetch_or(CLOSED, Ordering::AcqRel);
         let stop_status = if self.start_attempted {
+            // SAFETY: The ID is still registered and context remains owned through
+            // stop and deregistration.
             unsafe { (self.api.stop)(self.device, id) }
         } else {
             0
@@ -351,6 +368,8 @@ impl<T: Handler> Registration<T> {
                 disposition: IoDisposition::Fatal,
             });
         }
+        // SAFETY: The ID is still registered; context is retained until successful
+        // deregistration and no active callbacks.
         let status = unsafe { (self.api.destroy)(self.device, id) };
         if status != 0 {
             let inactive = context.admission.load(Ordering::Acquire) == CLOSED;
@@ -420,10 +439,9 @@ impl<T: Handler> Drop for Registration<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicI32, AtomicUsize},
-    };
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicI32;
+    use std::sync::atomic::AtomicUsize;
     static STOP_ERROR: AtomicI32 = AtomicI32::new(0);
     static DESTROY_ERROR: AtomicI32 = AtomicI32::new(0);
     static DESTROYS: AtomicUsize = AtomicUsize::new(0);
@@ -451,6 +469,7 @@ mod tests {
         _: *mut c_void,
         id: *mut Option<IoProc>,
     ) -> i32 {
+        // SAFETY: with_api supplies a writable Option<IoProc> slot for this mock registration call.
         unsafe {
             *id = Some(callback);
         }
@@ -497,8 +516,10 @@ mod tests {
             failed: AtomicBool::new(false),
         });
         let running = Arc::clone(&context);
+        // SAFETY: running retains the context through dispatch; BlockingHandler never
+        // dereferences the null audio arguments.
         let callback = std::thread::spawn(move || unsafe {
-            dispatch::<BlockingHandler>(
+            super::dispatch::<BlockingHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -510,8 +531,10 @@ mod tests {
         });
         context.handler.entered.wait();
         assert_eq!(context.admission.fetch_or(CLOSED, Ordering::AcqRel), 1);
+        // SAFETY: context retains the allocation; closed admission prevents calling the
+        // handler with null audio arguments.
         unsafe {
-            dispatch::<BlockingHandler>(
+            super::dispatch::<BlockingHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -524,23 +547,35 @@ mod tests {
         assert_eq!(context.handler.calls.load(Ordering::Relaxed), 1);
         assert_eq!(context.admission.load(Ordering::Acquire), CLOSED | 1);
         context.handler.release.wait();
-        callback.join().unwrap();
+        callback
+            .join()
+            .expect("fixture worker completes without panic");
         assert_eq!(context.admission.load(Ordering::Acquire), CLOSED);
     }
     #[test]
     fn stream_usage_payload_includes_id_count_and_every_disabled_flag() {
-        let (payload, size) = disabled_usage(dispatch::<TestHandler>, 3).unwrap();
+        let (payload, size) = super::disabled_usage(super::dispatch::<TestHandler>, 3)
+            .expect("three streams fit the supported disabled-usage payload range");
         assert_eq!(size, 24);
         assert_eq!(
             payload[0],
-            dispatch::<TestHandler> as *const () as usize as u64
+            super::dispatch::<TestHandler> as *const () as usize as u64
         );
         let bytes =
+            // SAFETY: The initialized word allocation covers size bytes and remains
+            // borrowed throughout this inspection.
             unsafe { std::slice::from_raw_parts(payload.as_ptr().cast::<u8>(), size as usize) };
-        assert_eq!(u32::from_ne_bytes(bytes[8..12].try_into().unwrap()), 3);
+        assert_eq!(
+            u32::from_ne_bytes(
+                bytes[8..12]
+                    .try_into()
+                    .expect("the stream-count field occupies exactly four bytes")
+            ),
+            3
+        );
         assert!(bytes[12..].iter().all(|byte| *byte == 0));
-        assert!(disabled_usage(dispatch::<TestHandler>, 0).is_none());
-        assert!(disabled_usage(dispatch::<TestHandler>, 513).is_none());
+        assert!(super::disabled_usage(super::dispatch::<TestHandler>, 0).is_none());
+        assert!(super::disabled_usage(super::dispatch::<TestHandler>, 513).is_none());
     }
     #[test]
     fn lifecycle_releases_only_after_deregistration_and_retains_on_errors() {
@@ -551,56 +586,94 @@ mod tests {
             destroy,
         };
         let drops = Arc::new(AtomicUsize::new(0));
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         assert!(session.start().is_err());
-        drop(session.close().unwrap());
+        drop(
+            session
+                .close()
+                .expect("fake stop and destroy hooks both return success"),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(DESTROYS.load(Ordering::Relaxed), 1);
         STOP_ERROR.store(-7, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
-        let error = session.close().err().unwrap();
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        let error = session
+            .close()
+            .err()
+            .expect("injected stop status -7 makes close fail");
         assert_eq!(error.operation, "stop");
         assert!(error.context_retained);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(DESTROYS.load(Ordering::Relaxed), 1);
         STOP_ERROR.store(0, Ordering::Relaxed);
         DESTROY_ERROR.store(-8, Ordering::Relaxed);
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         drop(session);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         DESTROY_ERROR.store(0, Ordering::Relaxed);
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         session
             .context
             .as_ref()
-            .unwrap()
+            .expect("new registration owns its context until the consuming close call")
             .admission
             .store(CLOSED | 1, Ordering::Release);
         assert_eq!(
-            session.close().err().unwrap().operation,
+            session
+                .close()
+                .err()
+                .expect("the injected active callback prevents close from releasing its context")
+                .operation,
             "callback still active"
         );
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         // A disappearing device still gets a deregistration attempt.
         STOP_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
-        drop(session.close().unwrap());
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        drop(
+            session
+                .close()
+                .expect("removed-device stop still permits successful fake deregistration"),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 2);
         DESTROY_ERROR.store(BAD_DEVICE, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
-        let pointer = (&**session.context.as_ref().unwrap() as *const Context<TestHandler>)
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
+        let pointer = (&**session
+            .context
+            .as_ref()
+            .expect("new registration owns its context until the consuming close call")
+            as *const Context<TestHandler>)
             .cast_mut()
             .cast();
-        let error = session.close().err().unwrap();
+        let error = session
+            .close()
+            .err()
+            .expect("injected BAD_DEVICE deregistration status makes close report removal");
         assert_eq!(error.disposition, IoDisposition::RemovedDevice);
         assert!(error.context_retained);
         // HAL can still call the retained pointer; its handler is closed forever.
+        // SAFETY: Failed teardown retained the boxed context; closed admission rejects
+        // all null audio arguments.
         unsafe {
-            dispatch::<TestHandler>(
+            super::dispatch::<TestHandler>(
                 42,
                 std::ptr::null(),
                 std::ptr::null(),
@@ -611,46 +684,74 @@ mod tests {
             );
         }
         assert_eq!(drops.load(Ordering::Relaxed), 2);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         session
             .context
             .as_ref()
-            .unwrap()
+            .expect("new registration owns its context until the consuming close call")
             .admission
             .store(1, Ordering::Release);
         assert_eq!(
-            session.close().err().unwrap().disposition,
+            session
+                .close()
+                .err()
+                .expect("the injected active callback makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         // Startup cleanup can lose the device before Start was attempted.
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         assert_eq!(
-            session.close().err().unwrap().disposition,
+            session
+                .close()
+                .err()
+                .expect("injected BAD_DEVICE deregistration status reports removal before start")
+                .disposition,
             IoDisposition::RemovedDevice
         );
-        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
+        let session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
         session
             .context
             .as_ref()
-            .unwrap()
+            .expect("new registration owns its context until the consuming close call")
             .failed
             .store(true, Ordering::Release);
         assert_eq!(
-            session.close().err().unwrap().disposition,
+            session
+                .close()
+                .err()
+                .expect("the injected callback failure makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         DESTROY_ERROR.store(-8, Ordering::Relaxed);
-        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap();
-        session.start().unwrap();
+        let mut session = Registration::with_api(42, TestHandler(Arc::clone(&drops)), api)
+            .expect("fake create hook registers device 42 and supplies a nonnull callback handle");
+        session
+            .start()
+            .expect("new registration is not started and the fake start hook returns success");
         assert_eq!(
-            session.close().err().unwrap().disposition,
+            session
+                .close()
+                .err()
+                .expect("injected destroy status -8 makes teardown fatal")
+                .disposition,
             IoDisposition::Fatal
         );
         STOP_ERROR.store(0, Ordering::Relaxed);
         DESTROY_ERROR.store(0, Ordering::Relaxed);
         // Never-started registrations need only deregistration.
-        drop(Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).unwrap());
+        drop(
+            Registration::with_api(42, TestHandler(Arc::clone(&drops)), api).expect(
+                "fake create hook registers device 42 and supplies a nonnull callback handle",
+            ),
+        );
         assert_eq!(drops.load(Ordering::Relaxed), 3);
     }
 }

@@ -16,7 +16,8 @@ python3 - "$archive" <<'PY'
 import pathlib, sys, tarfile
 allowed = {'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'LICENSE',
            'THIRD_PARTY_RUST.md', 'ARCHITECTURE.md', 'README.md', '.cargo',
-           'crates', 'scripts', 'packaging', 'rust-vendor'}
+           'crates', 'scripts', 'packaging', 'rust-vendor', 'tools',
+           'rustfmt.toml', 'clippy.toml'}
 with tarfile.open(sys.argv[1]) as archive:
     names = set()
     for member in archive:
@@ -30,7 +31,9 @@ with tarfile.open(sys.argv[1]) as archive:
     for required in ['Cargo.lock', 'README.md', 'THIRD_PARTY_RUST.md',
                      '.cargo/config.toml', 'scripts/build-rust-app.sh',
                      'scripts/package-rust-source.sh', 'scripts/verify-rust-source.sh',
-                     'scripts/test-rust.sh']:
+                     'scripts/test-rust.sh', 'scripts/check-rust-style.sh',
+                     'rustfmt.toml', 'clippy.toml', 'tools/rust-style/Cargo.toml',
+                     'tools/rust-style/Cargo.lock', 'tools/rust-style/src/main.rs']:
         assert required in names, required
     print('Rust archive roots and required sources verified')
 PY
@@ -42,4 +45,6 @@ tar -xzf "$archive" -C "$stage/source"
 export CARGO_HOME="$stage/empty-cargo"
 cd "$stage/source"
 cargo check --offline --locked --workspace --all-targets ${features[@]+"${features[@]}"}
+cargo check --offline --locked --manifest-path tools/rust-style/Cargo.toml --all-targets
+CARGO_NET_OFFLINE=true bash scripts/check-rust-style.sh check
 printf 'Archive rebuilt offline with an empty Cargo cache\n'

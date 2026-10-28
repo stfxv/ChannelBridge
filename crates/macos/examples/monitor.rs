@@ -1,5 +1,7 @@
 //! Counts the test microphone's samples without writing audio or saving samples.
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+use std::error::Error;
+use std::time::Duration;
+fn main() -> Result<(), Box<dyn Error>> {
     let mut expected = None;
     let mut seconds = 3_u64;
     let mut duration_supplied = false;
@@ -24,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Observing test microphone for {seconds} seconds; samples are not saved. This does not establish signal fidelity or uninterrupted callback timing."
     );
-    let report = channelbridge_macos::monitor::run(std::time::Duration::from_secs(seconds))?;
+    let report = channelbridge_macos::monitor::run(Duration::from_secs(seconds))?;
     println!("{report:?}");
     if !report.valid() {
         return Err("invalid or insufficient input callbacks".into());

@@ -1,16 +1,19 @@
 //! Read-only acceptance observer for the separate Rust test microphone.
 //! Output streams are disabled; samples are reduced to counters and never saved.
-use crate::{
-    buffers::{CaptureLayout, InputBuffers},
-    devices,
-    io::{Direction, Handler, Registration},
-};
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, fourcc};
-use std::{
-    error::Error,
-    sync::atomic::{AtomicU32, AtomicU64, Ordering},
-    time::Duration,
-};
+use crate::buffers::CaptureLayout;
+use crate::buffers::InputBuffers;
+use crate::devices;
+use crate::io::Direction;
+use crate::io::Handler;
+use crate::io::Registration;
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
+use std::error::Error;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Report {
@@ -22,6 +25,7 @@ pub struct Report {
     pub invalid_samples: u64,
 }
 impl Report {
+    #[must_use]
     pub fn valid(&self) -> bool {
         self.callbacks >= 10
             && self.frames >= 4096
@@ -39,6 +43,7 @@ struct Observer {
     invalid_samples: AtomicU64,
 }
 impl Observer {
+    #[must_use]
     fn new(layout: CaptureLayout) -> Self {
         Self {
             layout,
@@ -75,6 +80,7 @@ impl Observer {
             .fetch_add(input.frames() as u64, Ordering::Relaxed);
         self.callbacks.fetch_add(1, Ordering::Relaxed);
     }
+    #[must_use]
     fn report(&self) -> Report {
         Report {
             callbacks: self.callbacks.load(Ordering::Acquire),
@@ -130,15 +136,15 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn Error>> {
     if matches.next().is_some() {
         return Err("duplicate Rust test UID".into());
     }
-    let formats = devices::streams(device.id, fourcc(b"inpt"))?
+    let formats = devices::streams(device.id, hal_abi::fourcc(b"inpt"))?
         .into_iter()
         .map(|stream| stream.virtual_format)
         .collect::<Vec<_>>();
-    let layout = CaptureLayout::new(&formats)?;
+    let layout = CaptureLayout::try_new(&formats)?;
     if layout.channels() != 2 {
         return Err("test microphone must be stereo".into());
     }
-    let mut registration = Registration::new(device.id, Observer::new(layout))?;
+    let mut registration = Registration::try_new(device.id, Observer::new(layout))?;
     registration.disable_streams(Direction::Output)?;
     let started = registration.start();
     if started.is_ok() {
@@ -157,7 +163,7 @@ mod tests {
     fn observer_distinguishes_channels_silence_invalid_samples_and_headers() {
         let format = StreamFormat {
             sample_rate: 48000.0,
-            format_id: fourcc(b"lpcm"),
+            format_id: hal_abi::fourcc(b"lpcm"),
             format_flags: 9,
             bytes_per_packet: 8,
             frames_per_packet: 1,
@@ -166,7 +172,10 @@ mod tests {
             bits_per_channel: 32,
             reserved: 0,
         };
-        let observer = Observer::new(CaptureLayout::new(&[format]).unwrap());
+        let observer = Observer::new(
+            CaptureLayout::try_new(&[format])
+                .expect("fixture is float32 PCM with a positive sample rate and channel count"),
+        );
         let mut samples = [0.0_f32, -0.0, -0.25, 0.5, f32::NAN, f32::INFINITY];
         let list = AudioBufferList {
             count: 1,

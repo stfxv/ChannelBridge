@@ -16,6 +16,10 @@ pub struct Selection {
     muted: bool,
 }
 impl Selection {
+    /// Accepts one-based channels in `1..=512` and stores zero-based indices.
+    /// Mono uses `left` for both channels and ignores `right`. Returns `None`
+    /// when a channel used by the selected mode is outside that range.
+    #[must_use]
     pub fn new(left: u32, right: u32, mode: Mode, muted: bool) -> Option<Self> {
         if !(1..=512).contains(&left) {
             return None;
@@ -31,18 +35,23 @@ impl Selection {
             muted,
         })
     }
+    #[must_use]
     pub fn left(&self) -> usize {
         self.left
     }
+    #[must_use]
     pub fn right(&self) -> usize {
         self.right
     }
+    #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
     }
+    #[must_use]
     pub fn muted(&self) -> bool {
         self.muted
     }
+    #[must_use]
     pub fn available(&self, channels: usize) -> bool {
         self.left < channels && self.right < channels
     }
@@ -58,6 +67,7 @@ pub struct Routing {
 const GENERATION_SHIFT: u32 = 23;
 const MAX_GENERATION: u64 = u64::MAX >> GENERATION_SHIFT;
 impl Routing {
+    #[must_use]
     fn encode(self) -> u64 {
         let mode = match self.selection.mode {
             Mode::Mono => 0,
@@ -72,6 +82,7 @@ impl Routing {
             | (u64::from(self.sending) << 22)
             | (self.generation << GENERATION_SHIFT)
     }
+    #[must_use]
     fn decode(word: u64) -> Self {
         Self {
             selection: Selection {
@@ -95,6 +106,7 @@ pub struct AtomicRouting {
     word: AtomicU64,
 }
 impl AtomicRouting {
+    #[must_use]
     pub fn new(selection: Selection) -> Self {
         Self {
             word: AtomicU64::new(
@@ -108,12 +120,14 @@ impl AtomicRouting {
             ),
         }
     }
+    #[must_use]
     pub fn load(&self) -> Routing {
         Routing::decode(self.word.load(Ordering::Acquire))
     }
 
     /// Control-thread update. Source discontinuities can also change the word;
     /// retry only a bounded number of times, preserving their newer generation.
+    #[must_use]
     pub fn configure(
         &self,
         selection: Selection,
@@ -147,6 +161,7 @@ impl AtomicRouting {
     }
 
     /// Single attempt from capture on a clock/FIFO discontinuity. No RT retry.
+    #[must_use]
     pub fn advance_generation(&self, expected: Routing) -> Option<Routing> {
         let generation = expected.generation.checked_add(1)?;
         if generation > MAX_GENERATION {
@@ -173,18 +188,32 @@ mod tests {
     use super::*;
     #[test]
     fn mode_edits_are_atomic_but_start_stop_retires_old_audio() {
-        let mono = Selection::new(512, 999, Mode::Mono, false).unwrap();
+        let mono = Selection::new(512, 999, Mode::Mono, false)
+            .expect("mono uses left channel 512 and ignores the saved right channel");
         assert!(!mono.available(511));
         let settings = AtomicRouting::new(mono);
-        let start = settings.configure(mono, true, false).unwrap();
-        let stereo = Selection::new(10, 16, Mode::Stereo, true).unwrap();
-        let changed = settings.configure(stereo, true, true).unwrap();
+        let start = settings
+            .configure(mono, /* sending */ true, /* overview */ false)
+            .expect("fixture selection is encodable and generation space is not exhausted");
+        let stereo = Selection::new(10, 16, Mode::Stereo, true)
+            .expect("fixture channel numbers are nonzero and within the selection encoding");
+        let changed = settings
+            .configure(stereo, /* sending */ true, /* overview */ true)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         assert_eq!(changed.generation, start.generation);
         assert_eq!(settings.load().selection, stereo);
-        let stop = settings.configure(stereo, false, true).unwrap();
+        let stop = settings
+            .configure(stereo, /* sending */ false, /* overview */ true)
+            .expect("fixture selection is encodable and generation space is not exhausted");
         assert!(stop.generation > changed.generation);
         assert!(settings.advance_generation(changed).is_none());
         assert_eq!(settings.load(), stop);
-        assert!(settings.advance_generation(stop).unwrap().generation > stop.generation);
+        assert!(
+            settings
+                .advance_generation(stop)
+                .expect("fixture selection is encodable and generation space is not exhausted")
+                .generation
+                > stop.generation
+        );
     }
 }

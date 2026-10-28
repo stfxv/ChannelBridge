@@ -2,11 +2,14 @@
 //! No physical input, recording, network or default-device modification.
 use crate::devices::{self, Error};
 use channelbridge_contract::TEST_DEVICE_UID;
-use channelbridge_hal_abi::{AudioBufferList, AudioTimestamp, ObjectId, StreamFormat, fourcc};
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::AudioBufferList;
+use channelbridge_hal_abi::AudioTimestamp;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::StreamFormat;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct Report {
@@ -19,6 +22,7 @@ pub struct Report {
     pub first_missing_input_sample: Option<f64>,
 }
 impl Report {
+    #[must_use]
     pub fn passed(&self) -> bool {
         self.callbacks >= 10
             && self.compared_frames >= 4096
@@ -38,6 +42,7 @@ struct Context {
     first_missing: AtomicU64,
 }
 impl Context {
+    #[must_use]
     fn new(rate: f64) -> Self {
         Self {
             rate,
@@ -52,6 +57,7 @@ impl Context {
     }
 }
 
+#[must_use]
 fn tone(frame: f64, rate: f64) -> [f32; 2] {
     let phase = frame * (997.0 * std::f64::consts::TAU / rate);
     [(0.25 * phase.sin()) as f32, (0.125 * phase.cos()) as f32]
@@ -66,12 +72,14 @@ impl crate::io::Handler for Context {
         output: *mut AudioBufferList,
         output_time: *const AudioTimestamp,
     ) {
+        // SAFETY: Handler forwards HAL callback borrows without retaining them after this call.
         if !unsafe { process(self, input, input_time, output, output_time) } {
             self.invalid.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
 
+#[must_use]
 unsafe fn process(
     context: &Context,
     input: *const AudioBufferList,
@@ -84,7 +92,9 @@ unsafe fn process(
     }
     // An empty C buffer-list header is smaller than the Rust one-buffer type.
     // Check the count before constructing a reference to the complete structure.
+    // SAFETY: HAL supplies live buffer-list headers for this invocation; this reads only the count.
     if unsafe { input.cast::<u32>().read_unaligned() } != 1
+        // SAFETY: HAL supplies a live output header for this invocation; this reads only the count.
         || unsafe { output.cast::<u32>().read_unaligned() } != 1
     {
         return false;
@@ -135,6 +145,8 @@ unsafe fn process(
     let incoming = unsafe {
         std::slice::from_raw_parts(input.data.cast::<f32>(), input.byte_size as usize / 4)
     };
+    // SAFETY: HAL grants exclusive output storage; the checked range is disjoint from
+    // incoming and has f32 alignment.
     let outgoing = unsafe {
         std::slice::from_raw_parts_mut(output.data.cast::<f32>(), output.byte_size as usize / 4)
     };
@@ -143,7 +155,8 @@ unsafe fn process(
     let mut mismatched = 0;
     let mut missing = 0;
     let mut received = context.compared.load(Ordering::Relaxed) != 0;
-    for (index, frame) in incoming.chunks_exact(2).enumerate() {
+    let input_frames = incoming.chunks_exact(2).enumerate();
+    for (index, frame) in input_frames {
         if frame[0] == 0.0 && frame[1] == 0.0 {
             silent += 1;
             if received {
@@ -168,7 +181,8 @@ unsafe fn process(
             mismatched += 1;
         }
     }
-    for (index, frame) in outgoing.chunks_exact_mut(2).enumerate() {
+    let output_frames = outgoing.chunks_exact_mut(2).enumerate();
+    for (index, frame) in output_frames {
         frame.copy_from_slice(&tone(
             output_time.sample_time.floor() + index as f64,
             context.rate,
@@ -183,15 +197,19 @@ unsafe fn process(
 }
 
 fn verify_format(device: ObjectId, scope: u32) -> Result<(), Error> {
-    let streams = devices::property(device, fourcc(b"stm#"), scope)?;
+    let streams = devices::property(device, hal_abi::fourcc(b"stm#"), scope)?;
     let stream: [u8; 4] = streams.try_into().map_err(|_| Error::MalformedProperty)?;
-    let format = devices::property(u32::from_ne_bytes(stream), fourcc(b"sfmt"), fourcc(b"glob"))?;
+    let format = devices::property(
+        u32::from_ne_bytes(stream),
+        hal_abi::fourcc(b"sfmt"),
+        hal_abi::fourcc(b"glob"),
+    )?;
     if format.len() != size_of::<StreamFormat>() {
         return Err(Error::MalformedProperty);
     }
     // SAFETY: every bit pattern is valid for StreamFormat's integer/float fields.
     let format = unsafe { format.as_ptr().cast::<StreamFormat>().read_unaligned() };
-    if format.format_id != fourcc(b"lpcm")
+    if format.format_id != hal_abi::fourcc(b"lpcm")
         || format.format_flags != 9
         || format.channels_per_frame != 2
         || format.bits_per_channel != 32
@@ -210,7 +228,8 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
         return Err("probe duration must be between 1 and 30 seconds".into());
     }
     let mut selected = None;
-    for device in devices::list()?.into_iter().flatten() {
+    let available_devices = devices::list()?.into_iter().flatten();
+    for device in available_devices {
         if device.uid == TEST_DEVICE_UID {
             if selected.is_some() {
                 return Err("duplicate Rust test UID".into());
@@ -219,9 +238,9 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn std::error::Error>> {
         }
     }
     let device = selected.ok_or("Rust test driver is not loaded")?;
-    verify_format(device.id, fourcc(b"inpt"))?;
-    verify_format(device.id, fourcc(b"outp"))?;
-    let mut registration = crate::io::Registration::new(device.id, Context::new(device.rate))?;
+    verify_format(device.id, hal_abi::fourcc(b"inpt"))?;
+    verify_format(device.id, hal_abi::fourcc(b"outp"))?;
+    let mut registration = crate::io::Registration::try_new(device.id, Context::new(device.rate))?;
     let started = registration.start();
     if started.is_ok() {
         std::thread::sleep(duration);
@@ -256,8 +275,9 @@ mod tests {
         };
         let mut incoming = [0_f32; 128];
         let mut outgoing = [0_f32; 128];
-        for (index, frame) in incoming.chunks_exact_mut(2).enumerate() {
-            frame.copy_from_slice(&tone(128.0 + index as f64, context.rate));
+        let input_frames = incoming.chunks_exact_mut(2).enumerate();
+        for (index, frame) in input_frames {
+            frame.copy_from_slice(&super::tone(128.0 + index as f64, context.rate));
         }
         let input = AudioBufferList {
             count: 1,
@@ -276,7 +296,7 @@ mod tests {
             }],
         };
         // SAFETY: disjoint arrays, valid stereo buffers and live timestamps.
-        assert!(unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(unsafe { super::process(&context, &input, &time, &mut output, &time) });
         assert_eq!(context.compared.load(Ordering::Relaxed), 64);
         assert_eq!(context.mismatched.load(Ordering::Relaxed), 0);
         assert_eq!(incoming, outgoing);
@@ -292,11 +312,11 @@ mod tests {
             }],
         };
         // SAFETY: same valid storage; only test sample values changed.
-        assert!(unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(unsafe { super::process(&context, &input, &time, &mut output, &time) });
         assert_eq!(context.mismatched.load(Ordering::Relaxed), 1);
         assert_eq!(context.missing.load(Ordering::Relaxed), 1);
         output.buffers[0].byte_size = 511;
         // SAFETY: readable list; malformed size must be rejected before access.
-        assert!(!unsafe { process(&context, &input, &time, &mut output, &time) });
+        assert!(!unsafe { super::process(&context, &input, &time, &mut output, &time) });
     }
 }

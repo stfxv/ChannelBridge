@@ -1,11 +1,15 @@
 //! Bounded property reads on the control thread, outside audio callbacks.
-use channelbridge_hal_abi::{ObjectId, PropertyAddress, StreamFormat, fourcc};
-use std::{ffi::c_void, fmt};
+use channelbridge_hal_abi as hal_abi;
+use channelbridge_hal_abi::ObjectId;
+use channelbridge_hal_abi::PropertyAddress;
+use channelbridge_hal_abi::StreamFormat;
+use std::ffi::c_void;
+use std::fmt;
 
-const GLOBAL: u32 = fourcc(b"glob");
+const GLOBAL: u32 = hal_abi::fourcc(b"glob");
 const MAX_PROPERTY_BYTES: u32 = 1_048_576;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Error {
     Hal(i32),
     MalformedProperty,
@@ -42,7 +46,7 @@ pub struct Stream {
 }
 
 pub fn streams(device: ObjectId, scope: u32) -> Result<Vec<Stream>, Error> {
-    ids(&property(device, fourcc(b"stm#"), scope)?)?
+    ids(&property(device, hal_abi::fourcc(b"stm#"), scope)?)?
         .into_iter()
         .map(|id| {
             let read = |selector| -> Result<StreamFormat, Error> {
@@ -56,8 +60,8 @@ pub fn streams(device: ObjectId, scope: u32) -> Result<Vec<Stream>, Error> {
             };
             Ok(Stream {
                 id,
-                virtual_format: read(fourcc(b"sfmt"))?,
-                physical_format: read(fourcc(b"pft "))?,
+                virtual_format: read(hal_abi::fourcc(b"sfmt"))?,
+                physical_format: read(hal_abi::fourcc(b"pft "))?,
             })
         })
         .collect()
@@ -132,7 +136,7 @@ pub fn property(object: ObjectId, selector: u32, scope: u32) -> Result<Vec<u8>, 
                 words.as_mut_ptr().cast(),
             )
         };
-        if status == fourcc(b"!siz") as i32 {
+        if status == hal_abi::fourcc(b"!siz") as i32 {
             continue;
         }
         if status != 0 {
@@ -208,7 +212,7 @@ pub(crate) fn text(object: ObjectId, selector: u32) -> Result<String, Error> {
 }
 
 fn channels(object: ObjectId, scope: u32) -> Result<u32, Error> {
-    let bytes = property(object, fourcc(b"slay"), scope)?;
+    let bytes = property(object, hal_abi::fourcc(b"slay"), scope)?;
     decode_channels(&bytes)
 }
 
@@ -235,11 +239,11 @@ fn decode_channels(bytes: &[u8]) -> Result<u32, Error> {
 
 /// A disappearing device is reported per entry, not silently replaced by another.
 pub fn list() -> Result<Vec<Result<Device, Error>>, Error> {
-    let objects = ids(&property(1, fourcc(b"dev#"), GLOBAL)?)?;
+    let objects = ids(&property(1, hal_abi::fourcc(b"dev#"), GLOBAL)?)?;
     Ok(objects
         .into_iter()
         .map(|id| {
-            let rate_bytes: [u8; 8] = property(id, fourcc(b"nsrt"), GLOBAL)?
+            let rate_bytes: [u8; 8] = property(id, hal_abi::fourcc(b"nsrt"), GLOBAL)?
                 .try_into()
                 .map_err(|_| Error::MalformedProperty)?;
             let rate = f64::from_ne_bytes(rate_bytes);
@@ -248,11 +252,11 @@ pub fn list() -> Result<Vec<Result<Device, Error>>, Error> {
             }
             Ok(Device {
                 id,
-                uid: text(id, fourcc(b"uid "))?,
-                name: text(id, fourcc(b"lnam"))?,
+                uid: text(id, hal_abi::fourcc(b"uid "))?,
+                name: text(id, hal_abi::fourcc(b"lnam"))?,
                 rate,
-                input_channels: channels(id, fourcc(b"inpt"))?,
-                output_channels: channels(id, fourcc(b"outp"))?,
+                input_channels: channels(id, hal_abi::fourcc(b"inpt"))?,
+                output_channels: channels(id, hal_abi::fourcc(b"outp"))?,
             })
         })
         .collect())
@@ -279,6 +283,7 @@ pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Ve
     if unsafe { CFGetTypeID(owned.0) != CFDataGetTypeID() } {
         return Err(Error::MalformedProperty);
     }
+    // SAFETY: The type check established CFData; owned retains it throughout this function.
     let length = unsafe { CFDataGetLength(owned.0) };
     if length < 0 || length as usize > maximum {
         return Err(Error::PropertyTooLarge);
@@ -286,6 +291,7 @@ pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Ve
     if length == 0 {
         return Ok(Vec::new());
     }
+    // SAFETY: owned retains the CFData, so its immutable bytes remain live until they are copied.
     let source = unsafe { CFDataGetBytePtr(owned.0) };
     if source.is_null() {
         return Err(Error::MalformedProperty);
@@ -296,16 +302,15 @@ pub(crate) fn data(object: ObjectId, selector: u32, maximum: usize) -> Result<Ve
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn variable_buffer_list_checks_every_entry_and_overflow() {
         let mut bytes = vec![0_u8; 40];
         bytes[..4].copy_from_slice(&2_u32.to_ne_bytes());
         bytes[8..12].copy_from_slice(&2_u32.to_ne_bytes());
         bytes[24..28].copy_from_slice(&6_u32.to_ne_bytes());
-        assert_eq!(decode_channels(&bytes).ok(), Some(8));
-        assert!(decode_channels(&bytes[..39]).is_err());
+        assert_eq!(super::decode_channels(&bytes).ok(), Some(8));
+        assert!(super::decode_channels(&bytes[..39]).is_err());
         bytes[8..12].copy_from_slice(&u32::MAX.to_ne_bytes());
-        assert!(decode_channels(&bytes).is_err());
+        assert!(super::decode_channels(&bytes).is_err());
     }
 }

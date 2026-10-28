@@ -1,13 +1,15 @@
 //! Read-only native worker smoke test. No permission grant, source or audio start.
+use channelbridge_core::Config;
+use std::error::Error;
+use std::path::Path;
 #[cfg(target_os = "macos")]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::{
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
-    let worker = channelbridge_macos::backend::spawn_worker(
+fn main() -> Result<(), Box<dyn Error>> {
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use std::time::Instant;
+    let worker = channelbridge_macos::native_backend::spawn_worker(
         PathBuf::from("work/read-only-settings.json"),
-        channelbridge_core::Config::default(),
+        Config::default(),
     )?;
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -24,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let path = std::env::args()
                     .nth(2)
                     .ok_or("diagnostic output path required")?;
-                channelbridge_core::diagnostics::save_new(std::path::Path::new(&path), &snapshot)?;
+                channelbridge_core::diagnostics::save_new(Path::new(&path), &snapshot)?;
             }
             for device in snapshot.devices.iter() {
                 println!(

@@ -1,6 +1,8 @@
 //! Main-thread routing controls preserve saved channels across hot-plugging.
 use channelbridge_core::{Config, Mode};
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSPopUpButton, NSTextField, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
@@ -85,6 +87,7 @@ impl RoutingControls {
     }
     /// Interpret indices using the exact list that was displayed, not a newly
     /// enumerated device. Unavailable placeholder entries never become Ch 1.
+    #[must_use]
     pub fn selected_config(&self, sender: &NSPopUpButton, config: &Config) -> Option<Config> {
         let mut next = config.clone();
         if std::ptr::eq(sender, &*self.mode) {

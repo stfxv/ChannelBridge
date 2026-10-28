@@ -1,6 +1,8 @@
 //! A bounded, scrollable dry-input meter list, updated only while visible.
 use channelbridge_core::worker::Snapshot;
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2::MainThreadMarker;
+use objc2::MainThreadOnly;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSBackingStoreType, NSScrollView, NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
@@ -26,6 +28,8 @@ impl Overview {
                 false,
             )
         };
+        // SAFETY: The retained window is live on the main thread; disabling release-on-
+        // close preserves Rust ownership.
         unsafe {
             window.setReleasedWhenClosed(false);
         }
@@ -76,7 +80,8 @@ impl Overview {
                 self.document.scrollRectToVisible(first.frame());
             }
         }
-        for (index, row) in rows.iter().enumerate() {
+        let indexed_rows = rows.iter().enumerate();
+        for (index, row) in indexed_rows {
             row.setStringValue(&NSString::from_str(&crate::input_meters::channel_text(
                 index as u32 + 1,
                 snapshot.audio.as_ref(),

@@ -10,3 +10,6 @@ model-check = ["dep:loom"]
 
 [dependencies]
 loom = { version = "0.7", optional = true }
+
+[lints]
+workspace = true

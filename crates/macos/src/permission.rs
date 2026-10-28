@@ -1,12 +1,12 @@
 //! Microphone permission boundary. Querying status never requests access.
 use block2::RcBlock;
-use objc2::{MainThreadMarker, runtime::Bool};
+use objc2::MainThreadMarker;
+use objc2::runtime::Bool;
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
 use objc2_foundation::{NSBundle, ns_string};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Permission {
     NotDetermined,
@@ -16,10 +16,12 @@ pub enum Permission {
     Unavailable,
 }
 impl Permission {
+    #[must_use]
     pub fn allowed(self) -> bool {
         self == Self::Authorized
     }
 }
+#[must_use]
 fn translate(status: AVAuthorizationStatus) -> Permission {
     match status {
         AVAuthorizationStatus::NotDetermined => Permission::NotDetermined,
@@ -29,11 +31,14 @@ fn translate(status: AVAuthorizationStatus) -> Permission {
         _ => Permission::Unavailable,
     }
 }
+#[must_use]
 pub fn status() -> Permission {
     // SAFETY: framework's immutable constant is audio, the supported media type.
     let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
         return Permission::Unavailable;
     };
+    // SAFETY: audio is the framework-provided live media-type constant; this class method
+    // only reads authorization.
     translate(unsafe { AVCaptureDevice::authorizationStatusForMediaType(audio) })
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +75,7 @@ impl MicrophonePermission {
         {
             return Ok(Request::Pending);
         }
+        // SAFETY: AVMediaTypeAudio is an immutable framework constant borrowed for the request.
         let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
             self.pending.store(false, Ordering::Release);
             return Err("audio permission API is unavailable");
@@ -85,6 +91,7 @@ impl MicrophonePermission {
         }
         Ok(Request::Pending)
     }
+    #[must_use]
     pub fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
@@ -100,8 +107,8 @@ mod tests {
             AVAuthorizationStatus::Denied,
             AVAuthorizationStatus(-1),
         ] {
-            assert!(!translate(state).allowed());
+            assert!(!super::translate(state).allowed());
         }
-        assert!(translate(AVAuthorizationStatus::Authorized).allowed());
+        assert!(super::translate(AVAuthorizationStatus::Authorized).allowed());
     }
 }

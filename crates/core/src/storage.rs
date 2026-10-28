@@ -1,11 +1,13 @@
 //! Settings are committed before changing a live audio route.
 use crate::Config;
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -45,6 +47,8 @@ fn open_temporary(path: PathBuf) -> io::Result<(File, TemporaryFile)> {
 }
 
 pub fn save(path: &Path, config: &Config) -> io::Result<()> {
+    use std::io::Write;
+
     config
         .validate_selection()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
@@ -86,7 +90,7 @@ mod tests {
                 std::process::id(),
                 TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));
-            fs::create_dir(&path).unwrap();
+            fs::create_dir(&path).expect("fixture owns a writable unique temporary directory");
             Self(path)
         }
     }
@@ -108,44 +112,65 @@ mod tests {
             muted: false,
             auto_send_on_resume: false,
         };
-        save(&path, &original).unwrap();
+        super::save(&path, &original).expect("original settings contain a device and nonzero channels in a writable fixture directory");
         let invalid = Config {
             left: 0,
             ..original.clone()
         };
-        assert!(save(&path, &invalid).is_err());
-        assert_eq!(load(&path).unwrap(), original);
+        assert!(super::save(&path, &invalid).is_err());
+        assert_eq!(
+            super::load(&path)
+                .expect("failed validation preserves the readable previously saved settings"),
+            original
+        );
     }
 
     #[test]
     fn failed_commit_cleans_up_the_temporary_file() {
         let dir = TestDirectory::new();
         let path = dir.0.join("settings.json");
-        fs::create_dir(&path).unwrap();
+        fs::create_dir(&path).expect("fixture owns a writable unique temporary directory");
         let config = Config {
             device_uid: "RME".into(),
             ..Config::default()
         };
-        assert!(save(&path, &config).is_err());
+        assert!(super::save(&path, &config).is_err());
         assert!(path.is_dir());
-        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(&dir.0)
+                .expect("fixture directory remains present for cleanup inspection")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn corrupted_config_is_not_silently_reset() {
         let dir = TestDirectory::new();
         let path = dir.0.join("settings.json");
-        assert_eq!(load(&path).unwrap(), Config::default());
-        fs::write(&path, b"broken json").unwrap();
-        assert_eq!(load(&path).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            super::load(&path).expect("a missing settings file loads the default configuration"),
+            Config::default()
+        );
+        fs::write(&path, b"broken json").expect("fixture owns this writable settings path");
+        assert_eq!(
+            super::load(&path)
+                .expect_err("the fixture deliberately wrote malformed JSON")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
     fn a_colliding_temporary_file_is_never_removed() {
         let dir = TestDirectory::new();
         let path = dir.0.join("existing.tmp");
-        fs::write(&path, b"owned by another writer").unwrap();
-        assert!(open_temporary(path.clone()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"owned by another writer");
+        fs::write(&path, b"owned by another writer")
+            .expect("fixture owns this writable settings path");
+        assert!(super::open_temporary(path.clone()).is_err());
+        assert_eq!(
+            fs::read(&path).expect("fixture file was written and remains present for inspection"),
+            b"owned by another writer"
+        );
     }
 }

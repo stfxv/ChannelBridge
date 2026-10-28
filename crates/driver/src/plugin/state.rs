@@ -1,17 +1,23 @@
-use super::{BAD_OBJECT, DEVICE, ILLEGAL, NOT_READY, UNSPECIFIED, system};
+use super::host_boundary::BAD_OBJECT;
+use super::host_boundary::DEVICE;
+use super::host_boundary::ILLEGAL;
+use super::host_boundary::NOT_READY;
+use super::host_boundary::UNSPECIFIED;
+use super::system;
 use crate::DriverAudio;
-use channelbridge_audio::clock::{DeviceClock, ZeroTimestamp};
+use channelbridge_audio::device_clock::{DeviceClock, ZeroTimestamp};
 use channelbridge_contract::SUPPORTED_RATES;
 use channelbridge_hal_abi::interface::{HostInterface, HostRef};
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering},
-    sync::{
-        Mutex, OnceLock,
-        mpsc::{self, SyncSender},
-    },
-    thread::JoinHandle,
-};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
+use std::thread::JoinHandle;
 
 struct Worker {
     sender: SyncSender<Option<u32>>,
@@ -30,10 +36,12 @@ pub(super) struct Runtime {
     pending_rate: AtomicU32,
 }
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+#[must_use]
 pub(super) fn runtime() -> Option<&'static Runtime> {
     RUNTIME.get()
 }
 
+#[must_use]
 pub(super) fn initialize(host: HostRef) -> i32 {
     let Some(audio) = crate::kernel() else {
         return UNSPECIFIED;
@@ -112,13 +120,16 @@ pub(super) fn shutdown() {
     }
 }
 
+#[must_use]
 pub(super) fn rate() -> u32 {
     runtime().map_or(48_000, |r| r.rate.load(Ordering::Acquire))
 }
+#[must_use]
 pub(super) fn running() -> u32 {
     runtime().map_or(0, |r| u32::from(r.started.load(Ordering::Acquire) != 0))
 }
 
+#[must_use]
 pub(super) fn add_client(id: u32) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -132,6 +143,7 @@ pub(super) fn add_client(id: u32) -> i32 {
     clients.insert(id, false);
     0
 }
+#[must_use]
 pub(super) fn remove_client(id: u32) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -149,6 +161,7 @@ pub(super) fn remove_client(id: u32) -> i32 {
     }
 }
 
+#[must_use]
 fn reset_clock(r: &Runtime, new_rate: Option<u32>) -> i32 {
     r.clock_sequence.fetch_add(1, Ordering::AcqRel);
     if let Some(rate) = new_rate {
@@ -164,6 +177,7 @@ fn reset_clock(r: &Runtime, new_rate: Option<u32>) -> i32 {
     status
 }
 
+#[must_use]
 pub(super) fn start(id: u32) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -187,6 +201,7 @@ pub(super) fn start(id: u32) -> i32 {
     r.started.fetch_add(1, Ordering::Release);
     0
 }
+#[must_use]
 pub(super) fn stop(id: u32) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -205,6 +220,7 @@ pub(super) fn stop(id: u32) -> i32 {
     0
 }
 
+#[must_use]
 pub(super) fn request_rate(rate: u32) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -236,6 +252,7 @@ pub(super) fn request_rate(rate: u32) -> i32 {
     0
 }
 
+#[must_use]
 pub(super) fn perform_rate_change(action: u64) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -263,8 +280,8 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     reset_clock(r, Some(rate))
 }
 
-struct PendingChange<'a> {
-    pending: &'a AtomicU32,
+struct PendingChange<'pending> {
+    pending: &'pending AtomicU32,
     rate: u32,
 }
 impl Drop for PendingChange<'_> {
@@ -274,6 +291,7 @@ impl Drop for PendingChange<'_> {
             .compare_exchange(self.rate, 0, Ordering::AcqRel, Ordering::Acquire);
     }
 }
+#[must_use]
 pub(super) fn abort_rate_change(action: u64) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
@@ -291,6 +309,7 @@ pub(super) fn abort_rate_change(action: u64) -> i32 {
     }
 }
 
+#[must_use]
 pub(super) fn timestamp() -> Option<ZeroTimestamp> {
     let r = runtime()?;
     let before = r.clock_sequence.load(Ordering::Acquire);
