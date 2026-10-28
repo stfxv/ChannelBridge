@@ -194,7 +194,7 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
         s if s == hal_abi::fourcc(b"ctrl") => Ok(Value::Objects(&[])),
         s if s == hal_abi::fourcc(b"nsrt") => Ok(Value::Number(f64::from(state::rate()))),
         s if s == hal_abi::fourcc(b"nsr#") => Ok(Value::Rates),
-        s if s == hal_abi::fourcc(b"ring") => Ok(Value::Integer(512)),
+        s if s == hal_abi::fourcc(b"ring") => Ok(Value::Integer(super::ZERO_TIMESTAMP_PERIOD)),
         s if s == hal_abi::fourcc(b"clok") => Ok(Value::Integer(hal_abi::fourcc(b"raww"))),
         s if s == hal_abi::fourcc(b"dch2") => Ok(Value::Objects(&[1, 2])),
         s if s == hal_abi::fourcc(b"srnd") => Ok(Value::Layout),

@@ -320,7 +320,7 @@ pub(super) fn timestamp() -> Option<ZeroTimestamp> {
         r.anchor.load(Ordering::Acquire),
         r.frequency,
         r.rate.load(Ordering::Acquire),
-        512,
+        super::ZERO_TIMESTAMP_PERIOD,
         r.audio.counters().generation,
     )?;
     let timestamp = clock.timestamp(system::now())?;
