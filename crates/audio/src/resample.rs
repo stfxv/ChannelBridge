@@ -138,8 +138,18 @@ impl StreamingResampler {
         if !(1..=65_536).contains(&block_capacity) {
             return None;
         }
+        Self::with_future_capacity(maximum_step, block_capacity)
+    }
+
+    #[must_use]
+    pub(crate) fn with_future_capacity(maximum_step: f64, future_capacity: usize) -> Option<Self> {
         let kernel = SincKernel::new(maximum_step)?;
-        let capacity = (2 * kernel.radius + block_capacity + 2).checked_next_power_of_two()?;
+        let capacity = kernel
+            .radius
+            .checked_mul(2)?
+            .checked_add(future_capacity)?
+            .checked_add(2)?
+            .checked_next_power_of_two()?;
         let mut history = Vec::new();
         history.try_reserve_exact(capacity).ok()?;
         history.resize(capacity, StereoFrame::SILENCE);
@@ -153,6 +163,11 @@ impl StreamingResampler {
             cursor: radius,
             fraction: 0.0,
         })
+    }
+
+    #[must_use]
+    pub(crate) fn pending_capacity(&self) -> usize {
+        self.history.len() - self.kernel.radius
     }
 
     #[must_use]

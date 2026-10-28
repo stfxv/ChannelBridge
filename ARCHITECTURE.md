@@ -115,10 +115,23 @@ Selected stereo frames cross a bounded single-producer/single-consumer FIFO.
 The virtual output IOProc uses the observed source-clock speed and queue/history
 fill level to adjust a windowed-sinc interpolator smoothly. The provisional
 input target is 16 ms, with a minimum of 256 frames; this does not establish
-the total physical-to-receiver latency. Startup also requires enough input for
-the current complete output callback at the maximum permitted resampling step,
-including interpolation lookahead. Priming preserves PCM rather than repeatedly
-rendering a partial block and discarding its lookahead.
+the total physical-to-receiver latency. Each FIFO publication carries its offered
+capture packet length alongside its samples and generation. The output keeps the
+largest packet observed for the current generation. Its effective steady target
+is at least that packet plus interpolation lookahead and one frame. Startup also
+reserves the current complete output callback at the maximum permitted resampling
+step. These reserves prevent output from exhausting a large packet before the
+next packet arrives, even when output callbacks are smaller than capture callbacks.
+Priming moves PCM into prepared interpolation history, so a reserve larger than
+the FIFO can accumulate across capture callbacks without deadlock.
+
+Packet growth raises the target without resetting running interpolation or clock
+correction. A generation change clears the learned packet maximum. Old samples
+and samples beyond a future-generation barrier do not raise the current target.
+History is allocated before registration for the reserve and a complete packet
+crossing the startup threshold. Partial FIFO writes still report their rejected
+suffix; their reserve is bounded by FIFO capacity. A first unseen longer capture
+interval can still cause a genuine shortage before its packet size is learned.
 Real shortages preserve valid output, fade the boundary, emit silence for the
 missing frames, and re-prime interpolation history.
 
@@ -148,7 +161,9 @@ recorded or sent outside the local virtual device.
 `bash scripts/test.sh` runs formatting, Clippy, workspace tests in test and
 production profiles, DSP/native-adapter allocation checks, finite Loom models,
 the release filter-response grid, SDK ABI comparison, and a mock HAL driver test
-with a C ASan/UBSan harness. A fake-audio AppKit sleep/wake notification test
+with a C ASan/UBSan harness. Actual PCM packet schedules cover different capture
+and output blocks, callback phases, unequal rates, generation isolation, and
+sustained packet growth. A fake-audio AppKit sleep/wake notification test
 runs in both profiles. Broader AppKit smoke/bundle tests and Universal packaging
 have separate scripts. `bash scripts/build.sh` creates distribution artifacts;
 it does not install them or restart the audio service. Sleep notifications are
