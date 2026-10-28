@@ -3,6 +3,8 @@
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <mach/mach_time.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +39,30 @@ static double get_rate(void) {
     AudioObjectPropertyAddress a=address(kAudioDevicePropertyNominalSampleRate); double rate=0; UInt32 size=0;
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(rate),&size,&rate)==0);
     assert(size==sizeof(rate)); return rate;
+}
+static void check_clock(void) {
+    UInt32 period=get_u32(Device,kAudioDevicePropertyZeroTimeStampPeriod);
+    assert(period>=10923);
+    double rate=get_rate(), sample, next_sample;
+    UInt64 ticks, seed, next_ticks, next_seed;
+    mach_timebase_info_data_t base;
+    assert(mach_timebase_info(&base)==KERN_SUCCESS);
+    long double frequency=1000000000.0L*base.denom/base.numer;
+    assert((*driver)->GetZeroTimeStamp(driver,Device,1,&sample,&ticks,&seed)==0);
+    assert(seed!=0 && sample>=0 && fmod(sample,period)==0);
+    double first_sample=sample;
+    for(int i=0;i<2;i++) {
+        usleep((useconds_t)ceil(period*500000.0/rate)+1000);
+        assert((*driver)->GetZeroTimeStamp(driver,Device,1,&next_sample,&next_ticks,&next_seed)==0);
+        assert(next_seed==seed && next_sample>=sample && next_ticks>=ticks);
+        assert(fmod(next_sample,period)==0);
+        long double mapped_ticks=(next_sample-sample)*frequency/rate;
+        assert(fabsl((long double)(next_ticks-ticks)-mapped_ticks)<1);
+        sample=next_sample; ticks=next_ticks;
+    }
+    assert(sample>=first_sample+period);
+    printf("Clock contract: period=%u rate=%.0f advance=%.0f stable seed and host mapping passed\n",
+           period,rate,sample-first_sample);
 }
 static void transfer(UInt32 operation, double time, UInt32 frames, float *audio) {
     AudioServerPlugInIOCycleInfo cycle={0};
@@ -107,6 +133,7 @@ int main(int argc, char **argv) {
     assert(get_u32(Plugin,kAudioPlugInPropertyDeviceList)==Device);
     assert(get_u32(Input,kAudioStreamPropertyDirection)==1);
     assert(get_u32(Output,kAudioStreamPropertyDirection)==0);
+    assert(get_u32(Device,kAudioDevicePropertyZeroTimeStampPeriod)>=10923);
     a=address(kAudioObjectPropertyCustomPropertyInfoList);
     AudioServerPlugInCustomPropertyInfo custom[2]={{0}};
     assert((*driver)->GetPropertyDataSize(driver,Device,0,&a,0,NULL,&bytes)==0 && bytes==sizeof(custom));
@@ -166,7 +193,10 @@ int main(int argc, char **argv) {
     }
 
     double rates[]={44100,48000,96000,32000,192000,768000,48000};
-    for(unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);i++) rate_change(rates[i]);
+    for(unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);i++) {
+        rate_change(rates[i]);
+        if(i==0) check_clock();
+    }
     assert((*driver)->GetZeroTimeStamp(driver,Device,1,&sample,&ticks,&seed)==0 && seed!=original_seed);
     transfer(kAudioServerPlugInIOOperationReadInput,128,256,received);
     for(int i=0;i<512;i++) assert(received[i]==0); // Old timeline cannot leak.
