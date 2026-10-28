@@ -52,7 +52,7 @@ unsafe impl GlobalAlloc for CheckedAllocator {
 fn main() {
     let (mut producer, consumer) = fifo::stereo_queue(8192).expect("test queue");
     let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704).expect("test DSP");
-    let incoming = [StereoFrame::new(0.25, -0.25); 1024];
+    let incoming = [StereoFrame::new(0.25, -0.25); 4096];
     let mut outgoing = [StereoFrame::SILENCE; 512];
     // This executable has only one thread. Construction and reporting stay
     // outside the measured region; include startup, steady I/O and recovery.
@@ -63,12 +63,31 @@ fn main() {
         }
         let _ = processor.render(&mut outgoing, Some(1.001));
     }
+    let mut grown_produced = 0;
+    for index in 0..128 {
+        if index % 8 == 0 {
+            assert_eq!(producer.push(&incoming), incoming.len());
+        }
+        grown_produced += processor.render(&mut outgoing, Some(1.0)).produced;
+    }
+    assert!(processor.target_frames() > incoming.len());
+    processor.set_generation(u64::MAX);
+    assert_eq!(processor.target_frames(), 704);
+    let mut restarted_produced = 0;
+    for index in 0..32 {
+        if index % 2 == 0 {
+            assert_eq!(producer.push_generation(&incoming[..1024], u64::MAX), 1024);
+        }
+        restarted_produced += processor.render(&mut outgoing, Some(1.0)).produced;
+    }
     CHECKING.store(false, Ordering::Release);
     let allocated = ALLOCATIONS.load(Ordering::Acquire);
     let freed = DEALLOCATIONS.load(Ordering::Acquire);
     println!(
-        "FIFO + output DSP: allocations={allocated}, deallocations={freed} (startup, steady transfer, shortage and recovery)"
+        "FIFO + output DSP: allocations={allocated}, deallocations={freed}, grown_produced={grown_produced}, restarted_produced={restarted_produced} (startup, steady transfer, shortage, packet growth and generation reset)"
     );
     assert_eq!(allocated, 0);
     assert_eq!(freed, 0);
+    assert!(grown_produced > 32_768);
+    assert!(restarted_produced > 8192);
 }

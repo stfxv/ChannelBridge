@@ -44,8 +44,6 @@ impl OutputProcessor {
     pub fn new(input: Consumer, input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
         let maximum_step = f64::from(input_rate) / f64::from(output_rate) * 1.002;
         let maximum_consumption = (MAX_BLOCK as f64 * maximum_step).ceil() as usize;
-        // Reserve up to one FIFO-sized packet beyond the startup threshold.
-        // The resampler adds retained filter past and lookahead before rounding.
         let future_capacity = input
             .capacity()
             .checked_mul(2)?

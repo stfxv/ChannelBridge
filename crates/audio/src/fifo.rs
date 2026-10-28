@@ -121,8 +121,6 @@ impl Consumer {
         (write.wrapping_sub(read) as usize).min(self.shared.frames.len())
     }
 
-    /// The unread slots remain owned by this consumer throughout the snapshot.
-    /// A later producer publication is observed on the next scan or transfer.
     #[must_use]
     pub(crate) fn generation_view(&self, generation: u64) -> GenerationView {
         let shared = &self.shared;

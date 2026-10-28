@@ -20,7 +20,6 @@ impl Schedule {
 
     #[must_use]
     fn startup_allowance(self) -> u64 {
-        // Allow several complete arrivals and output callbacks, including the initial fade.
         u64::from(self.input_rate) * 16 / 1000
             + 3 * self.capture_frames as u64
             + 2 * self.input_per_output()
@@ -97,7 +96,6 @@ impl Timeline {
         let mut output = vec![StereoFrame::SILENCE; schedule.output_frames];
         let mut observed = Observed::default();
         while self.next_output * input_rate < end * output_rate {
-            // A capture wins simultaneous events. Cross-products retain exact unequal-rate times.
             while self.input_position < end
                 && self.input_position * output_rate <= self.next_output * input_rate
             {
