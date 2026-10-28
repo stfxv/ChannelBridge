@@ -131,8 +131,6 @@ impl OutputProcessor {
 
     fn fill_history(&mut self, budget: &mut usize) -> usize {
         let mut total = 0;
-        // Each successful pass consumes at least one budgeted sample. An empty
-        // FIFO, full working history or exhausted budget ends the loop.
         while *budget != 0 {
             let count = self
                 .resampler
@@ -145,6 +143,7 @@ impl OutputProcessor {
             let transferred = self
                 .input
                 .pop_generation(&mut self.scratch[..count], self.generation);
+            *budget = budget.saturating_sub(transferred.received + transferred.discarded);
             self.stale_discarded = self
                 .stale_discarded
                 .saturating_add(transferred.discarded as u64);
@@ -155,7 +154,6 @@ impl OutputProcessor {
             }
             let accepted = self.resampler.push(&self.scratch[..received]);
             total += accepted;
-            *budget -= received;
             if accepted != received {
                 break;
             }
