@@ -466,6 +466,72 @@ mod tests {
     }
 
     #[test]
+    fn history_fill_charges_late_retired_frames_to_its_work_allowance() {
+        let (mut producer, consumer) =
+            fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
+        assert_eq!(processor.set_generation(2), 0);
+        let old = [StereoFrame::new(0.8, 0.8); 64];
+        let fresh: Vec<_> = (0..5000)
+            .map(|index| {
+                let sample = -0.25 - index as f32 / 20_000.0;
+                StereoFrame::new(sample, -sample)
+            })
+            .collect();
+        assert_eq!(producer.push_generation(&old, 1), old.len());
+        assert_eq!(producer.push_generation(&fresh, 2), fresh.len());
+        let before = processor.fifo_frames();
+        let allowance = 4200;
+        let mut budget = allowance;
+        let received = processor.fill_history(&mut budget);
+        let progressed = before - processor.fifo_frames();
+        assert!(
+            progressed <= allowance,
+            "FIFO progressed {progressed} entries with allowance {allowance}"
+        );
+        assert_eq!(processor.stale_discarded(), 64);
+        assert_eq!(received, 4136);
+        assert_eq!(processor.resampler.queued_input_frames(), 4136);
+        assert_eq!(processor.fill_history(&mut budget), 0);
+        assert_eq!(before - processor.fifo_frames(), progressed);
+        let mut output = [StereoFrame::SILENCE; 512];
+        assert_eq!(processor.resampler.render(&mut output, 1.0), output.len());
+        for (actual, expected) in output.iter().zip(&fresh).skip(64) {
+            assert!((actual.left - expected.left).abs() < 0.0001);
+            assert!((actual.right - expected.right).abs() < 0.0001);
+        }
+        assert_eq!(processor.resampler.render(&mut output, 1.0), output.len());
+        for (actual, expected) in output.iter().zip(&fresh[512..]) {
+            assert!((actual.left - expected.left).abs() < 0.0001);
+            assert!((actual.right - expected.right).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn history_fill_exhausts_work_allowance_when_only_retired_frames_arrive() {
+        let (mut producer, consumer) =
+            fifo::stereo_queue(128).expect("fixture queue capacity is a nonzero power of two");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 128).expect(
+            "fixture rates are supported and the target lies above lookahead within queue capacity",
+        );
+        assert_eq!(processor.set_generation(2), 0);
+        let old = [StereoFrame::new(0.8, 0.8); 64];
+        assert_eq!(producer.push_generation(&old, 1), old.len());
+        let mut budget = 32;
+        assert_eq!(processor.fill_history(&mut budget), 0);
+        assert_eq!(processor.fifo_frames(), 0);
+        assert_eq!(processor.stale_discarded(), 64);
+        assert_eq!(budget, 0);
+        let fresh = [StereoFrame::new(-0.25, -0.25); 64];
+        assert_eq!(producer.push_generation(&fresh, 2), fresh.len());
+        assert_eq!(processor.fill_history(&mut budget), 0);
+        assert_eq!(processor.fifo_frames(), fresh.len());
+        assert_eq!(processor.resampler.queued_input_frames(), 0);
+    }
+
+    #[test]
     fn restart_retires_interpolation_history_and_late_old_packets() {
         let (mut producer, consumer) =
             fifo::stereo_queue(8192).expect("fixture queue capacity is a nonzero power of two");
