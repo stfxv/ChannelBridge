@@ -19,7 +19,7 @@ bash scripts/test.sh
 bash scripts/build.sh
 ```
 
-通常版Universalアプリとインストーラを`dist/`へ生成する。ビルドはインストールや音声サービスの再起動を行わない。試験版は`bash scripts/package-rust-test-app.sh`で別UID・別設定先へ生成する。旧Go版の説明は[LEGACY_GO.md](LEGACY_GO.md)、ビルドは`scripts/build-legacy-go.sh`である。
+通常版Universalアプリとインストーラを`dist/`へ生成する。ビルドはインストールや音声サービスの再起動を行わない。試験版は`bash scripts/package-rust-test-app.sh`で別UID・別設定先へ生成する。旧Go版のソースと当時のライセンス表示は[削除前のGit履歴](https://github.com/stfxv/ChannelBridge/tree/f261f65d86d995b67b02942148f067d01365f148)に保存されている。
 
 ## 検証範囲
 

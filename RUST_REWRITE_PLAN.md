@@ -1,5 +1,7 @@
 # ChannelBridge Rust 再実装計画
 
+この文書は2026-09-30時点の再実装計画を保存した履歴である。現在の構成は[ARCHITECTURE.md](ARCHITECTURE.md)、導入前のバックアップ・更新・復帰手順は[RUST_MIGRATION.md](RUST_MIGRATION.md)、検証記録は[RUST_PROGRESS.md](RUST_PROGRESS.md)を参照する。以下の移行前提と状態は作成当時のものである。
+
 作成日: 2026-09-30。基準: アプリ v0.4.0 / commit 21fd0fa、仮想ドライバ v0.1.0。
 状態: 2026-09-30に実装を開始。導入済みのアプリ・ドライバとは別に開発し、完了条件を満たすまで通常版を置き換えない。
 

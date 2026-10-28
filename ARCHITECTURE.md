@@ -2,9 +2,9 @@
 
 ChannelBridge selects inputs from a multichannel CoreAudio device and sends
 float32 stereo PCM to its own **ChannelBridge Mic** virtual microphone. The
-production application and HAL driver are Rust implementations. The older Go
-implementation is retained for reference and separate legacy builds; it is not
-the architecture described below.
+production application and HAL driver are Rust implementations. `scripts/build.sh`
+and `scripts/test.sh` use this Rust workspace. The retired Go implementation and
+its notices remain in Git history.
 
 ## Workspace responsibilities
 

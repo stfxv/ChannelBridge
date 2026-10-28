@@ -3,8 +3,10 @@
 ChannelBridge's Rust application, DSP and virtual driver are new implementations,
 licensed GPL-3.0-only. They do not compile, link or include the legacy Go
 application or BlackHole C source in their source archive or audio path.
-The repository retains the legacy implementation and its original notices for
-the existing production release and rollback; see the repository's THIRD_PARTY.md.
+The retired Go implementation and its original notices remain in
+[Git history](https://github.com/stfxv/ChannelBridge/tree/f261f65d86d995b67b02942148f067d01365f148).
+That snapshot includes [the legacy notices](https://github.com/stfxv/ChannelBridge/blob/f261f65d86d995b67b02942148f067d01365f148/THIRD_PARTY.md)
+and [the original BlackHole license](https://github.com/stfxv/ChannelBridge/blob/f261f65d86d995b67b02942148f067d01365f148/vendor/blackhole/LICENSE).
 
 Dependency versions and registry checksums are pinned in Cargo.lock. macOS access
 uses objc2, its Foundation/AppKit/AVFoundation bindings and block2; configuration
