@@ -34,7 +34,7 @@ pub struct OutputCallback {
     fifo_current: AtomicU64,
     fifo_min: AtomicU64,
     fifo_max: AtomicU64,
-    buffered_target: u64,
+    buffered_target: AtomicU64,
     correction_ppm: AtomicU64,
     /// Both channel peaks from one completed valid callback, packed together.
     peak: AtomicU64,
@@ -95,7 +95,7 @@ impl OutputCallback {
             fifo_current: AtomicU64::new(0),
             fifo_min: AtomicU64::new(u64::MAX),
             fifo_max: AtomicU64::new(0),
-            buffered_target,
+            buffered_target: AtomicU64::new(buffered_target),
             correction_ppm: AtomicU64::new(f64::NAN.to_bits()),
             peak: AtomicU64::new(u64::MAX),
         })
@@ -126,7 +126,7 @@ impl OutputCallback {
             fifo_current: observed.then(|| self.fifo_current.load(Ordering::Acquire)),
             fifo_min: observed.then_some(minimum),
             fifo_max: observed.then(|| self.fifo_max.load(Ordering::Acquire)),
-            buffered_target: self.buffered_target,
+            buffered_target: self.buffered_target.load(Ordering::Acquire),
             correction_ppm: correction.is_finite().then_some(correction),
             peak: peak.iter().all(|value| value.is_finite()).then_some(peak),
             failed: self.failed.load(Ordering::Acquire),
@@ -164,6 +164,8 @@ impl OutputCallback {
             // SAFETY: this callback owns the state gate, including across unwind.
             let state = unsafe { &mut *self.state.get() };
             state.processor.set_generation(route.generation);
+            self.buffered_target
+                .store(state.processor.target_frames() as u64, Ordering::Release);
             if !route.sending {
                 state.gain = 0.0;
                 self.peak.store(0, Ordering::Release);
@@ -175,6 +177,8 @@ impl OutputCallback {
                 frames,
                 source_speed.or_else(|| self.source_clock.speed(route.generation)),
             );
+            self.buffered_target
+                .store(state.processor.target_frames() as u64, Ordering::Release);
             // Muted callbacks still advance DSP and consume queued input.
             let target = if route.selection.muted() { 0.0 } else { 1.0 };
             let output_samples = output.iter_mut().zip(frames.iter());
@@ -255,7 +259,7 @@ mod tests {
         let processor = OutputProcessor::new(consumer, 48_000, 48_000, 1024).expect(
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
-        let callback = OutputCallback::new(processor, routing)
+        let callback = OutputCallback::new(processor, Arc::clone(&routing))
             .expect("fixture can allocate the fixed 4096-frame callback scratch buffer");
         assert_eq!(callback.stats().fifo_min, None);
         assert_eq!(callback.stats().correction_ppm, None);
@@ -278,10 +282,12 @@ mod tests {
         assert_eq!(callback.stats().fifo_min, Some(0));
         assert_eq!(callback.stats().correction_ppm, Some(0.0));
         assert!(samples.iter().all(|sample| *sample == [0.0; 2]));
-        assert_eq!(
-            producer.push_generation(&[StereoFrame::new(0.5, 0.25); 2048], generation),
-            2048
-        );
+        for _ in 0..2 {
+            assert_eq!(
+                producer.push_generation(&[StereoFrame::new(0.5, 0.25); 1024], generation),
+                1024
+            );
+        }
         for _ in 0..6 {
             // SAFETY: The fixture owns the complete stereo descriptor and
             // exclusively borrows its samples for this call.
@@ -300,6 +306,20 @@ mod tests {
         );
         assert_eq!(stats.rejected, 0);
         assert!(!stats.failed);
+        assert_eq!(stats.buffered_target, 1122);
+        assert_eq!(
+            producer.push_generation(&[StereoFrame::new(0.5, 0.25); 4096], generation),
+            4096
+        );
+        // SAFETY: The fixture exclusively owns the native stereo output buffer.
+        unsafe { callback.process(&mut buffer, None) };
+        assert_eq!(callback.stats().buffered_target, 4194);
+        routing
+            .configure(selection, false, false)
+            .expect("fixture route can advance its generation");
+        // SAFETY: The fixture exclusively owns the native stereo output buffer.
+        unsafe { callback.process(&mut buffer, None) };
+        assert_eq!(callback.stats().buffered_target, 1024);
     }
     #[test]
     fn mute_consumes_audio_and_stop_restart_cannot_replay_it() {
@@ -329,7 +349,9 @@ mod tests {
             }],
         };
         let old = [StereoFrame::new(0.5, 0.25); 2048];
-        assert_eq!(producer.push_generation(&old, generation), old.len());
+        for packet in old.chunks(512) {
+            assert_eq!(producer.push_generation(packet, generation), packet.len());
+        }
         // SAFETY: live, uniquely writable, correctly sized native stereo buffer.
         unsafe {
             callback.process(&mut buffer, None);
@@ -391,7 +413,9 @@ mod tests {
             )
             .expect("fixture selection is encodable and generation space is not exhausted")
             .generation;
-        let _ = producer.push_generation(&old, restarted);
+        for packet in old.chunks(512) {
+            assert_eq!(producer.push_generation(packet, restarted), packet.len());
+        }
         // SAFETY: The fixture owns the complete stereo descriptor and exclusively
         // borrows its samples for this call.
         unsafe {

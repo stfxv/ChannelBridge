@@ -22,7 +22,9 @@ pub struct OutputProcessor {
     resampler: StreamingResampler,
     controller: DriftController,
     scratch: Box<[StereoFrame]>,
+    requested_target: usize,
     target: usize,
+    publication_frames: usize,
     maximum_step: f64,
     active: bool,
     fade_position: usize,
@@ -34,14 +36,26 @@ impl OutputProcessor {
     /// Returns `None` for zero rates, an invalid resampler step, a target
     /// no larger than filter lookahead or above queue capacity, or a failed
     /// storage reservation. The target counts queue and filter history together.
+    /// Each push is treated as one capture packet. Observed packet lengths raise
+    /// the steady target for this generation. Startup additionally reserves one
+    /// output block. History is allocated for that reserve and a whole packet
+    /// of threshold overshoot before either callback starts.
     #[must_use]
     pub fn new(input: Consumer, input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
-        let controller = DriftController::new(input_rate, output_rate, target)?;
         let maximum_step = f64::from(input_rate) / f64::from(output_rate) * 1.002;
-        let resampler = StreamingResampler::new(maximum_step, MAX_BLOCK)?;
+        let maximum_consumption = (MAX_BLOCK as f64 * maximum_step).ceil() as usize;
+        // Reserve up to one FIFO-sized packet beyond the startup threshold.
+        // The resampler adds retained filter past and lookahead before rounding.
+        let future_capacity = input
+            .capacity()
+            .checked_mul(2)?
+            .checked_add(maximum_consumption)?;
+        let resampler = StreamingResampler::with_future_capacity(maximum_step, future_capacity)?;
         if target <= resampler.lookahead_frames() || target > input.capacity() {
             return None;
         }
+        let pending_limit = input.capacity().checked_add(resampler.pending_capacity())?;
+        let controller = DriftController::new(input_rate, output_rate, target, pending_limit)?;
         let mut scratch = Vec::new();
         scratch.try_reserve_exact(MAX_BLOCK).ok()?;
         scratch.resize(MAX_BLOCK, StereoFrame::SILENCE);
@@ -50,7 +64,9 @@ impl OutputProcessor {
             resampler,
             controller,
             scratch: scratch.into_boxed_slice(),
+            requested_target: target,
             target,
+            publication_frames: 0,
             maximum_step,
             active: false,
             fade_position: 0,
@@ -67,7 +83,7 @@ impl OutputProcessor {
     pub fn fifo_frames(&self) -> usize {
         self.input.available()
     }
-    /// Target includes FIFO and interpolation history together.
+    /// Effective steady target includes FIFO and interpolation history together.
     #[must_use]
     pub fn target_frames(&self) -> usize {
         self.target
@@ -85,6 +101,9 @@ impl OutputProcessor {
         }
         self.generation = generation;
         self.resampler.reset();
+        self.publication_frames = 0;
+        self.target = self.requested_target;
+        self.controller.retarget(self.target);
         self.controller.reset();
         self.active = false;
         self.fade_position = 0;
@@ -93,11 +112,23 @@ impl OutputProcessor {
         discarded
     }
 
-    #[must_use]
-    fn queued(&self) -> usize {
-        self.input
-            .available()
-            .saturating_add(self.resampler.queued_input_frames())
+    fn observe_publication(&mut self, publication_frames: usize) {
+        self.publication_frames = self.publication_frames.max(publication_frames);
+        let target = self.requested_target.max(
+            self.publication_frames.min(self.input.capacity())
+                + self.resampler.lookahead_frames()
+                + 1,
+        );
+        if target != self.target {
+            self.target = target;
+            self.controller.retarget(target);
+        }
+    }
+
+    fn queued(&mut self) -> usize {
+        let view = self.input.generation_view(self.generation);
+        self.observe_publication(view.publication_frames);
+        view.pending + self.resampler.queued_input_frames()
     }
 
     fn fill_history(&mut self, budget: &mut usize) -> usize {
@@ -119,6 +150,7 @@ impl OutputProcessor {
             self.stale_discarded = self
                 .stale_discarded
                 .saturating_add(transferred.discarded as u64);
+            self.observe_publication(transferred.publication_frames);
             let received = transferred.received;
             if received == 0 {
                 break;
@@ -148,31 +180,36 @@ impl OutputProcessor {
                 ..Default::default()
             };
         }
+        let consumption = (output.len() as f64 * self.maximum_step).ceil() as usize;
+        let required = consumption + self.resampler.lookahead_frames() + 1;
+        if required > self.input.capacity() {
+            return RenderReport {
+                missing: output.len(),
+                queued_input: self.queued(),
+                ..Default::default()
+            };
+        }
+        let mut budget =
+            self.input.capacity() + consumption + 2 * self.resampler.lookahead_frames();
         if !self.active {
-            let required = (output.len() as f64 * self.maximum_step).ceil() as usize
-                + self.resampler.lookahead_frames()
-                + 1;
-            if required > self.input.capacity() {
+            self.fill_history(&mut budget);
+            let queued = self.queued();
+            let startup = self
+                .requested_target
+                .max(self.publication_frames.min(self.input.capacity()) + required);
+            if queued < startup {
                 return RenderReport {
-                    missing: output.len(),
-                    queued_input: self.queued(),
-                    ..Default::default()
-                };
-            }
-            if self.queued() < self.target.max(required) {
-                return RenderReport {
-                    queued_input: self.queued(),
+                    queued_input: queued,
                     priming: true,
                     ..Default::default()
                 };
             }
             self.active = true;
             self.fade_position = 0;
+        } else {
+            let _ = self.queued();
         }
         let step = self.controller.step();
-        let mut budget = (output.len() as f64 * self.maximum_step).ceil() as usize
-            + 2 * self.resampler.lookahead_frames()
-            + MAX_BLOCK;
         let mut produced = 0;
         while produced < output.len() {
             self.fill_history(&mut budget);
@@ -224,6 +261,118 @@ mod tests {
     use crate::drift::ClockEstimator;
     use crate::fifo;
     #[test]
+    fn capacity_sized_packets_prime_small_fifo_and_survive_threshold_overshoot() {
+        let (mut producer, consumer) =
+            fifo::stereo_queue(1024).expect("fixture capacity is supported");
+        let mut processor = OutputProcessor::new(consumer, 44_100, 44_100, 768)
+            .expect("fixture rates and target are supported");
+        let pcm = [StereoFrame::new(0.25, -0.25); 1024];
+        let mut output = [StereoFrame::SILENCE; 128];
+        let mut audible = 0;
+        for callback in 0..256 {
+            if callback % 8 == 0 {
+                assert_eq!(producer.push(&pcm), pcm.len());
+            }
+            let report = processor.render(&mut output, Some(1.0));
+            assert_eq!(report.missing, 0);
+            assert_eq!(report.dropped_lookahead, 0);
+            assert!(
+                report.queued_input
+                    <= processor.input.capacity() + processor.resampler.pending_capacity()
+            );
+            if callback >= 8 {
+                assert!(!report.priming);
+                assert_eq!(report.produced, output.len());
+                assert!(output[127].left > 0.24 && output[127].right < -0.24);
+                audible += report.produced;
+            }
+        }
+        assert_eq!(audible, 248 * output.len());
+        assert_eq!(processor.target_frames(), 1122);
+    }
+
+    #[test]
+    fn packet_growth_preserves_running_pcm_and_generation_reset_lowers_target() {
+        let (mut producer, consumer) =
+            fifo::stereo_queue(8192).expect("fixture capacity is supported");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 704)
+            .expect("fixture rates and target are supported");
+        let pcm = [StereoFrame::new(0.25, -0.25); 4096];
+        for packet in pcm[..2048].chunks(256) {
+            assert_eq!(producer.push(packet), packet.len());
+        }
+        let mut output = [StereoFrame::SILENCE; 128];
+        assert_eq!(processor.render(&mut output, Some(1.001)).produced, 128);
+        let correction = processor.correction_ppm();
+        let cursor = processor.resampler.queued_input_frames();
+        assert_eq!(producer.push(&pcm), pcm.len());
+        let report = processor.render(&mut output, None);
+        assert_eq!(report.produced, output.len());
+        assert!(!report.priming);
+        assert_eq!(report.missing, 0);
+        assert!(
+            output
+                .iter()
+                .all(|frame| frame.left > 0.24 && frame.right < -0.24)
+        );
+        assert!(report.queued_input >= cursor + pcm.len() - output.len() - 1);
+        assert!((processor.correction_ppm() - correction).abs() < 1.0);
+        assert_eq!(processor.target_frames(), 4194);
+        processor.set_generation(u64::MAX - 1);
+        assert_eq!(processor.target_frames(), 704);
+        assert_eq!(producer.push_generation(&pcm, 1), pcm.len());
+        assert_eq!(producer.push_generation(&pcm[..256], u64::MAX), 256);
+        let report = processor.render(&mut output, None);
+        assert!(report.priming);
+        assert_eq!(report.queued_input, 0);
+        assert_eq!(processor.target_frames(), 704);
+        assert_eq!(processor.fifo_frames(), 256);
+        processor.set_generation(u64::MAX);
+        assert_eq!(producer.push_generation(&pcm[..512], u64::MAX), 512);
+        assert_eq!(processor.render(&mut output, None).produced, output.len());
+        assert_eq!(processor.target_frames(), 704);
+    }
+
+    #[test]
+    fn partial_packet_reserve_is_bounded_and_source_stop_reports_real_shortage() {
+        let (mut producer, consumer) =
+            fifo::stereo_queue(1024).expect("fixture capacity is supported");
+        let mut processor = OutputProcessor::new(consumer, 48_000, 48_000, 768)
+            .expect("fixture rates and target are supported");
+        let pcm = [StereoFrame::new(0.25, -0.25); 4096];
+        let mut output = [StereoFrame::SILENCE; 128];
+        assert_eq!(producer.push(&pcm), 1024);
+        assert_eq!(producer.push(&pcm), 0);
+        assert!(processor.render(&mut output, None).priming);
+        assert_eq!(processor.publication_frames, pcm.len());
+        assert_eq!(processor.target_frames(), 1122);
+        assert_eq!(producer.push(&pcm[..1024]), 1024);
+        assert_eq!(processor.render(&mut output, None).produced, output.len());
+        let mut shortage = false;
+        for _ in 0..20 {
+            let report = processor.render(&mut output, None);
+            if report.missing != 0 {
+                assert!(!report.priming);
+                assert!(report.dropped_lookahead > 0);
+                assert!(
+                    output[report.produced..]
+                        .iter()
+                        .all(|frame| *frame == StereoFrame::SILENCE)
+                );
+                shortage = true;
+                break;
+            }
+        }
+        assert!(shortage);
+        assert!(processor.render(&mut output, None).priming);
+        assert_eq!(processor.target_frames(), 1122);
+        assert_eq!(producer.push(&pcm[..1024]), 1024);
+        assert!(processor.render(&mut output, None).priming);
+        assert_eq!(producer.push(&pcm[..1024]), 1024);
+        assert_eq!(processor.render(&mut output, None).produced, output.len());
+    }
+
+    #[test]
     fn session_target_primes_complete_large_callbacks() {
         for frames in [1024, 4096] {
             let target = 48_000 * 16 / 1000;
@@ -244,8 +393,8 @@ mod tests {
                 );
                 assert_eq!(report.dropped_lookahead, 0);
                 if report.priming {
-                    assert_eq!(cycle, 0, "startup must finish by the second callback");
-                    assert_eq!(report.queued_input, frames);
+                    assert!(cycle < 2, "startup must finish by the third callback");
+                    assert_eq!(report.queued_input, (cycle + 1) * frames);
                     assert!(output.iter().all(|frame| *frame == StereoFrame::SILENCE));
                 } else {
                     assert_eq!(report.produced, frames);
@@ -254,8 +403,11 @@ mod tests {
                     audible_blocks += 1;
                 }
             }
-            assert!(audible_blocks >= 15);
-            assert_eq!(processor.target_frames(), target);
+            assert!(audible_blocks >= 14);
+            assert_eq!(
+                processor.target_frames(),
+                target.max(frames + processor.resampler.lookahead_frames() + 1)
+            );
         }
     }
 
@@ -268,7 +420,9 @@ mod tests {
         );
         let pcm = [StereoFrame::new(0.25, -0.25); 4096];
         let mut output = [StereoFrame::SILENCE; 4096];
-        assert_eq!(producer.push(&pcm[..768]), 768);
+        for packet in pcm[..768].chunks(128) {
+            assert_eq!(producer.push(packet), packet.len());
+        }
         assert_eq!(
             processor.render(&mut output[..128], Some(1.0)).produced,
             128
@@ -278,6 +432,8 @@ mod tests {
         let report = processor.render(&mut output, Some(1.0));
         assert!(report.priming);
         assert_eq!(report.queued_input, 4096);
+        assert_eq!(producer.push_generation(&pcm, 2), 4096);
+        assert!(processor.render(&mut output, Some(1.0)).priming);
         assert_eq!(producer.push_generation(&pcm, 2), 4096);
         let report = processor.render(&mut output, Some(1.0));
         assert_eq!(report.produced, 4096);
@@ -303,6 +459,8 @@ mod tests {
             assert_eq!(report.queued_input, pcm.len());
             assert_eq!(report.dropped_lookahead, 0);
         }
+        assert!(processor.render(&mut output[..128], Some(1.0)).priming);
+        assert_eq!(producer.push(&pcm), pcm.len());
         assert_eq!(
             processor.render(&mut output[..128], Some(1.0)).produced,
             128
@@ -317,14 +475,18 @@ mod tests {
             "fixture rates are supported and the target lies above lookahead within queue capacity",
         );
         let old = [StereoFrame::new(0.8, 0.8); 2048];
-        let _ = producer.push_generation(&old, 1);
+        for packet in old.chunks(256) {
+            assert_eq!(producer.push_generation(packet, 1), packet.len());
+        }
         let mut output = [StereoFrame::SILENCE; 512];
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(output[511].left > 0.79);
         processor.set_generation(2);
         let _ = producer.push_generation(&old[..64], 1);
         let fresh = [StereoFrame::new(-0.25, -0.25); 2048];
-        let _ = producer.push_generation(&fresh, 2);
+        for packet in fresh.chunks(256) {
+            assert_eq!(producer.push_generation(packet, 2), packet.len());
+        }
         assert_eq!(processor.render(&mut output, None).missing, 0);
         assert!(
             output
@@ -372,11 +534,9 @@ mod tests {
                         / physical_rate;
                     *frame = StereoFrame::new(phase.sin() as f32, phase.cos() as f32);
                 }
-                assert_eq!(
-                    producer.push(&incoming[..count]),
-                    count,
-                    "ppm={ppm} overflow"
-                );
+                for packet in incoming[..count].chunks(512) {
+                    assert_eq!(producer.push(packet), packet.len(), "ppm={ppm} overflow");
+                }
                 supplied = next;
                 let host_tick = 1_000_000_000
                     + ((supplied - prefix) as f64 / physical_rate * 1_000_000_000.0).round() as u64;
@@ -417,7 +577,9 @@ mod tests {
         assert!(processor.render(&mut output, None).priming);
         assert!(output.iter().all(|f| *f == StereoFrame::SILENCE));
         let first = [StereoFrame::new(0.5, -0.5); 1024];
-        assert_eq!(producer.push(&first), 1024);
+        for packet in first.chunks(256) {
+            assert_eq!(producer.push(packet), packet.len());
+        }
         assert_eq!(processor.render(&mut output, Some(1.0)).produced, 512);
         assert!(output[256].left > 0.49 && output[256].right < -0.49);
         let shortage = processor.render(&mut output, None);
@@ -431,7 +593,9 @@ mod tests {
         assert!(processor.render(&mut output, None).priming);
         assert!(output.iter().all(|f| *f == StereoFrame::SILENCE));
         let second = [StereoFrame::new(-0.25, 0.25); 1024];
-        assert_eq!(producer.push(&second), 1024);
+        for packet in second.chunks(256) {
+            assert_eq!(producer.push(packet), packet.len());
+        }
         assert_eq!(processor.render(&mut output, Some(1.0)).produced, 512);
         assert!(output[256].left < -0.24 && output[256].right > 0.24);
     }

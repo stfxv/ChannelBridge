@@ -15,9 +15,19 @@ fn measure(rate: u32, block: usize) {
         "fixture rates are supported and the target lies above lookahead within queue capacity",
     );
     let prefill = vec![StereoFrame::new(0.25, -0.125); target];
-    assert_eq!(producer.push(&prefill), target);
+    for packet in prefill.chunks(block) {
+        assert_eq!(producer.push(packet), packet.len());
+    }
     let incoming = vec![StereoFrame::new(0.25, -0.125); block];
     let mut outgoing = vec![StereoFrame::SILENCE; block];
+    for _ in 0..4 {
+        assert_eq!(producer.push(&incoming), block);
+        let report = processor.render(&mut outgoing, Some(1.0));
+        assert_eq!(report.missing, 0);
+        if !report.priming {
+            break;
+        }
+    }
     let mut timings = Vec::with_capacity(256);
     for iteration in 0..320 {
         assert_eq!(producer.push(hint::black_box(&incoming)), block);

@@ -194,7 +194,15 @@ fn restarted_small_packets_do_not_replay_late_old_generation_pcm() {
     let old = [StereoFrame::new(0.75, -0.75); 4096];
     assert_eq!(producer.push_generation(&old, 1), old.len());
     let mut output = [StereoFrame::SILENCE; 192];
-    let before = processor.render(&mut output, Some(1.0));
+    let mut before = processor.render(&mut output, Some(1.0));
+    for _ in 0..16 {
+        if before.produced != 0 {
+            break;
+        }
+        assert!(before.priming);
+        assert_eq!(producer.push_generation(&old[..512], 1), 512);
+        before = processor.render(&mut output, Some(1.0));
+    }
     assert!(before.produced > 0 && output.iter().any(|frame| frame.left > 0.01));
 
     let generation = u64::MAX - 1;

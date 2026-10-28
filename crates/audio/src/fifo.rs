@@ -4,11 +4,13 @@
 use crate::StereoFrame;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 struct Slot {
     stereo: AtomicU64,
     generation: AtomicU64,
+    publication_frames: AtomicUsize,
 }
 struct Shared {
     frames: Box<[Slot]>,
@@ -36,6 +38,7 @@ pub fn stereo_queue(capacity: usize) -> Option<(Producer, Consumer)> {
     frames.extend((0..capacity).map(|_| Slot {
         stereo: AtomicU64::new(0),
         generation: AtomicU64::new(0),
+        publication_frames: AtomicUsize::new(0),
     }));
     let shared = Arc::new(Shared {
         frames: frames.into_boxed_slice(),
@@ -59,6 +62,8 @@ impl Producer {
         self.push_generation(input, 1)
     }
 
+    /// Each accepted frame retains the offered slice length, including partial writes.
+    /// Empty, rejected, and zero-generation writes publish no packet metadata.
     #[must_use]
     pub fn push_generation(&mut self, input: &[StereoFrame], generation: u64) -> usize {
         if generation == 0 {
@@ -79,6 +84,8 @@ impl Producer {
             };
             slot.stereo.store(frame.pack(), Ordering::Relaxed);
             slot.generation.store(generation, Ordering::Relaxed);
+            slot.publication_frames
+                .store(input.len(), Ordering::Relaxed);
             accepted += 1;
         }
         // Publish the complete prefix after all its sample writes.
@@ -93,6 +100,13 @@ impl Producer {
 pub struct PopResult {
     pub received: usize,
     pub discarded: usize,
+    /// Largest offered publication among matching frames copied into output.
+    pub publication_frames: usize,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GenerationView {
+    pub pending: usize,
+    pub publication_frames: usize,
 }
 impl Consumer {
     #[must_use]
@@ -105,6 +119,32 @@ impl Consumer {
         let read = self.shared.read.load(Ordering::Relaxed);
         let write = self.shared.write.load(Ordering::Acquire);
         (write.wrapping_sub(read) as usize).min(self.shared.frames.len())
+    }
+
+    /// The unread slots remain owned by this consumer throughout the snapshot.
+    /// A later producer publication is observed on the next scan or transfer.
+    #[must_use]
+    pub(crate) fn generation_view(&self, generation: u64) -> GenerationView {
+        let shared = &self.shared;
+        let read = shared.read.load(Ordering::Relaxed);
+        let write = shared.write.load(Ordering::Acquire);
+        let count = (write.wrapping_sub(read) as usize).min(shared.frames.len());
+        let mut view = GenerationView::default();
+        for offset in 0..count {
+            let index = read.wrapping_add(offset as u64) as usize & shared.mask;
+            let slot = &shared.frames[index];
+            let stored_generation = slot.generation.load(Ordering::Relaxed);
+            if stored_generation > generation {
+                break;
+            }
+            if stored_generation == generation {
+                view.pending += 1;
+                view.publication_frames = view
+                    .publication_frames
+                    .max(slot.publication_frames.load(Ordering::Relaxed));
+            }
+        }
+        view
     }
 
     /// Return the valid prefix. The remainder of output is untouched.
@@ -127,6 +167,7 @@ impl Consumer {
         let mut received = 0;
         let mut consumed = 0;
         let mut discarded = 0;
+        let mut publication_frames = 0;
         while consumed < count {
             let index = read.wrapping_add(consumed as u64) as usize & shared.mask;
             let Some(slot) = shared.frames.get(index) else {
@@ -145,6 +186,8 @@ impl Consumer {
                 break;
             };
             *frame = StereoFrame::unpack(slot.stereo.load(Ordering::Relaxed));
+            publication_frames =
+                publication_frames.max(slot.publication_frames.load(Ordering::Relaxed));
             received += 1;
             consumed += 1;
         }
@@ -155,6 +198,7 @@ impl Consumer {
         PopResult {
             received,
             discarded,
+            publication_frames,
         }
     }
 }
@@ -175,7 +219,8 @@ mod tests {
             consumer.pop_generation(&mut output, 1),
             PopResult {
                 received: 3,
-                discarded: 0
+                discarded: 0,
+                publication_frames: 3,
             }
         );
         assert_eq!(consumer.available(), 3);
@@ -183,7 +228,8 @@ mod tests {
             consumer.pop_generation(&mut output, 2),
             PopResult {
                 received: 3,
-                discarded: 0
+                discarded: 0,
+                publication_frames: 3,
             }
         );
         assert_eq!(&output[..3], &new);
@@ -193,7 +239,8 @@ mod tests {
             consumer.pop_generation(&mut [], 3),
             PopResult {
                 received: 0,
-                discarded: 3
+                discarded: 3,
+                publication_frames: 0,
             }
         );
         assert_eq!(consumer.pop_generation(&mut output, 3).received, 3);
@@ -218,6 +265,114 @@ mod tests {
         assert_eq!(consumer.available(), 0);
         assert_eq!(consumer.pop(&mut output), 0);
         assert_eq!(&output[..], &input[..]);
+    }
+
+    #[test]
+    fn publication_metadata_preserves_partial_writes_and_generation_barriers() {
+        let (mut producer, mut consumer) =
+            super::stereo_queue(8).expect("fixture capacity is supported");
+        let pcm = [StereoFrame::new(0.5, -0.5); 16];
+        let generation = u64::MAX - 1;
+        assert_eq!(producer.push_generation(&pcm[..2], generation - 1), 2);
+        assert_eq!(producer.push_generation(&pcm, generation), 6);
+        assert_eq!(producer.push_generation(&pcm, generation), 0);
+        assert_eq!(producer.push_generation(&[], generation), 0);
+        assert_eq!(producer.push_generation(&pcm, 0), 0);
+        assert_eq!(
+            consumer.generation_view(generation),
+            GenerationView {
+                pending: 6,
+                publication_frames: 16
+            }
+        );
+        let mut output = [StereoFrame::SILENCE; 3];
+        assert_eq!(
+            consumer.pop_generation(&mut output, generation),
+            PopResult {
+                received: 3,
+                discarded: 2,
+                publication_frames: 16
+            }
+        );
+        assert_eq!(output, [pcm[0]; 3]);
+        assert_eq!(producer.push_generation(&pcm[..2], u64::MAX), 2);
+        assert_eq!(producer.push_generation(&pcm[..1], generation), 1);
+        assert_eq!(consumer.generation_view(generation).pending, 3);
+        assert_eq!(consumer.generation_view(generation).publication_frames, 16);
+        assert_eq!(consumer.pop_generation(&mut output, generation).received, 3);
+        assert_eq!(
+            consumer.generation_view(generation),
+            GenerationView::default()
+        );
+        assert_eq!(consumer.pop_generation(&mut output, generation).received, 0);
+        assert_eq!(consumer.pop_generation(&mut output, u64::MAX).received, 2);
+        assert_eq!(consumer.available(), 0);
+    }
+
+    #[test]
+    fn transfer_observes_a_publication_after_the_queue_snapshot() {
+        let (mut producer, mut consumer) =
+            super::stereo_queue(8).expect("fixture capacity is supported");
+        assert_eq!(consumer.generation_view(1), GenerationView::default());
+        let pcm = [StereoFrame::new(0.25, -0.25); 7];
+        assert_eq!(producer.push(&pcm), 7);
+        let mut output = [StereoFrame::SILENCE; 3];
+        let report = consumer.pop_generation(&mut output, 1);
+        assert_eq!(report.received, 3);
+        assert_eq!(report.publication_frames, 7);
+        assert_eq!(output, [pcm[0]; 3]);
+    }
+
+    #[test]
+    fn independent_callbacks_publish_samples_and_packet_metadata_together() {
+        let (mut producer, mut consumer) =
+            super::stereo_queue(64).expect("fixture capacity is supported");
+        let writer = std::thread::spawn(move || {
+            for publication in 0..10_000 {
+                let offered = publication % 17 + 1;
+                let pcm = [StereoFrame::new(offered as f32, publication as f32); 17];
+                let generation = u64::MAX - 9 + publication as u64 / 1000;
+                loop {
+                    let write = producer.shared.write.load(Ordering::Relaxed);
+                    let read = producer.shared.read.load(Ordering::Acquire);
+                    if 64 - write.wrapping_sub(read) as usize >= offered {
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+                assert_eq!(
+                    producer.push_generation(&pcm[..offered], generation),
+                    offered
+                );
+            }
+        });
+        let reader = std::thread::spawn(move || {
+            let mut output = [StereoFrame::SILENCE; 1];
+            let mut publication = 0;
+            let mut offset = 0;
+            while publication < 10_000 {
+                let generation = u64::MAX - 9 + publication as u64 / 1000;
+                let report = consumer.pop_generation(&mut output, generation);
+                if report.received == 0 {
+                    std::thread::yield_now();
+                    continue;
+                }
+                let offered = publication % 17 + 1;
+                assert_eq!(report.discarded, 0);
+                assert_eq!(report.publication_frames, offered);
+                assert_eq!(
+                    output[0],
+                    StereoFrame::new(offered as f32, publication as f32)
+                );
+                offset += 1;
+                if offset == offered {
+                    publication += 1;
+                    offset = 0;
+                }
+            }
+        });
+        writer.join().expect("fixture producer completes");
+        reader.join().expect("fixture consumer completes");
     }
 
     #[test]

@@ -92,15 +92,21 @@ pub struct DriftController {
     integrator: f64,
     correction: f64,
     measured_speed: f64,
+    pending_limit: usize,
 }
 
 impl DriftController {
     /// target is total pending input in FIFO + resampler working history.
     /// Caller sizes it for its block size, filter lookahead and arrival jitter.
-    /// Returns `None` for zero rates or a target outside `1..=1_048_576`.
+    /// Returns `None` for zero rates, a zero target, or a target above prepared storage.
     #[must_use]
-    pub fn new(input_rate: u32, output_rate: u32, target: usize) -> Option<Self> {
-        if input_rate == 0 || output_rate == 0 || !(1..=1_048_576).contains(&target) {
+    pub fn new(
+        input_rate: u32,
+        output_rate: u32,
+        target: usize,
+        pending_limit: usize,
+    ) -> Option<Self> {
+        if input_rate == 0 || output_rate == 0 || target == 0 || target > pending_limit {
             return None;
         }
         Some(Self {
@@ -112,6 +118,7 @@ impl DriftController {
             integrator: 0.0,
             correction: 0.0,
             measured_speed: 1.0,
+            pending_limit,
         })
     }
 
@@ -125,6 +132,11 @@ impl DriftController {
         self.correction = 0.0;
         self.measured_speed = 1.0;
     }
+    pub(crate) fn retarget(&mut self, target: usize) {
+        self.target = target as f64;
+        self.filtered_queue = self.target;
+        self.integrator = 0.0;
+    }
     #[must_use]
     pub fn step(&self) -> f64 {
         self.nominal_step * (1.0 + self.correction)
@@ -134,7 +146,7 @@ impl DriftController {
     /// Queue feedback is low-pass filtered; correction has both absolute and
     /// slew limits, so a scheduling fluctuation cannot jump the sample position.
     pub fn update(&mut self, queued_input: usize, output_frames: usize, speed: Option<f64>) -> f64 {
-        if output_frames == 0 || output_frames > 4096 || queued_input > 1_048_576 {
+        if output_frames == 0 || output_frames > 4096 || queued_input > self.pending_limit {
             return self.step();
         }
         if let Some(speed) = speed.filter(|s| s.is_finite() && (0.998..=1.002).contains(s)) {
@@ -183,7 +195,7 @@ mod tests {
 
     #[test]
     fn correction_is_bounded_and_invalid_observations_do_not_poison_it() {
-        let mut controller = DriftController::new(48_000, 48_000, 704)
+        let mut controller = DriftController::new(48_000, 48_000, 704, 1_048_576)
             .expect("fixture rates and target buffer size are positive");
         let step = controller.update(4000, 512, Some(f64::NAN));
         assert!((step - 1.0).abs() <= 0.0002 * 512.0 / 48_000.0 + f64::EPSILON);
@@ -197,13 +209,36 @@ mod tests {
     }
 
     #[test]
+    fn retarget_preserves_speed_and_correction_with_combined_storage_limit() {
+        let mut controller = DriftController::new(48_000, 48_000, 704, 4_194_304)
+            .expect("fixture has sufficient prepared storage");
+        for _ in 0..1000 {
+            controller.update(704, 512, Some(1.001));
+        }
+        let correction = controller.correction_ppm();
+        let speed = controller.measured_speed;
+        let step = controller.step();
+        controller.retarget(1_500_000);
+        assert_eq!(controller.correction_ppm(), correction);
+        assert_eq!(controller.measured_speed, speed);
+        assert_eq!(controller.step(), step);
+        assert_eq!(controller.integrator, 0.0);
+        controller.update(1_500_000, 512, Some(0.999));
+        assert_eq!(controller.measured_speed, 0.999);
+        let step = controller.step();
+        assert_eq!(controller.update(4_194_305, 512, Some(1.0)), step);
+        assert_eq!(controller.measured_speed, 0.999);
+        assert!(DriftController::new(48_000, 48_000, 705, 704).is_none());
+    }
+
+    #[test]
     fn eight_hour_clock_and_queue_model_stays_bounded() {
         // Controller-only virtual-time model: no HAL, PCM or real-time wait.
         // ±2 ms here perturbs the observed queue, not actual callback deadlines.
         for ppm in [-1000.0, -500.0, -100.0, 100.0, 500.0, 1000.0] {
             let target = 4608.0;
             let actual_speed = 1.0 + ppm / 1_000_000.0;
-            let mut controller = DriftController::new(48_000, 48_000, target as usize)
+            let mut controller = DriftController::new(48_000, 48_000, target as usize, 1_048_576)
                 .expect("fixture rates and target buffer size are positive");
             let mut queue = target;
             let mut elapsed = 0.0;
