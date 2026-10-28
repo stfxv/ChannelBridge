@@ -22,7 +22,8 @@ bash scripts/package-rust-test-app.sh
 
 Run Cargo from the extracted directory so it discovers the included .cargo
 configuration. The source verification script additionally uses Python 3 to check
-archive contents and builds all workspace targets with an empty Cargo cache:
+archive contents and runs `cargo check` on all workspace targets with an empty
+Cargo cache:
 
 ```sh
 bash scripts/verify-rust-source.sh
@@ -57,13 +58,13 @@ work/rust-production-dist using a separate Cargo target directory. The productio
 feature selects the existing production IDs and settings directory. The default
 build continues to select the separate test namespace. Neither build installs
 anything. The app smoke test opens no audio and requests no microphone permission.
-The driver check uses a fake HAL, not the running audio service. Production
-installation, rollback, signing and real-device acceptance remain incomplete.
+The driver check uses a fake HAL, not the running audio service. Build and payload
+checks do not establish upgrade, rollback, or real-device acceptance. Developer ID signing and notarization remain unverified.
 
 Generate the production package (without installing it) with
 `bash scripts/package-rust-production.sh`. The verified output is
 `work/rust-production-dist/ChannelBridge-Rust.pkg`. See RUST_MIGRATION.md for
-replacement prerequisites, retained legacy artifacts and rollback acceptance.
+backup, upgrade, rollback, and acceptance procedures.
 
 ## Style verification
 
