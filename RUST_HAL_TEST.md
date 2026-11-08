@@ -1,6 +1,6 @@
 # Rust HAL実機試験
 
-開発用の `ChannelBridgeRustTest.driver` は通常版と異なるUID・バンドルID・ファイル名を使う。現行ドライバ、既定の入出力、既存設定を置き換えない。
+開発用の `ChannelBridgeRustTest.driver` は通常版と異なるUID・バンドルID・ファイル名を使う。以下はリポジトリのルートで、試験用ビルドを対象に実行する手順である。現行ドライバ、既定の入出力、既存設定を置き換えない。
 
 ## ビルド・導入
 
@@ -12,16 +12,28 @@ open work/rust-dist/ChannelBridgeRustTest.pkg
 
 インストーラでmacOSの管理者認証が必要。配置先は `/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`。パッケージには音声サービスを再起動するスクリプトを含めない。導入直後に認識されなければ、利用者が通話等を終えた後にMacを再起動してから確認する。
 
-このパッケージは開発用ad-hoc署名のドライバを含む。一般配布向けのDeveloper ID署名・公証は未検証。
+このパッケージは開発用ad-hoc署名のドライバを含み、インストーラは未署名である。一般配布向けのDeveloper ID署名・公証は未対応である。
 
-## 列挙・合成音の転送
+## 導入・再起動後の読み取り専用確認
 
 以下は同じBash環境で実行する。
 
 ```sh
 source scripts/rust-env.sh
-cargo run -p channelbridge-macos --example probe
-cargo run -p channelbridge-macos --example probe -- --loopback
+cargo run --locked -p channelbridge-macos --example probe -- --ready
+```
+
+試験UID `ChannelBridge_Rust_Test_UID` が一意に存在し、ロード中のドライバのcbidとcbstを読み取れることを確認する。ドライバのパッケージバージョンがprobeと一致し、初期化されたタイムラインのgenerationが0でないことも条件である。音声デバイスを開かず、マイクアクセスを要求せず、既定機器も変更しない。
+
+この確認に失敗した状態では、実音声の合格を判定しない。ディスク上のplistやインストーラの受領証は、この確認の代わりにならない。成功時に確認できるのはパッケージの識別とプロトコルの準備状態であり、正確なGitリビジョンや音質ではない。通常版の対象を明示的に調べる場合に限り `--features production` を使う。
+
+## 列挙・合成音の転送
+
+前節と同じBash環境で実行する。
+
+```sh
+cargo run --locked -p channelbridge-macos --example probe
+cargo run --locked -p channelbridge-macos --example probe -- --loopback
 ```
 
 列挙は読み取りのみ。`--loopback` はUID `ChannelBridge_Rust_Test_UID` のデバイスだけを選択し、2ch float32形式を検証して3秒間の997 Hz合成音を仮想出力へ送り、同じデバイスの入力から読み戻す。物理マイクは開始せず、音声ファイルを作らない。
@@ -57,9 +69,25 @@ cargo run --locked -p channelbridge-macos --example monitor -- --expect-signal
 cargo run --locked -p channelbridge-macos --example probe -- --diagnostics
 ```
 
-試験UIDの読み取り専用カスタムプロパティcbstを照会する。音声デバイスを開始せず、カウンタを消去しない。protocol v1のCFDataペイロードは48 bytesで、native-endianのu32 version、u32 reserved=0、u64 generation/written_frames/missing_read_frames/rejected_write_frames/invalid_timestampsの順。サイズ・未対応版・予約値不一致はエラーにする。各カウンタは独立した原子値の累積であり、一括で同時刻に採取されたスナップショットではない。
+試験UIDの読み取り専用カスタムプロパティcbstを照会する。音声デバイスを開始せず、カウンタを消去しない。protocol v1のCFDataペイロードは48 bytesで、native-endianのu32 version、u32 reserved=0、u64 generation/written_frames/missing_read_frames/rejected_write_frames/invalid_timestampsの順である。サイズ・未対応バージョン・予約値不一致はエラーにする。各カウンタは独立した原子値の累積であり、一括で同時刻に採取されたスナップショットではない。
 
-missing_read_framesは書き込み前の起動区間や書き手不在の読み取りも含み、その増加だけでは通話中の障害と判定できない。無音サンプルと未書込フレームは別である。値を取得できない場合も無欠落/0へ置き換えない。記録時点の実機ではUnknownProperty（2003332927）で取得できておらず、新版ロード後の確認が必要。CFPlugInの模擬HALでは宣言されたcustom property情報と、255フレーム書込/256フレーム読出時のwritten=255・missing=1・rejected=0・invalid=0を検証する。
+missing_read_framesは書き込み前の起動区間や書き手不在の読み取りも含み、その増加だけでは通話中の障害と判定できない。無音サンプルと未書込フレームは別である。値を取得できない場合も無欠落/0へ置き換えない。CFPlugInの模擬HALでは宣言されたcustom property情報と、255フレーム書込/256フレーム読出時のwritten=255・missing=1・rejected=0・invalid=0を検証する。
+
+### カスタムプロパティのCF転送
+
+cbstはCFPropertyListとして宣言し、所有権付きのCFDataとして48-byteのprotocol-v1ペイロードを返す。cbidはCFStringとして宣言し、所有権付きのCFStringを返す。クライアントはCFの型を検査し、ペイロードの範囲を確認してコピーしたあと、受け取った参照を解放する。Apple AudioServerPlugIn.hのcustom-property Noneは、プロパティデータがないことを表す。
+
+直接呼び出すCの模擬テストでは、宣言、ポインターサイズのABI、実際のCFの型と内容、呼び手による解放を検査する。ホストとのIPCでのデータ転送はこの模擬テストの対象に含まない。実際にロードされたドライバの準備状態は `probe -- --ready` で確認し、音声転送は別途試験する。
+
+## 仮想入力の連続観測
+
+```sh
+cargo run --locked -p channelbridge-macos --example monitor -- --seconds 1200
+```
+
+同じ試験デバイスの読み手を20分間開いたままにする。指定できる長さは1..28800秒である。サンプルを保存せず、マイクアクセスを要求する画面も出さない。実行元に対する既存のマイクアクセス許可が必要で、経路・レートの変更やアプリの送出開始は行わない。
+
+累積結果はコールバックとフレームの有無、非有限サンプル、不正データを検査する。すべての欠落、波形の忠実度、送出の継続、Discordや物理経路の合格を確認するものではない。アプリが停止中またはミュート中なら、無音の観測が成功しても仮想デバイスの読み手の動作だけを確認したことになる。
 
 ## 削除
 
@@ -71,30 +99,3 @@ sudo pkgutil --forget local.channelbridge.rust.driver.test.pkg
 ```
 
 削除後の認識更新が必要ならMacを再起動する。通常版 `ChannelBridge.driver` は削除しない。
-
-
-## Read-only test-driver readiness after installation/reboot
-
-```sh
-cargo run --locked -p channelbridge-macos --example probe -- --ready
-```
-
-This requires the separate test UID to be uniquely present, both live cbid and cbst
-properties to be readable, the package version to match the probe and a nonzero
-initialized timeline generation. It does not open audio, request microphone access
-or change default devices. Failure blocks actual-audio acceptance; an on-disk plist
-or installer receipt cannot substitute for this check. Success establishes package
-identity/protocol readiness only, not the exact Git revision or audio quality.
-Use `--features production` only to inspect the production target explicitly.
-
-
-### CF transport correction (0.5.3)
-
-Apple AudioServerPlugIn.h defines custom-property None as *no property data*, not
-an arbitrary raw payload. cbst is now declared CFPropertyList and returned as an
-owned CFData (48-byte protocol-v1 payload); cbid is declared/returned as owned
-CFString. The client checks CF type, bounds/copies the payload and releases the
-returned reference. Direct C mock tests validate declaration, pointer-sized ABI,
-actual CF type/content and caller release. They do not test host IPC marshalling.
-Installed 0.5.2 still failed after a verified Mac reboot; raw/None transport was a
-concrete mismatch and probable cause, but actual 0.5.3 host success is pending.

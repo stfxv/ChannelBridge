@@ -59,5 +59,5 @@ Check the live virtual microphone and actual audio.
 Build and payload checks do not establish a successful upgrade or rollback.
 Installer upgrade, settings restoration, uninstall, failed-install recovery,
 receiver device references, and rollback require checks on the actual
-installation. See [RUST_PROGRESS.md](RUST_PROGRESS.md) for dated evidence and
-[RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md) for audio acceptance procedures.
+installation. See [RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md) for audio acceptance
+procedures.

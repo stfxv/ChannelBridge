@@ -41,9 +41,10 @@ under /Applications and the test driver under /Library/Audio/Plug-Ins/HAL.
 It preserves the production app/driver namespaces. See RUST_APP_TEST.md for the
 build and payload checks, installation status and remaining acceptance tests.
 
-Signing is ad-hoc; Developer ID signing and notarization are not verified.
-See RUST_APP_TEST.md, RUST_HAL_TEST.md, RUST_AUDIO_TEST.md and RUST_PROGRESS.md
-for test procedures and the distinction between simulated and real-device results.
+The app and driver bundles have ad-hoc signatures; the installer package is
+unsigned. Developer ID signing and notarization are not configured.
+See RUST_APP_TEST.md, RUST_HAL_TEST.md and RUST_AUDIO_TEST.md for test procedures
+and the distinction between simulated and real-device results.
 Real rate-following and long-call acceptance are not implied by this archive.
 
 ## Production profile build (not installation)
@@ -60,10 +61,11 @@ feature selects the existing production IDs and settings directory. The default
 build continues to select the separate test namespace. Neither build installs
 anything. The app smoke test opens no audio and requests no microphone permission.
 The driver check uses a fake HAL, not the running audio service. Build and payload
-checks do not establish upgrade, rollback, or real-device acceptance. Developer ID signing and notarization remain unverified.
+checks do not establish upgrade, rollback, or real-device acceptance. Developer ID
+signing and notarization are not configured.
 
 Generate the production package (without installing it) with
-`bash scripts/package-rust-production.sh`. The verified output is
+`bash scripts/package-rust-production.sh`. The output is
 `work/rust-production-dist/ChannelBridge-Rust.pkg`. See RUST_MIGRATION.md for
 backup, upgrade, rollback, and acceptance procedures.
 

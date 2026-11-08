@@ -1,9 +1,8 @@
 # Rust style policy
 
 ChannelBridge uses the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html)
-as its Rust style policy. The style audit recorded here used the guide fetched
-on 2026-10-26 and the application baseline `945c1ec`.
-The policy covers every first-party Rust source, test, example, and the style tool.
+as its Rust style policy. The policy covers every first-party Rust source, test,
+example, and the style tool.
 Dependencies and generated vendor sources are outside that scope.
 
 ## Application context
@@ -59,9 +58,9 @@ private pure functions and some critical returned statuses need manual
 `must_use` review. `Option` itself does not diagnose an ignored return in the
 supported compiler; applicable constructors and queries carry their own attribute.
 
-## Review coverage and contextual choices
+## Policy coverage and contextual choices
 
-| Guide area | Application policy and evidence |
+| Guide area | Application policy and checks |
 | --- | --- |
 | Public Rust style and API context | Stable rustfmt, Clippy, application-specific contracts, and the existing Cargo test framework. |
 | Code organization | Leaf implementations and primary-type file names; root declarations and re-exports; seven responsibility-focused crates. Chromium's flat layout and tiny-crate build rules are not applied. |
@@ -75,10 +74,10 @@ supported compiler; applicable constructors and queries carry their own attribut
 | Macros | Macros remain limited to platform binding, tests, and repeated ABI definitions. Token tools preserve macro input and do not infer symbol identity from capitalization. |
 | Naming | Fallible constructor names, primary module names, descriptive borrowed-view lifetimes, and the existing domain terms. HAL, ABI, PCM, FIFO, CF, and SDK are established platform terms. |
 | Documentation | Public contracts explain actual bounds, ownership, failure, and panic conditions. Trivial names and self-explanatory enum variants do not gain repetitive comments. |
-| Unsafe | Safe audio/control interiors remain separated from native bindings. Local `SAFETY` reasoning covers validity, extent, lifetime, exclusivity, and ABI obligations. Safe native-endian header packing replaces an avoidable pointer copy. |
+| Unsafe | Safe audio/control interiors remain separated from native bindings. Local `SAFETY` reasoning covers validity, extent, lifetime, exclusivity, and ABI obligations. Header packing uses safe native-endian operations. |
 | API evolution | Workspace callers migrate together. Blanket `non_exhaustive`, generic wrappers, and redundant constructor APIs are not introduced for hypothetical external clients. |
 | Return values | Pure queries, critical `Option` results, partial-transfer reports, and consuming builders require explicit use. Intentional warmups and already-accounted HAL transfers explicitly discard reports. Idempotent side-effect operations may expose optional diagnostics. |
-| Implementation clarity | Borrowed views, named iteration pipelines, pattern matching, explicit fixture expectations, standard format strings, and contextual assertions. No behavioral assertions are weakened. |
+| Implementation clarity | Borrowed views, named iteration pipelines, pattern matching, explicit fixture expectations, standard format strings, and contextual assertions. |
 | Initialization and constants | No code runs before main; fixed ABI constants keep their intended semantics. Public const functions are not added speculatively. |
 | Test framework | Cargo tests, AppKit fake-backend controls, Loom, allocator instrumentation, the SDK C oracle, and the sanitized fake HAL remain the project framework. |
 
@@ -98,9 +97,7 @@ The local safety contracts remain caller obligations.
 
 ## Behavioral contract
 
-Normal audio routing, sample formats, device identifiers, saved JSON, callback
-allocation behavior, mute, and wake/reconnect policy remain unchanged. Poisoned
-state now refuses reuse. Worker completion waits until backend owners are gone
+Poisoned state refuses reuse. Worker completion waits until backend owners are gone
 and reports panic even if a final snapshot had already been published. A poisoned
 snapshot uses initial display metadata and unavailable telemetry, never recovered
 contents. An operation already running can finish before shutdown is observed.
@@ -111,5 +108,4 @@ archive verifier rebuilds both workspaces and runs the style gate with an empty
 Cargo cache and offline networking.
 
 Physical sleep/reconnect, receiving applications, long calls, and Intel execution
-remain separate hardware acceptance work. This style audit installs no app or
-driver and does not change microphone authorization.
+remain separate hardware acceptance checks.
