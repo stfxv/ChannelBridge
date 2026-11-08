@@ -1,9 +1,10 @@
 Run `scripts/check-rust-style.sh check` from a checkout with stable Rust installed.
 The check scans first-party Rust sources, tests, and examples under `crates` and
-this helper, including untracked files. It then runs stable rustfmt on the workspace
-and this helper. Individual source paths
-can be supplied after the mode. Missing inputs and parse errors fail with status 2;
-style findings fail with status 1. `inventory` prints findings without failing.
+this helper, including untracked files. In `check` mode, it then runs stable
+rustfmt on the workspace and this helper. Individual source paths can be supplied
+after the mode. Missing inputs and parse errors fail with status 2;
+style findings fail with status 1. `inventory` prints findings without failing on
+style findings; missing inputs and parse errors still fail.
 
 `fix-imports` splits nested use groups into one statement per imported item. It
 preserves visibility, leading `::`, `self`, aliases and globs. It intentionally
@@ -45,8 +46,8 @@ dependencies from every production crate. No nightly rustfmt setting is required
 
 The `fixture_expects` binary inventories empty `.unwrap()` and `.unwrap_err()`
 method calls, including calls inside macro token trees. Comments and string
-literals are opaque. Run `cargo run --bin fixture_expects -- SOURCE.rs` to print
-one-based line, zero-based column, and method as tab-separated fields. To apply
+literals are opaque. Run `cargo run --locked --manifest-path tools/rust-style/Cargo.toml --bin fixture_expects -- SOURCE.rs` from the repository root to print one-based
+line, zero-based column, and method as tab-separated fields. To apply
 reviewed explanations, pass a second file whose rows append a fourth field with
 the causal panic explanation. The tool validates every token location before
 writing and rejects duplicate locations or empty explanations. Recreate the map

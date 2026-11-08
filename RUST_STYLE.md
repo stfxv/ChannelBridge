@@ -1,7 +1,8 @@
 # Rust style policy
 
-ChannelBridge follows the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html).
-This audit used the guide fetched on 2026-10-26 and the application baseline `945c1ec`.
+ChannelBridge uses the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html)
+as its Rust style policy. The style audit recorded here used the guide fetched
+on 2026-10-26 and the application baseline `945c1ec`.
 The policy covers every first-party Rust source, test, example, and the style tool.
 Dependencies and generated vendor sources are outside that scope.
 
@@ -22,7 +23,7 @@ buffer views, configuration models, and meter endpoints remain coherent groups.
 
 ## Automated checks
 
-Run the normal verification entry point:
+Run the normal verification entry point.
 
 ```sh
 bash scripts/test.sh
@@ -30,7 +31,7 @@ bash scripts/test.sh
 
 It runs the style gate, a typed poison-policy positive/negative check, and the
 existing audio, lifecycle, concurrency, ABI, and sanitized driver tests.
-The standalone style gate can run independently:
+The standalone style gate and its behavior fixtures can run independently.
 
 ```sh
 bash scripts/check-rust-style.sh check
@@ -41,12 +42,14 @@ The syntax checker scans source files directly, including untracked files. It
 also works in the extracted source distribution without Git. Rustfmt uses stable
 options and a 100-column target. Nested import groups are checked by the syntax
 tool because stable rustfmt cannot configure the guide's import granularity.
-`fix-imports` is opt-in and preserves comments, attributes, aliases, and visibility;
-statements that cannot be safely rewritten still require manual review.
+`fix-imports` is opt-in. It preserves aliases and visibility, and leaves imports
+with comments or attributes unchanged for manual review.
 
-All application crates inherit workspace Clippy lints. These reject unreasoned
-unwraps, undocumented unsafe blocks, missing unsafe API contracts, unreviewed
-wildcard imports, and selected missing return-value annotations. A typed
+The standalone gate runs the syntax checker and rustfmt. The normal verification
+entry point also runs Clippy. All application crates inherit workspace Clippy
+lints that reject `.unwrap()` calls, undocumented unsafe blocks, missing unsafe
+API contracts, wildcard imports without an applicable exception, and selected
+missing return-value annotations. A typed
 `disallowed_methods` policy rejects `PoisonError::into_inner`, `get_ref`, and
 `get_mut`, including calls through aliases. The negative fixture proves that
 semantic check rather than relying on method-name matching.

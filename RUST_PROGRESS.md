@@ -1,6 +1,8 @@
 # Rust再実装の進捗と検証範囲
 
-2026-10-01更新。全体の到達点は `RUST_REWRITE_PLAN.md` に定義した、BlackHoleを含むアプリ・音声経路・仮想ドライバのRustでの再実装。
+この文書は2026-10-01から2026-10-24までの実装・検証記録である。冒頭の「現在の実装」「ローカルで確認済み」「未完了」は2026-10-01時点の状態を示す。後続の試験結果、導入状態、ローカルのパスは各日付時点のものであり、現在のチェックアウトや機器の状態を示さない。現在の構成は[ARCHITECTURE.md](ARCHITECTURE.md)、ビルド・検証手順は[README.md](README.md)、バックアップ・更新・復帰手順は[RUST_MIGRATION.md](RUST_MIGRATION.md)を参照する。2026-10-26のスタイル監査記録は[Git履歴のスタイル監査記録](https://github.com/stfxv/ChannelBridge/blob/96f567ab15157ed3837e6f3fd2bc9bbbb4d1046a/.audit/rust-style-verification.md)にある。
+
+再実装の到達点は `RUST_REWRITE_PLAN.md` に定義した、BlackHoleを含むアプリ・音声経路・仮想ドライバのRustでの再実装。
 
 ## 現在の実装
 
@@ -299,7 +301,7 @@ OutputCallbackのatomic統計へ、DSP生成フレーム数、FIFOの処理後�
 
 InputFormat/InputLevel/AudioViewをserialize可能にし、レポートにアクティブセッションのaudioを追加した。物理入力のrate/bits/channels/float、仮想rate/bits、選択チャンネルのdry dBFS/freshnessを保存する。無音のdBFSはnullでfresh=true、未取得はaudio=nullまたはfresh=falseで区別できる。機器一覧の最終読出しに含まれる選択機器の名目レート/物理形式/形式取得エラーもselected_input_inventoryへ保存し、アクティブセッションの形式証拠と混同しない。名前/UIDを専用出力フィールドに追加しない。
 
-保存回帰試験で物理24bit signed整数/10ch/48kと仮想32bit/48kの区別、dry無音のfresh=true/null、機器名とUID除外を確認した。追加の別ファイルでセッションと機器不在の両フィールドnullも確認。最低Rust全workspace全ターゲットcheck、Clippy、全体検証が通過し、nullの追加ケース後も保存試験/Clippyが通過。アプリ/ドライバの版、レート要求履歴、仮想出力レベルと実機長時間ゲートは未完了であり、全診断要件の完成とは扱わない。
+保存回帰試験で物理24bit signed整数/10ch/48kと仮想32bit/48kの区別、dry無音のfresh=true/null、機器名とUID除外を確認した。追加の別ファイルでセッションと機器不在の両フィールドnullも確認。最低Rust全workspace全ターゲットcheck、Clippy、全体検証が通過し、nullの追加ケース後も保存試験/Clippyが通過。アプリ/ドライバのバージョン、レート要求履歴、仮想出力レベルと実機長時間ゲートは未完了であり、全診断要件の完成とは扱わない。
 
 ## 仮想出力の実レベルを保存診断へ追加（2026-10-01）
 
@@ -321,9 +323,9 @@ RateFollowの保持するdesiredをread-only getterで公開し、Backendのrequ
 
 ## 診断のアプリ版とプロトコル識別（2026-10-01）
 
-ReportMetadataとsave_new_with_metadataを追加し、GUIの保存処理が実行中アプリのCARGO_PKG_VERSION、main NSBundleのCFBundleShortVersionString/CFBundleVersionを取得して渡す。Cargoの0.5.0-alpha.1とBundleの0.5.1/build 2を同じ版へ統合せず、それぞれの出典に沿って保存する。汎用save_new/CLIで版が与えられない場合はnullを維持する。metadataにも既存64 KiBのserialize制限を適用する。
+ReportMetadataとsave_new_with_metadataを追加し、GUIの保存処理が実行中アプリのCARGO_PKG_VERSION、main NSBundleのCFBundleShortVersionString/CFBundleVersionを取得して渡す。Cargoの0.5.0-alpha.1とBundleの0.5.1/build 2を同じバージョンへ統合せず、それぞれの出典に沿って保存する。汎用save_new/CLIでバージョンが与えられない場合はnullを維持する。metadataにも既存64 KiBのserialize制限を適用する。
 
-DriverReading::Availableには実際にdecoderが検証したdiagnostic_protocol=1とloaded_driver_version=nullを追加。現在のcbstは版付き統計のみで読み込み済みバイナリの製品版/ビルド識別を返さないため、設置済みInfo.plistを実ロードの版へ代用しない。新しいlive identityプロパティを加えて実HALで検証する作業は未完了であり、本変更は実ロード版の特定成功とは扱わない。保存回帰試験で未供給版nullと異なるCargo/Bundle/buildをそのまま保持することを確認。Clippyと最低Rust全workspace全ターゲットcheckが通過。実機ロード/長時間試験とproduction切替も未完了である。
+DriverReading::Availableには実際にdecoderが検証したdiagnostic_protocol=1とloaded_driver_version=nullを追加。現在のcbstはバージョン付き統計のみで読み込み済みバイナリの製品のバージョン/ビルド識別を返さないため、設置済みInfo.plistを実ロード時のバージョンへ代用しない。新しいlive identityプロパティを加えて実HALで検証する作業は未完了であり、本変更は実ロード時のバージョンの特定成功とは扱わない。保存回帰試験で未供給のバージョンnullと異なるCargo/Bundle/buildをそのまま保持することを確認。Clippyと最低Rust全workspace全ターゲットcheckが通過。実機ロード/長時間試験とproduction切替も未完了である。
 
 ## live driverのCargo版プロパティ（2026-10-01）
 
@@ -333,7 +335,7 @@ driverのDEVICEにread-only cbidを追加。生ASCII/non-NULのCARGO_PKG_VERSION
 
 ## 診断改修をまとめた試験版0.5.2（2026-10-01）
 
-全Rust cratesを0.5.2-alpha.1、試験アプリ/ドライバのBundleを0.5.2/build 3へ更新。模擬HALのlive identity期待値も0.5.2-alpha.1へ更新した。この版には互換性ゲート、入力/出力/FIFO/時計診断、再接続・要求レート履歴、診断保存GUI、live cbidを含む。通常Go版とproduction HALのID/ファイルは変更しない。
+全Rust cratesを0.5.2-alpha.1、試験アプリ/ドライバのBundleを0.5.2/build 3へ更新。模擬HALのlive identity期待値も0.5.2-alpha.1へ更新した。このバージョンには互換性ゲート、入力/出力/FIFO/時計診断、再接続・要求レート履歴、診断保存GUI、live cbidを含む。通常Go版とproduction HALのID/ファイルは変更しない。
 
 Clippy、最低Rust全workspace全ターゲットcheck、全体スクリプト、Universal driver/Appビルド、C模擬HAL、署名/metadata、空Cargoキャッシュで同梱ソースoffline/locked check、統合pkg展開後の両署名と実行ファイル/ソースarchive一致が通過。PackageInfoの実bundle2件が0.5.2/build 3、receiptがlocal.channelbridge.rust.test.pkg/0.5.2であることも確認した。初回XML検査はupgrade参照用のbundle要素まで版を要求して失敗したため、path属性を持つ実bundle2件を対象に検証した。pkgbuildのPermission denied警告は残っており、ペイロード一致検証の成功と原因解決を区別する。work/rust-dist/ChannelBridge-Rust-Test.pkgを生成したが、この時点では実導入/再読み込み/長時間通話の合格とは扱わない。
 

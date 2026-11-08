@@ -1,6 +1,6 @@
 # Back up, upgrade, and restore ChannelBridge
 
-Build the production installer without installing it:
+Build the production installer without installing it.
 
 ```sh
 bash scripts/build.sh
@@ -10,7 +10,8 @@ The output is `dist/ChannelBridge-Rust.pkg`. It contains
 `/Applications/ChannelBridge.app` and
 `/Library/Audio/Plug-Ins/HAL/ChannelBridge.driver`, with the existing production
 bundle IDs and device UID. The installer has no installation scripts and does
-not restart CoreAudio. The package uses ad-hoc signing.
+not restart CoreAudio. The app and driver have ad-hoc signatures; the installer
+package is unsigned.
 
 ## Back up the installed version
 

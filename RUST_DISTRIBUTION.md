@@ -10,7 +10,7 @@ minimum supported Rust version is 1.85.0. Install the arm64 and x86_64 Apple tar
 before building universal binaries. The deployment target is macOS 13; build
 success is not proof of execution on every supported OS/architecture.
 
-The included .cargo/config.toml selects rust-vendor, enabling:
+The included .cargo/config.toml selects rust-vendor for these commands.
 
 ```sh
 cargo check --offline --locked -p channelbridge-app
@@ -23,10 +23,11 @@ bash scripts/package-rust-test-app.sh
 Run Cargo from the extracted directory so it discovers the included .cargo
 configuration. The source verification script additionally uses Python 3 to check
 archive contents and runs `cargo check` on all workspace targets with an empty
-Cargo cache:
+Cargo cache. Pass the path to the original archive, which must still be available
+after extraction.
 
 ```sh
-bash scripts/verify-rust-source.sh
+bash scripts/verify-rust-source.sh /absolute/path/to/ChannelBridge-source.tar.gz
 ```
 
 The app and installer are produced under work/rust-dist. These are separately
@@ -70,7 +71,7 @@ backup, upgrade, rollback, and acceptance procedures.
 
 The archive includes `RUST_STYLE.md`, stable formatting and Clippy configuration,
 and the standalone syntax checker. Python 3 is required for source enumeration
-and archive verification. The style gate works without Git:
+and archive verification. The style gate works without Git.
 
 ```sh
 bash scripts/check-rust-style.sh check
