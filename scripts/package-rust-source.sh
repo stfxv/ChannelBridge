@@ -1,5 +1,4 @@
 #!/bin/bash
-# Archive only corresponding Rust sources; do not carry legacy audio code.
 set -euo pipefail
 source "$(dirname "$0")/rust-env.sh"
 cd "$CHANNELBRIDGE_ROOT"
@@ -9,12 +8,14 @@ if [[ "$#" != 1 ]]; then
 fi
 output="$1"
 if [[ "$output" != /* ]]; then output="$CHANNELBRIDGE_ROOT/$output"; fi
-mkdir -p work/rust-dist
-stage="$(mktemp -d "$CHANNELBRIDGE_ROOT/work/rust-dist/source-stage.XXXXXX")"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/channelbridge-source.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/.cargo" "$stage/scripts" "$stage/packaging/assets"
 cp Cargo.toml Cargo.lock rust-toolchain.toml LICENSE THIRD_PARTY_RUST.md \
-    ARCHITECTURE.md rustfmt.toml clippy.toml RUST_*.md RUST_*.tsv "$stage/"
+    ARCHITECTURE.md rustfmt.toml clippy.toml \
+    RUST_APP_TEST.md RUST_AUDIO_TEST.md RUST_DISTRIBUTION.md \
+    RUST_HAL_TEST.md RUST_MIGRATION.md RUST_STYLE.md \
+    RUST_RENDER_TIMING.tsv RUST_RESPONSE_GRID.tsv "$stage/"
 cp RUST_DISTRIBUTION.md "$stage/README.md"
 ditto --norsrc --noextattr --noacl crates "$stage/crates"
 cp scripts/*rust* "$stage/scripts/"
