@@ -1,5 +1,7 @@
 # Qualified imports coverage
 
+This document records the import qualification audit of 2026-10-26. The validation results and syntax comparisons below apply to the audit revisions named here. They are historical evidence, not a new verification of the current checkout. The sibling work files named at the end are local audit artifacts, not tracked repository files or source-distribution contents. Current checks are documented in [RUST_STYLE.md](../RUST_STYLE.md).
+
 This change applies these supplied Google Rust guide rules.
 
 - `#qualify-calls-to-top-level-functions-with-a-module-name`.

@@ -1,6 +1,6 @@
 # Rust test app
 
-Build the separate universal app on macOS:
+Build the separate universal app on macOS.
 
 ```sh
 bash scripts/build-rust-app.sh
@@ -28,7 +28,7 @@ vendored dependency configuration; Rust and Apple's SDK must already exist.
 The macOS deployment target is 13.0, but this is not proof of execution on macOS
 13 or an Intel Mac. Developer ID signing/notarization is not completed.
 
-For one installer containing both the app and test driver:
+Build one installer containing both the app and test driver.
 
 ```sh
 bash scripts/package-rust-test-app.sh
@@ -36,9 +36,10 @@ bash scripts/package-rust-test-app.sh
 
 The output is `work/rust-dist/ChannelBridge-Rust-Test.pkg`. It installs only
 `/Applications/ChannelBridge Rust Test.app` and the separate
-`/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`. Bundle versions must
-agree before packaging; both are currently 0.5.1/build 2. Building checks universal
-bundles, the driver through a mock HAL, bundle metadata, offline source rebuild,
+`/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`. The package script
+requires matching app and driver release versions; both bundles currently declare
+0.5.8/build 9. Building checks universal bundles, the driver through a mock HAL,
+bundle metadata, offline source rebuild,
 expanded payload signatures and byte identity. It does not launch the normal UI,
 install, request permission or restart audio. CI uses this combined procedure.
 The original driver-only installer remains available for development updates.
@@ -49,7 +50,7 @@ have ad-hoc signatures. Running the installed app may require macOS microphone
 authorization. Quit any workspace copy before starting the installed copy to
 avoid simultaneous senders to the same test microphone.
 
-To open the test UI manually:
+Open the test UI manually.
 
 ```sh
 open work/rust-dist/ChannelBridgeRustTest.app
@@ -57,9 +58,10 @@ open work/rust-dist/ChannelBridgeRustTest.app
 
 Launching does not request microphone permission. The explicit permission button
 may show Apple's permission dialog. Once authorized, a valid saved input selection
-starts input preview; sending requires the send button. It requires the separate
-Rust test HAL driver to be recognized. Do not treat a successful app build or
-non-visible smoke as proof of HAL transfer, actual UI interactions, microphone
+starts input preview. Use the send button to start sending; if automatic resume
+is enabled, wake or input reconnection can also start sending. Sending requires
+the separate Rust test HAL driver to be recognized. Do not treat a successful app
+build or non-visible smoke as proof of HAL transfer, actual UI interactions, microphone
 permission handling, or long-call stability.
 
 Closing the test window now keeps the app running. The menu-bar menu offers

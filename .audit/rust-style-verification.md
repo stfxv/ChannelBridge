@@ -1,5 +1,7 @@
 # Rust style audit verification
 
+This is the 2026-10-26 audit record. The source revisions, command results, GitHub Actions status, and packaging warnings below describe that audit, not the current checkout or a new test run. The evidence bundle is a local audit artifact and is not tracked in this repository or included in its source distribution. Current verification commands are documented in [RUST_STYLE.md](../RUST_STYLE.md).
+
 The baseline is `945c1ec`. The final application and tooling source is `add8911`.
 Subsequent changes contain these audit records only. The captured guide URL and
 SHA-256 are recorded in the evidence bundle's `source.json`. The guide was fetched

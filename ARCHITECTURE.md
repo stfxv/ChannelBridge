@@ -148,8 +148,10 @@ missing or invalid positions produce silence. Rate changes and the first
 active driver client reset the virtual clock and invalidate old generations.
 Multiple readers do not consume or erase each other's frames.
 
-Audio callbacks use preallocated storage, bounded work, and atomic observations;
-normal processing does not allocate, log, wait, or take mutexes. Native callback
+Audio callbacks use preallocated storage and atomic observations. App-side DSP
+accepts at most 4096 frames per callback and 512 input channels. These data limits
+do not guarantee a worst-case callback duration. Normal processing does not
+allocate, log, wait, or take mutexes. Native callback
 adapters reject concurrent DSP reentry. Native entry guards catch unexpected Rust panics as defense in depth when
 unwinding is enabled. Buffer bounds, lifetimes, exclusive access, and ordinary
 error reporting remain independent of those guards. Configuration I/O, enumeration, recovery, and diagnostic
