@@ -43,9 +43,6 @@ impl RateFollow {
     pub fn desired_rate(&self) -> u32 {
         self.desired
     }
-    pub fn request_for_source(source_uid: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::request_target(Self::source_rate(source_uid)?)
-    }
     /// Read the physical source's nominal rate without changing either device.
     pub fn source_rate(source_uid: &str) -> Result<u32, Box<dyn std::error::Error>> {
         let devices = devices::list()?;

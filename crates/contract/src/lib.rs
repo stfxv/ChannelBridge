@@ -43,7 +43,6 @@ pub const PRODUCTION_DEPLOYMENT: Deployment = Deployment {
 pub const DEPLOYMENT: Deployment = TEST_DEPLOYMENT;
 #[cfg(feature = "production")]
 pub const DEPLOYMENT: Deployment = PRODUCTION_DEPLOYMENT;
-pub const CHANNELS: u32 = 2;
 #[cfg(test)]
 mod deployment_tests {
     use super::*;

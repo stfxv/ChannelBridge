@@ -15,8 +15,7 @@ mkdir -p "$stage/.cargo" "$stage/scripts" "$stage/packaging/assets"
 cp Cargo.toml Cargo.lock rust-toolchain.toml LICENSE THIRD_PARTY_RUST.md \
     ARCHITECTURE.md rustfmt.toml clippy.toml \
     RUST_APP_TEST.md RUST_AUDIO_TEST.md RUST_DISTRIBUTION.md \
-    RUST_HAL_TEST.md RUST_MIGRATION.md RUST_STYLE.md \
-    RUST_RENDER_TIMING.tsv RUST_RESPONSE_GRID.tsv "$stage/"
+    RUST_HAL_TEST.md RUST_MIGRATION.md RUST_STYLE.md "$stage/"
 cp RUST_DISTRIBUTION.md "$stage/README.md"
 ditto --norsrc --noextattr --noacl crates "$stage/crates"
 cp scripts/*rust* "$stage/scripts/"

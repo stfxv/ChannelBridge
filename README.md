@@ -27,8 +27,8 @@ bash scripts/build.sh
 
 ## 検証範囲
 
-0.5.8公開時に通常・productionの各131件のワークスペーステストとUniversal配布物の検査を実施した。音声処理のテストと測定条件は[RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md)、実HALの検証手順と診断プロトコルは[RUST_HAL_TEST.md](RUST_HAL_TEST.md)を参照する。FIFOの転送には処理予算を設けているが、1回の読み出しは残予算を超える場合があり、厳密な実時間期限を保証しない。
+音声処理のテストと測定条件は[RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md)、実HALの検証手順と診断プロトコルは[RUST_HAL_TEST.md](RUST_HAL_TEST.md)を参照する。FIFOの転送には処理予算を設けているが、1回の読み出しは残予算を超える場合があり、厳密な実時間期限を保証しない。
 
-RME、8時間の実経路、物理レート変更・切断復帰・全対応OS/Intel実行の網羅試験は未検証である。0.5.8公開時に実機音声品質の追加確認は行っていない。
+RME、8時間の実経路、物理レート変更・切断復帰・全対応OS/Intel実行の網羅試験は未検証である。
 
 公開版0.5.8のアプリとドライバはad-hoc署名で、インストーラは未署名である。Developer ID署名を使うビルドと公証の手順は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md#developer-id-release)を参照する。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。

@@ -181,4 +181,4 @@ device releases/reacquires streams correctly after actual Mac sleep. Real
 sleep/wake, disconnect/reconnect, physical sample-rate or SMUX channel changes,
 receiver applications, long-running audio, and Intel hardware remain separate
 acceptance checks. See [README.md](README.md), [RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md), and
-[RUST_HAL_TEST.md](RUST_HAL_TEST.md) for recorded evidence and its limits.
+[RUST_HAL_TEST.md](RUST_HAL_TEST.md) for test procedures and their scope.
