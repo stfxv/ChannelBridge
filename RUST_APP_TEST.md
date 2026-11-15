@@ -38,7 +38,7 @@ The output is `work/rust-dist/ChannelBridge-Rust-Test.pkg`. It installs only
 `/Applications/ChannelBridge Rust Test.app` and the separate
 `/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`. The package script
 requires matching app and driver release versions; both bundles currently declare
-0.5.8/build 9. Building checks arm64 bundles, the driver through a mock HAL,
+0.6.0/build 10. Building checks arm64 bundles, the driver through a mock HAL,
 bundle metadata, offline source rebuild,
 expanded payload signatures and byte identity. It does not launch the normal UI,
 install, request permission or restart audio. The CI workflow is configured to
