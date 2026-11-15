@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_has_atomic = "64"))]
-compile_error!("ChannelBridge requires native 64-bit atomics (arm64 or x86_64 macOS).");
+compile_error!("ChannelBridge requires native 64-bit atomics.");
 
 pub mod capture_processor;
 pub mod device_clock;

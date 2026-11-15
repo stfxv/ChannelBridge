@@ -1,6 +1,6 @@
 # Rust test app
 
-Build the separate universal app on macOS.
+Build the separate test app on an Apple Silicon Mac.
 
 ```sh
 bash scripts/build-rust-app.sh
@@ -13,7 +13,7 @@ If that file is absent, production settings are imported read-only. A malformed
 file is displayed as an error rather than overwritten. The existing application
 and driver are not replaced by this script.
 
-The build verifies both architectures, an ad-hoc signature, the runtime bundle
+The build verifies the arm64 executable, an ad-hoc signature, the runtime bundle
 identifier and microphone description, and non-visible UI/worker smoke checks.
 Those checks do not request microphone access or open audio. For a build host
 without audio devices, `--build-only` skips inventory-dependent UI smoke but
@@ -26,8 +26,7 @@ license files. It excludes the legacy Go/BlackHole implementations and uses
 THIRD_PARTY_RUST.md as the app's notice. Extract
 it and run `cargo check --offline --locked -p channelbridge-app` to check the
 vendored dependency configuration; Rust and Apple's SDK must already exist.
-The macOS deployment target is 13.0, but this is not proof of execution on macOS
-13 or an Intel Mac. Developer ID signing and notarization are not configured.
+The macOS deployment target is 13.0, but this is not proof of execution on macOS 13. Developer ID signing and notarization are not configured.
 
 Build one installer containing both the app and test driver.
 
@@ -39,7 +38,7 @@ The output is `work/rust-dist/ChannelBridge-Rust-Test.pkg`. It installs only
 `/Applications/ChannelBridge Rust Test.app` and the separate
 `/Library/Audio/Plug-Ins/HAL/ChannelBridgeRustTest.driver`. The package script
 requires matching app and driver release versions; both bundles currently declare
-0.5.8/build 9. Building checks universal bundles, the driver through a mock HAL,
+0.5.8/build 9. Building checks arm64 bundles, the driver through a mock HAL,
 bundle metadata, offline source rebuild,
 expanded payload signatures and byte identity. It does not launch the normal UI,
 install, request permission or restart audio. The CI workflow is configured to

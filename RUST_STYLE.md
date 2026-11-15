@@ -107,5 +107,5 @@ parser dependencies through the vendored source set, and style scripts. The
 archive verifier rebuilds both workspaces and runs the style gate with an empty
 Cargo cache and offline networking.
 
-Physical sleep/reconnect, receiving applications, long calls, and Intel execution
+Physical sleep/reconnect, receiving applications, and long calls
 remain separate hardware acceptance checks.

@@ -14,14 +14,14 @@
 
 ## ビルド
 
-macOS 13以上、Xcode Command Line Tools、Rust 1.98.1（最低対応1.85.0）、Apple Silicon/IntelのRustターゲットを使用する。
+対応環境はmacOS 13以上のApple Silicon Mac。ビルドにはXcode Command Line ToolsとRust 1.98.1（最低対応1.85.0）の `aarch64-apple-darwin` ターゲットを使用する。
 
 ```sh
 bash scripts/test.sh
 bash scripts/build.sh
 ```
 
-通常版Universalアプリとインストーラを`dist/`へ生成する。ビルドはインストールや音声サービスの再起動を行わない。試験版は`bash scripts/package-rust-test-app.sh`で別UID・別設定先へ生成する。ビルドと対応ソースの検査は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md)、アプリの確認手順は[RUST_APP_TEST.md](RUST_APP_TEST.md)を参照する。
+通常版のarm64アプリとインストーラを`dist/`へ生成する。ビルドはインストールや音声サービスの再起動を行わない。試験版は`bash scripts/package-rust-test-app.sh`で別UID・別設定先へ生成する。ビルドと対応ソースの検査は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md)、アプリの確認手順は[RUST_APP_TEST.md](RUST_APP_TEST.md)を参照する。
 
 全体の構成は[ARCHITECTURE.md](ARCHITECTURE.md)、Rustの開発規則と自動検査は[RUST_STYLE.md](RUST_STYLE.md)に記載している。
 
@@ -29,6 +29,6 @@ bash scripts/build.sh
 
 音声処理のテストと測定条件は[RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md)、実HALの検証手順と診断プロトコルは[RUST_HAL_TEST.md](RUST_HAL_TEST.md)を参照する。FIFOの転送には処理予算を設けているが、1回の読み出しは残予算を超える場合があり、厳密な実時間期限を保証しない。
 
-RME、8時間の実経路、物理レート変更・切断復帰・全対応OS/Intel実行の網羅試験は未検証である。
+RME、8時間の実経路、物理レート変更・切断復帰・対応する各macOSでの動作の網羅試験は未検証である。
 
 公開版0.5.8のアプリとドライバはad-hoc署名で、インストーラは未署名である。Developer ID署名を使うビルドと公証の手順は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md#developer-id-release)を参照する。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。

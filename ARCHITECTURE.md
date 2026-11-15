@@ -169,7 +169,7 @@ the release filter-response grid, SDK ABI comparison, and a mock HAL driver test
 with a C ASan/UBSan harness. Actual PCM packet schedules cover different capture
 and output blocks, callback phases, unequal rates, generation isolation, and
 sustained packet growth. A fake-audio AppKit sleep/wake notification test
-runs in both profiles. Broader AppKit smoke/bundle tests and Universal packaging
+runs in both profiles. Broader AppKit smoke/bundle tests and arm64 packaging
 have separate scripts. `bash scripts/build.sh` creates distribution artifacts;
 it does not install them or restart the audio service. Sleep notifications are
 asynchronous worker signals; completion of HAL teardown before the OS suspends
@@ -179,6 +179,6 @@ Automated state-machine and watchdog tests verify the recovery policy with
 controlled time and backend observations. They do not prove that a physical
 device releases/reacquires streams correctly after actual Mac sleep. Real
 sleep/wake, disconnect/reconnect, physical sample-rate or SMUX channel changes,
-receiver applications, long-running audio, and Intel hardware remain separate
+receiver applications, and long-running audio remain separate
 acceptance checks. See [README.md](README.md), [RUST_AUDIO_TEST.md](RUST_AUDIO_TEST.md), and
 [RUST_HAL_TEST.md](RUST_HAL_TEST.md) for test procedures and their scope.

@@ -6,9 +6,8 @@ sources. It excludes the legacy Go application and BlackHole implementation.
 The project is GPL-3.0-only; see LICENSE and THIRD_PARTY_RUST.md.
 
 Rust 1.98.1 and Apple's command-line developer tools are prerequisites. The
-minimum supported Rust version is 1.85.0. Install the arm64 and x86_64 Apple targets
-before building universal binaries. The deployment target is macOS 13; build
-success is not proof of execution on every supported OS/architecture.
+minimum supported Rust version is 1.85.0. Build on an Apple Silicon Mac with the
+`aarch64-apple-darwin` Rust target. The minimum deployment target is macOS 13.
 
 The included .cargo/config.toml selects rust-vendor for these commands.
 
@@ -23,7 +22,7 @@ bash scripts/package-rust-test-app.sh
 Run Cargo from the extracted directory so it discovers the included .cargo
 configuration. The source verification script additionally uses Python 3 to check
 archive contents and runs `cargo check` on all workspace targets with an empty
-Cargo cache. It then builds a Universal app from the extracted source, including
+Cargo cache. It then builds an arm64 app from the extracted source, including
 its vendored source archive, with network access disabled for Cargo. Pass the path to the original archive, which must still be available
 after extraction.
 

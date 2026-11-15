@@ -23,9 +23,7 @@ for option in "$@"; do
 done
 artifact_directory="${CARGO_TARGET_DIR:-$CHANNELBRIDGE_ROOT/target}"
 export MACOSX_DEPLOYMENT_TARGET=13.0
-for architecture in aarch64-apple-darwin x86_64-apple-darwin; do
-    cargo build --locked --release -p channelbridge-app --target "$architecture" ${features[@]+"${features[@]}"}
-done
+cargo build --locked --release -p channelbridge-app --target aarch64-apple-darwin ${features[@]+"${features[@]}"}
 mkdir -p "$output_directory"
 stage="$(mktemp -d "$CHANNELBRIDGE_ROOT/$output_directory/app-stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
@@ -33,9 +31,7 @@ bundle="$stage/$name.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "packaging/Rust-$profile-App-Info.plist" "$bundle/Contents/Info.plist"
 plutil -lint "$bundle/Contents/Info.plist"
-lipo -create "$artifact_directory/aarch64-apple-darwin/release/channelbridge-app" \
-    "$artifact_directory/x86_64-apple-darwin/release/channelbridge-app" \
-    -output "$bundle/Contents/MacOS/$name"
+cp "$artifact_directory/aarch64-apple-darwin/release/channelbridge-app" "$bundle/Contents/MacOS/$name"
 iconset="$stage/AppIcon.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
@@ -50,9 +46,10 @@ cp THIRD_PARTY_RUST.md "$bundle/Contents/Resources/THIRD_PARTY.md"
 bash scripts/package-rust-source.sh "$bundle/Contents/Resources/ChannelBridge-source.tar.gz"
 codesign --force --sign - "$bundle"
 codesign --verify --strict "$bundle"
-for architecture in arm64 x86_64; do
-    lipo "$bundle/Contents/MacOS/$name" -verify_arch "$architecture"
-done
+if [[ "$(lipo -archs "$bundle/Contents/MacOS/$name")" != arm64 ]]; then
+    echo "Expected an arm64-only executable in $bundle" >&2
+    exit 1
+fi
 "$bundle/Contents/MacOS/$name" --check-bundle
 if [[ "$smoke" == true ]]; then
     "$bundle/Contents/MacOS/$name" --smoke --require-bundle
