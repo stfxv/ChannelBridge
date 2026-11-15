@@ -231,7 +231,7 @@ impl OutputProcessor {
             let fade = produced.min(FADE_FRAMES);
             let fade_frames = output[produced - fade..produced].iter_mut().enumerate();
             for (index, frame) in fade_frames {
-                let gain = (fade - index - 1) as f32 / FADE_FRAMES as f32;
+                let gain = (fade - index - 1) as f32 / fade as f32;
                 frame.left *= gain;
                 frame.right *= gain;
             }
@@ -256,6 +256,30 @@ mod tests {
     use super::*;
     use crate::drift::ClockEstimator;
     use crate::fifo;
+    #[test]
+    fn short_starvation_fades_from_the_previous_level() {
+        let (mut producer, consumer) = fifo::stereo_queue(16384).expect("valid queue");
+        let mut processor =
+            OutputProcessor::new(consumer, 48_000, 48_000, 768).expect("valid rates");
+        let pcm = [StereoFrame::new(0.8, 0.8); 512];
+        for len in [512, 512, 512, 107] {
+            assert_eq!(producer.push(&pcm[..len]), len);
+        }
+        let mut output = [StereoFrame::SILENCE; 512];
+        let mut previous = 0.0;
+        let mut checked = false;
+        for _ in 0..5 {
+            let report = processor.render(&mut output, Some(1.0));
+            if report.missing > 0 && report.produced > 1 && report.produced < 64 {
+                assert!((output[0].left - previous).abs() < 0.1);
+                assert_eq!(output[report.produced - 1].left, 0.0);
+                checked = true;
+                break;
+            }
+            previous = output[511].left;
+        }
+        assert!(checked);
+    }
     #[test]
     fn capacity_sized_packets_prime_small_fifo_and_survive_threshold_overshoot() {
         let (mut producer, consumer) =

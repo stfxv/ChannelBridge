@@ -21,9 +21,18 @@ struct Fake {
     saving: Option<mpsc::Sender<()>>,
     save_gate: Option<mpsc::Receiver<()>>,
     close_fail: bool,
+    fail_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    output_gate: Option<mpsc::Sender<channelbridge_core::worker::OutputGate>>,
     inventory: Option<Arc<Mutex<Result<channelbridge_core::view::DeviceInventory, String>>>>,
 }
 impl Backend for Fake {
+    fn set_output_gate(&mut self, gate: channelbridge_core::worker::OutputGate) {
+        if let Some(output) = &self.output_gate {
+            output
+                .send(gate)
+                .expect("test retains the simulated output callback");
+        }
+    }
     type Pending = ();
     type Session = ();
     fn devices(&mut self) -> Result<channelbridge_core::view::DeviceInventory, String> {
@@ -79,7 +88,15 @@ impl Backend for Fake {
     fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
         Ok(true)
     }
-    fn route(&mut self, _: &(), _: &Config, _: bool, _: bool) -> Result<(), String> {
+    fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
+        if !sending
+            && self
+                .fail_stop
+                .as_ref()
+                .is_some_and(|fail| fail.swap(false, Ordering::AcqRel))
+        {
+            return Err("stop route failed".into());
+        }
         self.events
             .lock()
             .expect("fixture threads do not panic while holding this mutex")
@@ -116,6 +133,61 @@ fn wait(worker: &Worker, predicate: impl Fn(&Snapshot) -> bool) -> Snapshot {
             "worker did not publish expected completion: {snapshot:?}"
         );
         thread::sleep(Duration::from_millis(1));
+    }
+}
+#[test]
+fn failed_stop_keeps_output_silent_until_the_old_session_is_safely_closed() {
+    use channelbridge_core::CaptureState;
+    for close_fail in [false, true] {
+        let (output_gate, output) = mpsc::channel();
+        let fail_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let injection = fail_stop.clone();
+        let worker = Worker::spawn(
+            Config {
+                auto_send_on_resume: true,
+                ..config("source")
+            },
+            move || {
+                Ok(Fake {
+                    fail_stop: Some(injection),
+                    output_gate: Some(output_gate),
+                    close_fail,
+                    ..Fake::default()
+                })
+            },
+        )
+        .expect("fixture worker can start");
+        let gate = output
+            .recv_timeout(Duration::from_secs(3))
+            .expect("worker publishes its output gate");
+        worker
+            .send(Command::PermissionChanged(true))
+            .expect("fixture worker is running");
+        worker
+            .send(Command::Start)
+            .expect("fixture start is admitted");
+        wait(&worker, |snapshot| snapshot.state == CaptureState::Sending);
+        fail_stop.store(true, Ordering::Release);
+        worker
+            .send(Command::Stop)
+            .expect("fixture stop is admitted");
+        wait(&worker, |snapshot| snapshot.command_error.is_some());
+        worker
+            .send(Command::System(SystemEvent::Wake))
+            .expect("fixture wake is admitted");
+        wait(&worker, |snapshot| {
+            snapshot.wanted_send
+                && snapshot.state
+                    == if close_fail {
+                        CaptureState::Blocked
+                    } else {
+                        CaptureState::Sending
+                    }
+        });
+        assert_eq!(gate.blocked(), close_fail);
+        worker
+            .join()
+            .expect("fixture control worker exits normally");
     }
 }
 #[test]

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-pub const MAX_REPORT_BYTES: usize = 64 * 1024;
+pub const MAX_REPORT_BYTES: usize = 256 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Caller supplies versions from its actual executable and main bundle.
 /// Missing identity is preserved rather than inferred from installed files.
@@ -40,6 +40,7 @@ struct Report<'report> {
     /// Active-session formats and dry levels; null without a session.
     audio: &'report Option<crate::view::AudioView>,
     /// Most recent device inventory, distinct from active-session evidence.
+    inventory_warning: bool,
     selected_input_inventory: Option<InputInventory<'report>>,
     control_history: &'report [crate::view::ControlEvent],
     error: &'report Option<String>,
@@ -98,6 +99,7 @@ pub fn save_new_with_metadata(
         driver: &snapshot.driver_diagnostics,
         audio: &snapshot.audio,
         control_history: &snapshot.control_history,
+        inventory_warning: snapshot.device_error.is_some(),
         selected_input_inventory: snapshot
             .devices
             .iter()
@@ -111,7 +113,7 @@ pub fn save_new_with_metadata(
         command_error: &snapshot.command_error,
     };
     let mut buffer = LimitedBuffer(Vec::new());
-    serde_json::to_writer_pretty(&mut buffer, &report).map_err(io::Error::other)?;
+    serde_json::to_writer(&mut buffer, &report).map_err(io::Error::other)?;
     buffer.write_all(b"\n")?;
     let parent = path
         .parent()
@@ -150,6 +152,7 @@ mod tests {
     use crate::Config;
     use crate::controller::Backend;
     use crate::worker::Worker;
+    use std::sync::Arc;
     struct Empty;
     impl Backend for Empty {
         type Pending = ();
@@ -230,6 +233,7 @@ mod tests {
                 held_dbfs: None,
             }],
         });
+        snapshot.device_error = Some("private-device-name".into());
         let destination = directory.join("report.json");
         super::save_new(&destination, &snapshot)
             .expect("bounded fixture report is published into its fresh writable directory");
@@ -240,6 +244,7 @@ mod tests {
         assert!(json["session_counters"].is_null());
         assert_eq!(json["retained_io_contexts"], 3);
         assert_eq!(json["auto_send_on_resume"], true);
+        assert_eq!(json["inventory_warning"], true);
         assert!(json["metadata"]["application_bundle_version"].is_null());
         assert_eq!(json["audio"]["physical_inputs"][0]["bits"], 24);
         assert_eq!(json["audio"]["virtual_bits"], 32);
@@ -279,6 +284,35 @@ mod tests {
                 0o600
             );
         }
+        snapshot.audio.as_mut().expect("audio fixture").levels = (1..=512)
+            .map(|channel| crate::view::InputLevel {
+                channel,
+                fresh: true,
+                current_dbfs: Some(-12.0),
+                held_dbfs: Some(-6.0),
+            })
+            .collect();
+        let format = snapshot
+            .audio
+            .as_ref()
+            .expect("audio fixture")
+            .physical_inputs[0]
+            .clone();
+        snapshot
+            .audio
+            .as_mut()
+            .expect("audio fixture")
+            .physical_inputs = vec![format.clone(); 512];
+        Arc::make_mut(&mut snapshot.devices)[0].physical_inputs = vec![format; 512];
+        let large_path = directory.join("512.json");
+        super::save_new(&large_path, &snapshot).expect("512-channel report fits the limit");
+        let large: serde_json::Value =
+            serde_json::from_slice(&fs::read(&large_path).expect("report")).expect("JSON");
+        assert_eq!(
+            large["audio"]["levels"].as_array().expect("levels").len(),
+            512
+        );
+        fs::remove_file(large_path).expect("remove fixture");
         snapshot.audio = None;
         snapshot.devices = Vec::new().into();
         let unavailable_path = directory.join("unavailable.json");

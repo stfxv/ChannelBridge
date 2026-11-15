@@ -40,6 +40,14 @@ impl PreparedSession {
         if source == target {
             return Err("input and virtual output must be different devices".into());
         }
+        // On variable-size devices fsiz gives the minimum and vfsz gives the maximum.
+        for selector in [hal_abi::fourcc(b"fsiz"), hal_abi::fourcc(b"vfsz")] {
+            validate_input_buffer_size(devices::property(
+                source,
+                selector,
+                hal_abi::fourcc(b"glob"),
+            ))?;
+        }
         let source_streams = devices::streams(source, hal_abi::fourcc(b"inpt"))?;
         let target_streams = devices::streams(target, hal_abi::fourcc(b"outp"))?;
         let input = source_streams
@@ -119,6 +127,31 @@ impl PreparedSession {
         })
     }
 }
+fn validate_input_buffer_size(
+    property: Result<Vec<u8>, devices::Error>,
+) -> Result<(), Box<dyn Error>> {
+    let bytes = match property {
+        Ok(bytes) => bytes,
+        Err(devices::Error::Hal(status))
+            if [hal_abi::fourcc(b"who?"), hal_abi::fourcc(b"unop")].contains(&(status as u32)) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let frames = u32::from_ne_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| devices::Error::MalformedProperty)?,
+    );
+    if frames > crate::buffers::MAX_CALLBACK_FRAMES {
+        return Err(format!(
+            "入力機器が要求するバッファサイズは {frames} フレームです。機器の設定で {} フレーム以下に変更してください。",
+            crate::buffers::MAX_CALLBACK_FRAMES
+        ).into());
+    }
+    Ok(())
+}
 /// Development session, restricted to the separate Rust test device UID.
 /// Both IOProcs keep running for preview/stop; sending is controlled atomically.
 pub struct TestSession {
@@ -137,6 +170,7 @@ impl TestSession {
         source_uid: &str,
         selection: Selection,
         ticks_per_second: u64,
+        output_gate: channelbridge_core::worker::OutputGate,
     ) -> Result<Self, Box<dyn Error>> {
         let devices = devices::list()?;
         let find = |uid: &str| -> Result<ObjectId, Box<dyn Error>> {
@@ -152,7 +186,8 @@ impl TestSession {
         };
         let source = find(source_uid)?;
         let target = find(channelbridge_contract::DEPLOYMENT.device_uid)?;
-        let prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
+        let mut prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
+        prepared.output.output_gate = output_gate;
         if prepared.input_rate != prepared.output_rate {
             return Err("virtual rate must follow source before starting preview".into());
         }
@@ -340,6 +375,21 @@ fn startup_error(cause: String, retained: bool, outcomes: Vec<crate::io::IoError
 mod tests {
     use super::*;
     use channelbridge_audio::routing::Mode;
+    #[test]
+    fn input_buffer_limit_is_checked_before_callback_registration() {
+        for frames in [64_u32, 4096] {
+            assert!(validate_input_buffer_size(Ok(frames.to_ne_bytes().to_vec())).is_ok());
+        }
+        let error = validate_input_buffer_size(Ok(8192_u32.to_ne_bytes().to_vec()))
+            .expect_err("8192 frames exceed the capture scratch capacity");
+        assert!(error.to_string().contains("8192"));
+        assert!(error.to_string().contains("4096"));
+        assert!(
+            validate_input_buffer_size(Err(devices::Error::Hal(hal_abi::fourcc(b"who?") as i32)))
+                .is_ok()
+        );
+        assert!(validate_input_buffer_size(Ok(vec![1, 2])).is_err());
+    }
     #[test]
     fn removed_device_retention_permits_retry_and_is_counted_in_startup_and_shutdown() {
         let removed = || crate::io::IoError {

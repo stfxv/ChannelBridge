@@ -22,6 +22,7 @@ pub struct OutputCallback {
     source_clock: Arc<SourceClock>,
     state: UnsafeCell<State>,
     routing: Arc<AtomicRouting>,
+    pub(crate) output_gate: channelbridge_core::worker::OutputGate,
     busy: AtomicBool,
     failed: AtomicBool,
     callbacks: AtomicU64,
@@ -83,6 +84,7 @@ impl OutputCallback {
                 gain: 0.0,
             }),
             routing,
+            output_gate: Default::default(),
             busy: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             callbacks: AtomicU64::new(0),
@@ -166,7 +168,7 @@ impl OutputCallback {
             state.processor.set_generation(route.generation);
             self.buffered_target
                 .store(state.processor.target_frames() as u64, Ordering::Release);
-            if !route.sending {
+            if !route.sending || self.output_gate.blocked() {
                 state.gain = 0.0;
                 self.peak.store(0, Ordering::Release);
                 return;
@@ -189,6 +191,11 @@ impl OutputCallback {
                     state.gain = (state.gain - 1.0 / 64.0).max(target);
                 }
                 *destination = [frame.left * state.gain, frame.right * state.gain];
+            }
+            // Stop may have arrived during the render, including a complete Stop/Start.
+            if self.output_gate.blocked() || self.routing.load().generation != route.generation {
+                output.fill([0.0; 2]);
+                state.gain = 0.0;
             }
             let peak = output.iter().try_fold([0.0_f32; 2], |peak, frame| {
                 frame
@@ -237,12 +244,186 @@ impl OutputCallback {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use channelbridge_audio::fifo;
     use channelbridge_audio::routing::Mode;
     use channelbridge_audio::routing::Selection;
     use channelbridge_hal_abi::AudioBuffer;
+    pub(crate) fn undersized_scratch_callback() -> OutputCallback {
+        let selection = Selection::new(1, 2, Mode::Stereo, false)
+            .expect("both fixture channels fit the selection encoding");
+        let routing = Arc::new(AtomicRouting::new(selection));
+        routing
+            .configure(selection, true, false)
+            .expect("new fixture route has generation space");
+        let (_, consumer) = fifo::stereo_queue(8192).expect("fixture capacity is a power of two");
+        let processor = OutputProcessor::new(consumer, 48000, 48000, 1024)
+            .expect("fixture target fits the queue and exceeds filter lookahead");
+        let mut callback = OutputCallback::new(processor, routing)
+            .expect("fixture can allocate callback scratch storage");
+        callback.state.get_mut().scratch = Box::new([]);
+        callback
+    }
+    #[test]
+    fn blocked_save_silences_output_and_coalesced_restart_discards_old_audio() {
+        use channelbridge_core::controller::Backend;
+        use channelbridge_core::worker::{OutputGate, Worker};
+        use channelbridge_core::{Command, Config};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct GatedBackend {
+            gate: mpsc::Sender<OutputGate>,
+            saving: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            routed: mpsc::Sender<bool>,
+            routing: Arc<AtomicRouting>,
+        }
+        impl Backend for GatedBackend {
+            type Pending = ();
+            type Session = ();
+            fn set_output_gate(&mut self, gate: OutputGate) {
+                self.gate
+                    .send(gate)
+                    .expect("test is waiting for the callback gate");
+            }
+            fn save(&mut self, _: &Config) -> Result<(), String> {
+                self.saving.send(()).map_err(|error| error.to_string())?;
+                self.release.recv().map_err(|error| error.to_string())
+            }
+            fn negotiate(&mut self, _: &Config) -> Result<(), String> {
+                Ok(())
+            }
+            fn ready(&mut self, _: &()) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn open(&mut self, _: &Config) -> Result<(), String> {
+                Ok(())
+            }
+            fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
+                Ok(true)
+            }
+            fn route(
+                &mut self,
+                _: &(),
+                _: &Config,
+                sending: bool,
+                overview: bool,
+            ) -> Result<(), String> {
+                self.routing
+                    .configure(self.routing.load().selection, sending, overview)
+                    .ok_or("fixture routing update failed")?;
+                self.routed.send(sending).map_err(|error| error.to_string())
+            }
+            fn close(&mut self, _: ()) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        let selection = Selection::new(1, 2, Mode::Stereo, false)
+            .expect("both fixture channels fit the selection encoding");
+        let routing = Arc::new(AtomicRouting::new(selection));
+        let backend_routing = Arc::clone(&routing);
+        let (gate, receive_gate) = mpsc::channel();
+        let (saving, save_entered) = mpsc::channel();
+        let (release_save, release) = mpsc::channel();
+        let (routed, routes) = mpsc::channel();
+        let config = Config {
+            device_uid: "source".into(),
+            ..Config::default()
+        };
+        let worker = Worker::spawn(config.clone(), move || {
+            Ok(GatedBackend {
+                gate,
+                saving,
+                release,
+                routed,
+                routing: backend_routing,
+            })
+        })
+        .expect("fixture worker can start");
+        let timeout = Duration::from_secs(3);
+        let (mut producer, consumer) =
+            fifo::stereo_queue(8192).expect("fixture capacity is a power of two");
+        let processor = OutputProcessor::new(consumer, 48000, 48000, 1024)
+            .expect("fixture target fits the queue and exceeds filter lookahead");
+        let mut callback = OutputCallback::new(processor, Arc::clone(&routing))
+            .expect("fixture can allocate callback scratch storage");
+        callback.output_gate = receive_gate
+            .recv_timeout(timeout)
+            .expect("worker installs the output gate at startup");
+        let render = || {
+            let mut samples = [[0.0_f32; 2]; 512];
+            let mut buffer = AudioBufferList {
+                count: 1,
+                buffers: [AudioBuffer {
+                    channels: 2,
+                    byte_size: 4096,
+                    data: samples.as_mut_ptr().cast(),
+                }],
+            };
+            // SAFETY: The fixture owns the live stereo descriptors and exclusive sample storage.
+            unsafe { callback.process(&mut buffer, None) };
+            samples
+        };
+        worker
+            .send(Command::PermissionChanged(true))
+            .expect("worker admission is open");
+        worker
+            .send(Command::Start)
+            .expect("manual start bypasses the command queue");
+        while !routes
+            .recv_timeout(timeout)
+            .expect("fixture worker routes its live session")
+        {}
+        let before_stop = routing.load().generation;
+        let old = [StereoFrame::new(0.5, 0.5); 2048];
+        for packet in old.chunks(512) {
+            assert_eq!(producer.push_generation(packet, before_stop), packet.len());
+        }
+        assert!(render()[511][0] > 0.49);
+        worker
+            .send(Command::Configure(config))
+            .expect("configuration fits the empty queue");
+        save_entered
+            .recv_timeout(timeout)
+            .expect("worker enters the simulated blocked save");
+        worker
+            .send(Command::Stop)
+            .expect("stop bypasses the blocked save");
+        assert!(render().iter().all(|frame| *frame == [0.0; 2]));
+        worker
+            .send(Command::Start)
+            .expect("restart can be requested during the save");
+        assert!(render().iter().all(|frame| *frame == [0.0; 2]));
+        release_save
+            .send(())
+            .expect("control worker is waiting in save");
+        while routes
+            .recv_timeout(timeout)
+            .expect("worker retires the old route")
+        {}
+        assert!(
+            routes
+                .recv_timeout(timeout)
+                .expect("worker applies the queued restart")
+        );
+        let after_restart = routing.load().generation;
+        assert!(after_restart > before_stop);
+        assert!(render().iter().all(|frame| *frame == [0.0; 2]));
+        let fresh = [StereoFrame::new(-0.25, -0.25); 2048];
+        for packet in fresh.chunks(512) {
+            assert_eq!(
+                producer.push_generation(packet, after_restart),
+                packet.len()
+            );
+        }
+        assert!(render()[511][0] < -0.24);
+        worker.request_shutdown();
+        assert!(render().iter().all(|frame| *frame == [0.0; 2]));
+        worker.join().expect("fixture backend exits normally");
+    }
     #[test]
     fn diagnostics_separate_buffering_from_active_audio_shortage() {
         let selection = Selection::new(1, 2, Mode::Stereo, false)

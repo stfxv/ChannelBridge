@@ -42,12 +42,14 @@ latest power state; even a wake without a preceding sleep retires the old route.
 The controller keeps the user's `wanted_send` intent separate from connection
 state. A disconnected sending route can resume after recovery; a user-stopped
 route resumes input preview only by default. The persisted `auto_send_on_resume`
-option may request sending at the next system wake, confirmed selected-input
-return, or live-session health recovery, including after a manual Stop. It defaults
+option may request sending at the next system wake or confirmed selected-input
+return, including after a manual Stop. Health retries preserve the current intent. It defaults
 to false. Enabling it, changing input selection, and startup with an already
 connected input do not request sending. Manual intent takes precedence over
 automatic recovery detected in the same worker turn. Start/Stop does not recreate
-the IOProcs.
+the IOProcs. The output callback observes Stop directly, including while the
+control worker is saving settings or waiting on HAL. A subsequent Start waits
+for the worker to retire the previous routing generation.
 Settings are validated and saved before the committed model or live route changes.
 Unavailable selected channels remain explicit selections and are never replaced
 with another channel automatically. Input inventory preserves usable choices
@@ -60,7 +62,9 @@ diagnostic protocol/initialization. It follows the physical source's nominal
 sample rate by requesting a change on the virtual device only, then waits for
 the nominal rate and every virtual/physical stream format to agree. Negotiation
 is polled with a three-second deadline. A prepared session allocates its DSP,
-FIFO, meters, and callback storage before registration. Each IOProc disables
+FIFO, meters, and callback storage before registration. When the input reports
+its buffer size, session preparation rejects sizes above 4096 frames and reports
+the supported limit. Each IOProc disables
 its unused direction, then output and capture start with sending disabled.
 
 Transient failure closes the old session and schedules a retry with exponential

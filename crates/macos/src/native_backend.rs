@@ -21,6 +21,7 @@ pub struct NativeBackend {
     startup_failed: bool,
     retained_io_contexts: u64,
     settings: PathBuf,
+    output_gate: channelbridge_core::worker::OutputGate,
     ticks_per_second: u64,
     stream_health: StreamHealth,
 }
@@ -39,6 +40,7 @@ impl NativeBackend {
             startup_failed: false,
             retained_io_contexts: 0,
             settings,
+            output_gate: Default::default(),
             ticks_per_second: frequency as u64,
             stream_health: StreamHealth::default(),
         })
@@ -155,6 +157,9 @@ fn initialized_driver(counters: channelbridge_contract::DriverCounters) -> Resul
     }
 }
 impl Backend for NativeBackend {
+    fn set_output_gate(&mut self, gate: channelbridge_core::worker::OutputGate) {
+        self.output_gate = gate;
+    }
     type Pending = RateFollow;
     type Session = TestSession;
     fn requested_rate(&self, pending: &RateFollow) -> Option<u32> {
@@ -316,6 +321,7 @@ impl Backend for NativeBackend {
             &config.device_uid,
             selection(config)?,
             self.ticks_per_second,
+            self.output_gate.clone(),
         ) {
             Ok(session) => session,
             Err(error) => {

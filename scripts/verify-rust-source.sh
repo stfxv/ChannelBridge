@@ -5,9 +5,10 @@ source "$(dirname "$0")/rust-env.sh"
 cd "$CHANNELBRIDGE_ROOT"
 archive="${1:-$CHANNELBRIDGE_ROOT/work/rust-dist/ChannelBridgeRustTest.app/Contents/Resources/ChannelBridge-source.tar.gz}"
 features=()
+build_options=(--build-only)
 case "${2:-}" in
     "") ;;
-    --production) features=(--features production) ;;
+    --production) features=(--features production); build_options+=(--production) ;;
     *) printf 'Unknown verification profile\n' >&2; exit 2 ;;
 esac
 if (( $# > 2 )); then printf 'Too many verification options\n' >&2; exit 2; fi
@@ -46,5 +47,7 @@ export CARGO_HOME="$stage/empty-cargo"
 cd "$stage/source"
 cargo check --offline --locked --workspace --all-targets ${features[@]+"${features[@]}"}
 cargo check --offline --locked --manifest-path tools/rust-style/Cargo.toml --all-targets
-CARGO_NET_OFFLINE=true bash scripts/check-rust-style.sh check
+export CARGO_NET_OFFLINE=true
+bash scripts/check-rust-style.sh check
+bash scripts/build-rust-app.sh "${build_options[@]}"
 printf 'Archive rebuilt offline with an empty Cargo cache\n'

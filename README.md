@@ -31,4 +31,4 @@ bash scripts/build.sh
 
 RME、8時間の実経路、物理レート変更・切断復帰・全対応OS/Intel実行の網羅試験は未検証である。0.5.8公開時に実機音声品質の追加確認は行っていない。
 
-アプリとドライバの署名はad-hocで、インストーラは未署名である。Developer ID署名・公証は未対応である。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。
+公開版0.5.8のアプリとドライバはad-hoc署名で、インストーラは未署名である。Developer ID署名を使うビルドと公証の手順は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md#developer-id-release)を参照する。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。

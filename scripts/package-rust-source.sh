@@ -8,7 +8,8 @@ if [[ "$#" != 1 ]]; then
 fi
 output="$1"
 if [[ "$output" != /* ]]; then output="$CHANNELBRIDGE_ROOT/$output"; fi
-stage="$(mktemp -d "${TMPDIR:-/tmp}/channelbridge-source.XXXXXX")"
+mkdir -p work/rust-dist
+stage="$(mktemp -d "$CHANNELBRIDGE_ROOT/work/rust-dist/source-stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/.cargo" "$stage/scripts" "$stage/packaging/assets"
 cp Cargo.toml Cargo.lock rust-toolchain.toml LICENSE THIRD_PARTY_RUST.md \
@@ -27,5 +28,5 @@ ditto --norsrc --noextattr --noacl tools/rust-style/src "$stage/tools/rust-style
 ditto --norsrc --noextattr --noacl tools/rust-style/tests "$stage/tools/rust-style/tests"
 cp packaging/Rust-*.plist "$stage/packaging/"
 cp packaging/assets/AppIcon.png "$stage/packaging/assets/"
-(cd "$stage"; cargo vendor --locked --respect-source-config --manifest-path "$CHANNELBRIDGE_ROOT/Cargo.toml" rust-vendor > .cargo/config.toml)
+(cd "$stage"; cargo vendor --locked --respect-source-config --sync "$CHANNELBRIDGE_ROOT/tools/rust-style/Cargo.toml" --manifest-path "$CHANNELBRIDGE_ROOT/Cargo.toml" rust-vendor > .cargo/config.toml)
 COPYFILE_DISABLE=1 tar -czf "$output" -C "$stage" .

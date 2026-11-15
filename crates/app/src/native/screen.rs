@@ -36,7 +36,8 @@ pub(super) struct Screen {
     pub(super) window: Retained<NSWindow>,
     pub(super) devices: Retained<NSPopUpButton>,
     format: Retained<NSTextField>,
-    status: Retained<NSTextField>,
+    pub(super) status: Retained<NSTextField>,
+    pub(super) inventory_warning: Retained<NSTextField>,
     settings_error: Option<String>,
     pub(super) device_items: RefCell<Vec<(String, String)>>,
     displayed_uid: RefCell<String>,
@@ -46,7 +47,7 @@ pub(super) struct Screen {
 }
 impl Screen {
     pub(super) fn new(main: MainThreadMarker, settings_error: Option<String>) -> Self {
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 472.0));
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(380.0, 500.0));
         // SAFETY: main-thread allocation, initialized geometry and valid style.
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -84,6 +85,7 @@ impl Screen {
             NSPoint::new(20.0, 10.0),
             NSSize::new(340.0, 25.0),
         ));
+        let inventory_warning = NSTextField::labelWithString(ns_string!(""), main);
         let view = window.contentView().expect("window content view");
         let meters = InputMeters::new(main, &view);
         let routing = RoutingControls::new(main, &view);
@@ -151,6 +153,11 @@ impl Screen {
         )));
         auto_send_button.setEnabled(false);
         view.addSubview(&auto_send_button);
+        inventory_warning.setFrame(NSRect::new(
+            NSPoint::new(20.0, 463.0),
+            NSSize::new(340.0, 24.0),
+        ));
+        view.addSubview(&inventory_warning);
         let export = Export::new(main);
         view.addSubview(&export.button);
         view.addSubview(&export.label);
@@ -171,6 +178,7 @@ impl Screen {
             devices,
             format,
             status,
+            inventory_warning,
             settings_error,
             device_items: Default::default(),
             displayed_uid: Default::default(),
@@ -264,9 +272,29 @@ impl Screen {
             self.devices.removeAllItems();
             self.devices
                 .addItemWithTitle(&NSString::from_str(placeholder));
+            let menu = self.devices.menu().expect("device menu");
             for device in snapshot.devices.iter() {
-                self.devices
-                    .addItemWithTitle(&NSString::from_str(&device.name));
+                let duplicate = snapshot
+                    .devices
+                    .iter()
+                    .filter(|other| other.name == device.name)
+                    .count()
+                    > 1;
+                let title = if duplicate {
+                    format!("{} ({})", device.name, device.uid)
+                } else {
+                    device.name.clone()
+                };
+                // SAFETY: no action selector or key equivalent. The menu item retains
+                // its immutable UID for the lifetime of the displayed selection.
+                unsafe {
+                    let item = menu.addItemWithTitle_action_keyEquivalent(
+                        &NSString::from_str(&title),
+                        None,
+                        ns_string!(""),
+                    );
+                    item.setRepresentedObject(Some(&NSString::from_str(&device.uid)));
+                }
             }
             self.devices
                 .selectItemAtIndex(selected.map_or(0, |index| index as isize + 1));
@@ -309,11 +337,9 @@ impl Screen {
             error
         } else if let Some(error) = snapshot.error.as_deref() {
             error
-        } else if snapshot.device_error.is_some() {
-            "入力機器を確認できません"
         } else if snapshot.config.device_uid.is_empty() {
             "入力機器を選択してください"
-        } else if selected.is_none() {
+        } else if selected.is_none() && snapshot.state != CaptureState::Sending {
             "選択した入力機器が接続されていません"
         } else {
             match snapshot.state {
@@ -334,6 +360,12 @@ impl Screen {
             }
         };
         self.status.setStringValue(&NSString::from_str(status));
+        self.inventory_warning
+            .setStringValue(if snapshot.device_error.is_some() {
+                ns_string!("入力機器の一覧を確認できません")
+            } else {
+                ns_string!("")
+            });
         if let Some(error) = self.action_error.borrow().as_deref() {
             self.status.setStringValue(&NSString::from_str(error));
         }
@@ -410,22 +442,17 @@ impl Screen {
             return;
         }
         let snapshot = worker.snapshot();
-        let selected = self.devices.indexOfSelectedItem();
         let committed_index = self
             .device_items
             .borrow()
             .iter()
             .position(|item| item.0 == snapshot.config.device_uid)
             .map_or(0, |index| index as isize + 1);
-        let uid = selected
-            .checked_sub(1)
-            .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| {
-                self.device_items
-                    .borrow()
-                    .get(index)
-                    .map(|item| item.0.clone())
-            });
+        let uid = self
+            .devices
+            .selectedItem()
+            .and_then(|item| item.representedObject())
+            .and_then(|object| object.downcast_ref::<NSString>().map(|uid| uid.to_string()));
         // Map the displayed UID, never a fresh enumeration index. Hot-plugging
         // while the menu is open cannot silently select another device.
         let Some(uid) = uid else {

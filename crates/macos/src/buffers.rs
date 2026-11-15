@@ -1,4 +1,5 @@
 //! HAL buffer validation. Construct borrows only for the current callback.
+pub(crate) const MAX_CALLBACK_FRAMES: u32 = 4096;
 use crate::devices::Error;
 use channelbridge_hal_abi as hal_abi;
 use channelbridge_hal_abi::AudioBuffer;
@@ -8,6 +9,7 @@ use channelbridge_hal_abi::StreamFormat;
 pub struct CaptureLayout {
     channels: Box<[usize]>,
     total: usize,
+    channel_index: [(usize, usize); 512],
     rate: f64,
 }
 impl CaptureLayout {
@@ -52,7 +54,16 @@ impl CaptureLayout {
             }
         }
         let rate = rate.ok_or(Error::MalformedProperty)?;
+        let mut channel_index = [(0, 0); 512];
+        let mut channel = 0;
+        for (buffer, &count) in channels.iter().enumerate() {
+            for offset in 0..count {
+                channel_index[channel] = (buffer, offset);
+                channel += 1;
+            }
+        }
         Ok(Self {
+            channel_index,
             channels: channels.into_boxed_slice(),
             total,
             rate,
@@ -72,11 +83,10 @@ impl CaptureLayout {
 struct FloatBuffer<'buffer> {
     channels: usize,
     samples: &'buffer [f32],
-    first_channel: usize,
 }
 pub struct InputBuffers<'buffer> {
     buffers: [Option<FloatBuffer<'buffer>>; 512],
-    count: usize,
+    channel_index: &'buffer [(usize, usize); 512],
     frames: usize,
     channels: usize,
 }
@@ -114,7 +124,7 @@ impl<'buffer> InputBuffers<'buffer> {
     /// storage matching layout. Storage stays immutable and alive for 'buffer.
     pub unsafe fn from_raw(
         pointer: *const AudioBufferList,
-        layout: &CaptureLayout,
+        layout: &'buffer CaptureLayout,
     ) -> Result<Self, Error> {
         // SAFETY: The caller guarantees a live list header and descriptors for the
         // returned buffer lifetime.
@@ -124,11 +134,10 @@ impl<'buffer> InputBuffers<'buffer> {
         }
         let mut result = Self {
             buffers: [None; 512],
-            count,
+            channel_index: &layout.channel_index,
             frames: 0,
             channels: layout.total,
         };
-        let mut first_channel = 0;
         for index in 0..count {
             // SAFETY: buffer_count bounded index; the caller guarantees that many
             // readable descriptors.
@@ -140,7 +149,7 @@ impl<'buffer> InputBuffers<'buffer> {
                 return Err(Error::MalformedProperty);
             }
             let frames = buffer.byte_size as usize / (channels * 4);
-            if frames > 4096 || (index != 0 && frames != result.frames) {
+            if frames > MAX_CALLBACK_FRAMES as usize || (index != 0 && frames != result.frames) {
                 return Err(Error::MalformedProperty);
             }
             if index == 0 {
@@ -156,12 +165,7 @@ impl<'buffer> InputBuffers<'buffer> {
                 // immutable payload storage throughout the callback lifetime.
                 unsafe { std::slice::from_raw_parts(buffer.data.cast::<f32>(), frames * channels) }
             };
-            result.buffers[index] = Some(FloatBuffer {
-                channels,
-                samples,
-                first_channel,
-            });
-            first_channel += channels;
+            result.buffers[index] = Some(FloatBuffer { channels, samples });
         }
         Ok(result)
     }
@@ -178,16 +182,12 @@ impl<'buffer> InputBuffers<'buffer> {
         if frame >= self.frames || channel >= self.channels {
             return None;
         }
-        let active_buffers = self.buffers.iter().take(self.count).flatten();
-        for buffer in active_buffers {
-            if channel >= buffer.first_channel && channel < buffer.first_channel + buffer.channels {
-                return buffer
-                    .samples
-                    .get(frame * buffer.channels + channel - buffer.first_channel)
-                    .copied();
-            }
-        }
-        None
+        let (buffer_index, offset) = self.channel_index[channel];
+        let buffer = self.buffers[buffer_index]?;
+        buffer
+            .samples
+            .get(frame * buffer.channels + offset)
+            .copied()
     }
 }
 
@@ -203,7 +203,7 @@ pub unsafe fn silence_outputs(pointer: *mut AudioBufferList) -> Result<(), Error
     for index in 0..count {
         // SAFETY: buffer_count bounded index; the caller guarantees that many readable descriptors.
         let buffer = unsafe { descriptor(pointer, index) };
-        if buffer.byte_size as usize > 512 * 4096 * 8 {
+        if buffer.byte_size as usize > 512 * MAX_CALLBACK_FRAMES as usize * 8 {
             return Err(Error::MalformedProperty);
         }
         if !buffer.data.is_null() {
@@ -232,7 +232,10 @@ pub unsafe fn stereo_output<'buffer>(
     }
     // SAFETY: The single-descriptor count was checked; the caller keeps that descriptor readable.
     let buffer = unsafe { descriptor(pointer, 0) };
-    if buffer.channels != 2 || buffer.byte_size % 8 != 0 || buffer.byte_size > 4096 * 8 {
+    if buffer.channels != 2
+        || buffer.byte_size % 8 != 0
+        || buffer.byte_size > MAX_CALLBACK_FRAMES * 8
+    {
         return Err(Error::MalformedProperty);
     }
     if buffer.byte_size == 0 {

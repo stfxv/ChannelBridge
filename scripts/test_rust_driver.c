@@ -133,6 +133,17 @@ int main(int argc, char **argv) {
     assert(get_u32(Plugin,kAudioPlugInPropertyDeviceList)==Device);
     assert(get_u32(Input,kAudioStreamPropertyDirection)==1);
     assert(get_u32(Output,kAudioStreamPropertyDirection)==0);
+    a=address(kAudioObjectPropertyOwnedObjects);
+    AudioClassID classes[]={kAudioStreamClassID, kAudioDeviceClassID};
+    AudioObjectID owned[2]={0};
+    assert((*driver)->GetPropertyDataSize(driver,Device,0,&a,sizeof(classes[0]),classes,&bytes)==0 && bytes==sizeof(owned));
+    assert((*driver)->GetPropertyData(driver,Device,0,&a,sizeof(classes[0]),classes,sizeof(owned),&bytes,owned)==0 && owned[0]==Input && owned[1]==Output);
+    assert((*driver)->GetPropertyDataSize(driver,Plugin,0,&a,sizeof(classes[0]),classes,&bytes)==0 && bytes==0);
+    assert((*driver)->GetPropertyDataSize(driver,Plugin,0,&a,sizeof(classes),classes,&bytes)==0 && bytes==4);
+    assert((*driver)->GetPropertyDataSize(driver,Device,0,&a,1,classes,&bytes)!=0);
+    a=address(kAudioStreamPropertyDirection); a.mScope=kAudioObjectPropertyScopeInput;
+    assert(!(*driver)->HasProperty(driver,Input,0,&a));
+
     assert(get_u32(Device,kAudioDevicePropertyZeroTimeStampPeriod)>=10923);
     a=address(kAudioObjectPropertyCustomPropertyInfoList);
     AudioServerPlugInCustomPropertyInfo custom[2]={{0}};
@@ -191,6 +202,25 @@ int main(int argc, char **argv) {
         transfer(kAudioServerPlugInIOOperationReadInput,frame,256,received);
         for(int i=0;i<512;i++) assert(received[i]==sent[i]);
     }
+
+    float large_sent[10000], large_received[10000];
+    for(int i=0;i<10000;i++) large_sent[i]=(float)(i+1)/16384.0f;
+    transfer(kAudioServerPlugInIOOperationWriteMix,4503599627370495.5,5000,large_sent);
+    transfer(kAudioServerPlugInIOOperationReadInput,4503599627370495.0,4096,large_received);
+    transfer(kAudioServerPlugInIOOperationReadInput,4503599627374591.0,904,large_received+8192);
+    for(int i=0;i<10000;i++) assert(large_received[i]==large_sent[i]);
+    a=address('cbst'); data=NULL;
+    assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(data),&bytes,&data)==0);
+    memcpy(diagnostics,CFDataGetBytePtr(data),48); CFRelease(data);
+    UInt64 missing_before_invalid=diagnostics[3];
+    AudioServerPlugInIOCycleInfo invalid_cycle={0};
+    assert((*driver)->DoIOOperation(driver,Device,Input,2,kAudioServerPlugInIOOperationReadInput,256,&invalid_cycle,received,NULL)!=0);
+    for(int i=0;i<512;i++) assert(received[i]==0);
+    assert((*driver)->DoIOOperation(driver,Device,Output,1,kAudioServerPlugInIOOperationWriteMix,256,&invalid_cycle,sent,NULL)!=0);
+    a=address('cbst'); data=NULL;
+    assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(data),&bytes,&data)==0);
+    memcpy(diagnostics,CFDataGetBytePtr(data),48); CFRelease(data);
+    assert(diagnostics[3]==missing_before_invalid+256 && diagnostics[4]==256 && diagnostics[5]==2);
 
     double rates[]={44100,48000,96000,32000,192000,768000,48000};
     for(unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);i++) {

@@ -3,6 +3,18 @@
 set -euo pipefail
 source "$(dirname "$0")/rust-env.sh"
 cd "$CHANNELBRIDGE_ROOT"
+package_name=ChannelBridge-Rust.pkg
+installer_args=()
+case "$#:${1:-}" in
+    0:) ;;
+    1:--developer-id)
+        : "${CHANNELBRIDGE_APPLICATION_IDENTITY:?set the Developer ID Application identity}"
+        : "${CHANNELBRIDGE_INSTALLER_IDENTITY:?set the Developer ID Installer identity}"
+        installer_args=(--sign "$CHANNELBRIDGE_INSTALLER_IDENTITY" --timestamp)
+        package_name=ChannelBridge-Developer-ID.pkg
+        ;;
+    *) echo "usage: bash scripts/package-rust-production.sh [--developer-id]" >&2; exit 2 ;;
+esac
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/Rust-Production-App-Info.plist)"
 driver_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/Rust-Production-Driver-Info.plist)"
 if [[ "$app_version" != "$driver_version" ]]; then
@@ -21,7 +33,12 @@ mkdir -p "$root/Applications" "$root/Library/Audio/Plug-Ins/HAL"
 ditto --norsrc --noextattr --noacl work/rust-production-dist/ChannelBridge.app "$root/$app_path"
 ditto --norsrc --noextattr --noacl work/rust-production-dist/ChannelBridge.driver "$root/$driver_path"
 xattr -cr "$root"
-COPYFILE_DISABLE=1 pkgbuild --root "$root" \
+if (( ${#installer_args[@]} )); then
+    codesign --force --options runtime --timestamp --sign "$CHANNELBRIDGE_APPLICATION_IDENTITY" \
+        --entitlements packaging/Rust-Production-App-Entitlements.plist "$root/$app_path"
+    codesign --force --options runtime --timestamp --sign "$CHANNELBRIDGE_APPLICATION_IDENTITY" "$root/$driver_path"
+fi
+COPYFILE_DISABLE=1 pkgbuild ${installer_args[@]+"${installer_args[@]}"} --root "$root" \
     --component-plist packaging/Rust-Production-App-Components.plist \
     --identifier local.channelbridge.rust.pkg --version "$app_version" \
     --ownership recommended --install-location / "$stage/ChannelBridge-Rust.pkg"
@@ -57,5 +74,8 @@ for path in "$app_path" "$driver_path"; do
 done
 cmp "$root/$app_path/Contents/Resources/ChannelBridge-source.tar.gz" \
     "$stage/expanded/Payload/$app_path/Contents/Resources/ChannelBridge-source.tar.gz"
-mv "$stage/ChannelBridge-Rust.pkg" work/rust-production-dist/ChannelBridge-Rust.pkg
-printf 'Production installer verified: %s\n' "$CHANNELBRIDGE_ROOT/work/rust-production-dist/ChannelBridge-Rust.pkg"
+if (( ${#installer_args[@]} )); then
+    pkgutil --check-signature "$stage/ChannelBridge-Rust.pkg"
+fi
+mv "$stage/ChannelBridge-Rust.pkg" "work/rust-production-dist/$package_name"
+printf 'Production installer verified: %s\n' "$CHANNELBRIDGE_ROOT/work/rust-production-dist/$package_name"

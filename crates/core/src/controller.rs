@@ -5,6 +5,8 @@ use crate::{CaptureState, Command, Config};
 /// The controller retries recoverable failures and owns each opened session
 /// until `close` consumes it. Implementations keep these calls off audio callbacks.
 pub trait Backend {
+    /// Supplies the stop signal that native output observes on every callback.
+    fn set_output_gate(&mut self, _gate: crate::worker::OutputGate) {}
     fn retained_io_contexts(&self) -> u64 {
         0
     }
@@ -169,6 +171,9 @@ impl<B: Backend> Controller<B> {
     #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+    pub(crate) fn teardown_failed(&self) -> bool {
+        self.teardown_failed
     }
     fn disconnect(&mut self) -> Result<(), String> {
         self.pending = None;
@@ -336,9 +341,6 @@ impl<B: Backend> Controller<B> {
     /// Advances recovery and negotiation using monotonic milliseconds.
     /// Repeated recoverable failures back off from one to thirty seconds.
     pub fn tick(&mut self, now_ms: u64) {
-        self.tick_with_manual_intent(now_ms, false);
-    }
-    pub(crate) fn tick_with_manual_intent(&mut self, now_ms: u64, manual_intent: bool) {
         if self.quitting || self.teardown_failed || self.suspended {
             return;
         }
@@ -374,15 +376,9 @@ impl<B: Backend> Controller<B> {
                     return;
                 }
                 Ok(false) => {
-                    if !manual_intent {
-                        self.automatic_send("reconnect");
-                    }
                     self.retry(now_ms, "device or format changed".into());
                 }
                 Err(error) => {
-                    if !manual_intent {
-                        self.automatic_send("reconnect");
-                    }
                     self.retry(now_ms, error);
                 }
             }
@@ -483,6 +479,7 @@ mod tests {
     struct Fake {
         ready: bool,
         healthy: bool,
+        health_error: bool,
         save_fail: bool,
         close_fail: bool,
         open_fail: bool,
@@ -526,7 +523,11 @@ mod tests {
             }
         }
         fn healthy(&mut self, _: &(), _: &Config) -> Result<bool, String> {
-            Ok(self.healthy)
+            if self.health_error {
+                Err("output stopped advancing".into())
+            } else {
+                Ok(self.healthy)
+            }
         }
         fn route(&mut self, _: &(), _: &Config, sending: bool, _: bool) -> Result<(), String> {
             self.sends.push(sending);
@@ -581,7 +582,7 @@ mod tests {
         worker
             .command(Command::Stop)
             .expect("fixture controller has not received Quit");
-        worker.tick_with_manual_intent(1, true);
+        worker.tick(1);
         assert!(worker.backend.sends.iter().all(|sending| !sending));
         worker
             .command(Command::InputReconnected)
@@ -613,7 +614,7 @@ mod tests {
             .command(Command::Stop)
             .expect("fixture controller has not received Quit");
         worker.backend.healthy = false;
-        worker.tick_with_manual_intent(1, true);
+        worker.tick(1);
         worker.backend.healthy = true;
         worker.tick(1001);
         assert_eq!(worker.state(), CaptureState::Previewing);
@@ -679,15 +680,14 @@ mod tests {
             worker.tick(2);
             worker.backend.healthy = true;
             worker.tick(1002);
-            assert_eq!(worker.wanted_send(), auto);
-            assert_eq!(
-                worker.state(),
-                if auto {
-                    CaptureState::Sending
-                } else {
-                    CaptureState::Previewing
-                }
-            );
+            assert!(!worker.wanted_send());
+            assert_eq!(worker.state(), CaptureState::Previewing);
+            worker.backend.health_error = true;
+            worker.tick(1003);
+            worker.backend.health_error = false;
+            worker.tick(2003);
+            assert!(!worker.wanted_send());
+            assert_eq!(worker.state(), CaptureState::Previewing);
         }
     }
 

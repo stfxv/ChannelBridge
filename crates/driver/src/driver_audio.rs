@@ -39,6 +39,12 @@ impl DriverAudio {
             .and_then(|old| old.checked_add(1))
     }
 
+    pub fn reject_invalid_time(&self, read: bool, frames: usize) {
+        self.invalid.fetch_add(1, Ordering::Relaxed);
+        let counter = if read { &self.missing } else { &self.rejected };
+        counter.fetch_add(frames as u64, Ordering::Relaxed);
+    }
+
     pub fn write(&self, time: f64, frames: &[StereoFrame]) -> Transfer {
         let Some(start) = FramePosition::from_sample_time(time) else {
             self.invalid.fetch_add(1, Ordering::Relaxed);

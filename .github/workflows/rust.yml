@@ -30,7 +30,7 @@ jobs:
           cargo test --workspace --locked --features production
       - name: Algorithms, publication model, and Apple ABI oracle
         if: matrix.rust == '1.98.1'
-        run: bash scripts/test-rust.sh
+        run: bash scripts/test.sh
       - name: Apple Silicon and Intel compilation
         run: |
           cargo check --workspace --all-targets --locked --target aarch64-apple-darwin

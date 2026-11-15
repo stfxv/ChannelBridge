@@ -35,6 +35,23 @@ pub struct Snapshot {
     pub devices: Arc<[crate::view::DeviceChoice]>,
     pub device_error: Option<String>,
 }
+const MANUAL_PENDING: u8 = 1;
+const MANUAL_START: u8 = 2;
+const STOP_FENCE: u8 = 4;
+
+/// Output stays silent until the control thread has retired the pre-Stop audio.
+/// Start can replace the latest intent but cannot clear a pending Stop fence.
+#[derive(Clone, Default)]
+pub struct OutputGate {
+    intent: Arc<AtomicU8>,
+    quit: Arc<AtomicBool>,
+}
+impl OutputGate {
+    #[must_use]
+    pub fn blocked(&self) -> bool {
+        self.quit.load(Ordering::Acquire) || self.intent.load(Ordering::Acquire) & STOP_FENCE != 0
+    }
+}
 pub struct Worker {
     commands: Arc<Mutex<Option<SyncSender<Command>>>>,
     intent: Arc<AtomicU8>,
@@ -284,7 +301,7 @@ impl Worker {
                     Ok(mut snapshot) => *snapshot = value,
                     Err(_) => exiting.store(true, Ordering::Release),
                 };
-                let backend = match factory() {
+                let mut backend = match factory() {
                     Ok(backend) => backend,
                     Err(error) => {
                         seal(&admission, &exiting);
@@ -311,6 +328,10 @@ impl Worker {
                         return;
                     }
                 };
+                backend.set_output_gate(OutputGate {
+                    intent: Arc::clone(&requested),
+                    quit: Arc::clone(&exiting),
+                });
                 let mut controller = Controller::new(backend, config);
                 let start = Instant::now();
                 let mut next_tick = Instant::now();
@@ -439,9 +460,24 @@ impl Worker {
                     if exiting.load(Ordering::Acquire) {
                         break;
                     }
-                    let manual_intent = requested.swap(0, Ordering::AcqRel);
-                    match manual_intent {
-                        1 => {
+                    let intent = requested.fetch_and(STOP_FENCE, Ordering::AcqRel);
+                    if intent & MANUAL_PENDING != 0 {
+                        if intent & STOP_FENCE != 0 {
+                            if let Err(error) = controller.command(Command::Stop) {
+                                command_error = Some(error);
+                            }
+                            // A failed route edit also retires the session through close.
+                            // A new command during teardown keeps the fence closed.
+                            if !controller.teardown_failed() {
+                                let _ = requested.compare_exchange(
+                                    STOP_FENCE,
+                                    0,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                );
+                            }
+                        }
+                        if intent & MANUAL_START != 0 {
                             apply_command(
                                 &mut controller,
                                 Command::Start,
@@ -449,24 +485,12 @@ impl Worker {
                                 &mut configuration_attempt,
                             );
                         }
-                        2 => {
-                            apply_command(
-                                &mut controller,
-                                Command::Stop,
-                                &mut command_error,
-                                &mut configuration_attempt,
-                            );
-                        }
-                        _ => {}
                     }
                     if exiting.load(Ordering::Acquire) {
                         break;
                     }
                     if Instant::now() >= next_tick {
-                        controller.tick_with_manual_intent(
-                            start.elapsed().as_millis().min(u64::MAX as u128) as u64,
-                            manual_intent != 0,
-                        );
+                        controller.tick(start.elapsed().as_millis().min(u64::MAX as u128) as u64);
                         next_tick = Instant::now() + Duration::from_millis(100);
                     }
                     publish(Snapshot {
@@ -550,11 +574,13 @@ impl Worker {
                 Ok(())
             }
             Command::Start => {
-                self.intent.store(1, Ordering::Release);
+                self.intent
+                    .fetch_or(MANUAL_PENDING | MANUAL_START, Ordering::AcqRel);
                 Ok(())
             }
             Command::Stop => {
-                self.intent.store(2, Ordering::Release);
+                self.intent
+                    .store(MANUAL_PENDING | STOP_FENCE, Ordering::Release);
                 Ok(())
             }
             command => sender.try_send(command).map_err(|error| match error {

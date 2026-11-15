@@ -345,14 +345,12 @@ unsafe extern "C" fn io_boundary(
     device: ObjectId,
     _client: u32,
     _operation: u32,
-    frames: u32,
+    _frames: u32,
     _cycle: *const IoCycleInfo,
 ) -> i32 {
     guard(|| {
         if !valid(driver) || device != DEVICE {
             BAD_OBJECT
-        } else if frames > 4096 {
-            BAD_SIZE
         } else {
             0
         }
@@ -374,7 +372,7 @@ unsafe extern "C" fn do_io(
         if !valid(driver) || device != DEVICE {
             return BAD_OBJECT;
         }
-        if frames > 4096 || cycle.is_null() || (main.is_null() && frames != 0) {
+        if cycle.is_null() || (main.is_null() && frames != 0) {
             return BAD_SIZE;
         }
         let read = operation == hal_abi::fourcc(b"read");
@@ -394,34 +392,46 @@ unsafe extern "C" fn do_io(
             // SAFETY: HAL grants exclusive, aligned PCM storage for frames stereo
             // samples during this callback.
             unsafe { core::slice::from_raw_parts_mut(main.cast::<f32>(), frames as usize * 2) };
-        let mut scratch = [channelbridge_audio::StereoFrame::SILENCE; 4096];
-        let scratch = &mut scratch[..frames as usize];
         let Some(runtime) = state::runtime() else {
             if read {
                 buffer.fill(0.0);
             }
             return NOT_READY;
         };
-        if read {
-            if cycle.input_time.flags & 1 == 0 {
-                buffer.fill(0.0);
-                return ILLEGAL;
-            }
-            let _ = runtime.audio.read(cycle.input_time.sample_time, scratch);
-            let output_frames = buffer.chunks_exact_mut(2).zip(scratch.iter());
-            for (pair, value) in output_frames {
-                pair[0] = value.left;
-                pair[1] = value.right;
-            }
+        let timestamp = if read {
+            cycle.input_time
         } else {
-            if cycle.output_time.flags & 1 == 0 {
-                return ILLEGAL;
+            cycle.output_time
+        };
+        let start = channelbridge_audio::FramePosition::from_sample_time(timestamp.sample_time)
+            .filter(|start| {
+                timestamp.flags & 1 != 0
+                    && start.get() + u64::from(frames) - 1
+                        <= channelbridge_audio::FramePosition::MAX_EXACT
+            });
+        let Some(start) = start else {
+            runtime.audio.reject_invalid_time(read, frames as usize);
+            if read {
+                buffer.fill(0.0);
             }
-            let input_frames = buffer.chunks_exact(2).zip(scratch.iter_mut());
-            for (pair, value) in input_frames {
-                *value = channelbridge_audio::StereoFrame::new(pair[0], pair[1]);
+            return ILLEGAL;
+        };
+        let mut scratch = [channelbridge_audio::StereoFrame::SILENCE; 4096];
+        for (index, chunk) in buffer.chunks_mut(4096 * 2).enumerate() {
+            let scratch = &mut scratch[..chunk.len() / 2];
+            let time = (start.get() + (index * 4096) as u64) as f64;
+            if read {
+                let _ = runtime.audio.read(time, scratch);
+                for (pair, value) in chunk.chunks_exact_mut(2).zip(scratch.iter()) {
+                    pair[0] = value.left;
+                    pair[1] = value.right;
+                }
+            } else {
+                for (pair, value) in chunk.chunks_exact(2).zip(scratch.iter_mut()) {
+                    *value = channelbridge_audio::StereoFrame::new(pair[0], pair[1]);
+                }
+                let _ = runtime.audio.write(time, scratch);
             }
-            let _ = runtime.audio.write(cycle.output_time.sample_time, scratch);
         }
         0
     })

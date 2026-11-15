@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::sel;
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSButton, NSMenu, NSMenuDelegate, NSPopUpButton,
 };
 use objc2_foundation::{
@@ -142,6 +142,13 @@ define_class!(
                     menu.update(main, &snapshot, runtime.screen.send_button.isEnabled(), runtime.screen.mute_button.isEnabled());
                 }
                 if snapshot.finished && !runtime.screen.export.pending() && self.ivars().shutting_down.replace(false) {
+                    drop(state);
+                    if let Some(error) = snapshot.command_error.as_deref() {
+                        let alert = NSAlert::new(main);
+                        alert.setMessageText(ns_string!("終了時に未解決のエラーがあります"));
+                        alert.setInformativeText(&NSString::from_str(error));
+                        alert.runModal();
+                    }
                     NSApplication::sharedApplication(main).replyToApplicationShouldTerminate(true);
                 }
             }
@@ -348,15 +355,14 @@ pub fn run() {
             let state = delegate.ivars().runtime.borrow();
             let runtime = state.as_ref().expect("runtime");
             let snapshot = runtime.worker.snapshot();
-            assert_eq!(
-                runtime
-                    .screen
-                    .window
-                    .contentView()
-                    .expect("content view")
-                    .subviews()
-                    .len(),
-                18
+            let warning = &runtime.screen.inventory_warning;
+            let content = runtime.screen.window.contentView().expect("content view");
+            assert!(warning.isDescendantOf(&content));
+            let warning_frame = warning.frame();
+            let devices_frame = runtime.screen.devices.frame();
+            assert!(warning_frame.origin.y >= devices_frame.origin.y + devices_frame.size.height);
+            assert!(
+                warning_frame.origin.y + warning_frame.size.height <= content.bounds().size.height
             );
             assert_eq!(
                 runtime.screen.export.button.title().to_string(),

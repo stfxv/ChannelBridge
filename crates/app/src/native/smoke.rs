@@ -63,6 +63,7 @@ impl Backend for FakeAudio {
 /// Post through the same NSWorkspace center as macOS, without sleeping the Mac.
 /// A fake backend makes every release, reopen and send intent observable.
 pub(super) fn sleep_wake(main: MainThreadMarker) {
+    duplicate_device_selection(main);
     let lifecycle = Arc::new(AudioLifecycle::default());
     let backend_lifecycle = Arc::clone(&lifecycle);
     let worker = Worker::spawn(
@@ -207,6 +208,70 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     println!(
         "Rust AppKit sleep/wake notifications released and reopened fake audio, preserved send intent and respected stop while asleep; no native audio or system sleep"
     );
+}
+
+fn duplicate_device_selection(main: MainThreadMarker) {
+    let worker = Worker::spawn(Config::default(), || Ok(FakeAudio(Arc::default())))
+        .expect("duplicate fixture worker");
+    let screen = Screen::new(main, None);
+    let mut snapshot = worker.snapshot();
+    let device = channelbridge_core::view::DeviceChoice {
+        uid: "first-uid".into(),
+        name: "Same microphone".into(),
+        channels: 2,
+        rate: 48000.0,
+        physical_inputs: vec![],
+        format_error: None,
+    };
+    let mut second = device.clone();
+    second.uid = "second-uid".into();
+    let mut third = device.clone();
+    third.uid = "third-uid".into();
+    third.name = "Built-in".into();
+    snapshot.devices = vec![device, second, third].into();
+    snapshot.state = CaptureState::Sending;
+    snapshot.config.device_uid = "first-uid".into();
+    snapshot.device_error = Some("partial inventory".into());
+    screen.update(&snapshot);
+    assert_eq!(screen.devices.numberOfItems(), 4);
+    assert_eq!(screen.status.stringValue().to_string(), "送出中");
+    assert!(
+        !screen
+            .inventory_warning
+            .stringValue()
+            .to_string()
+            .is_empty()
+    );
+    for (index, uid, title) in [
+        (1, "first-uid", "Same microphone (first-uid)"),
+        (2, "second-uid", "Same microphone (second-uid)"),
+        (3, "third-uid", "Built-in"),
+    ] {
+        screen.devices.selectItemAtIndex(index);
+        let item = screen.devices.selectedItem().expect("selected microphone");
+        assert_eq!(item.title().to_string(), title);
+        let object = item.representedObject().expect("device identifier");
+        assert_eq!(
+            object
+                .downcast_ref::<objc2_foundation::NSString>()
+                .expect("UID string")
+                .to_string(),
+            uid
+        );
+    }
+    screen.devices.selectItemAtIndex(2);
+    screen.select_device(&worker);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let saved = worker.snapshot();
+        if saved.configuration_attempt > 0 {
+            assert_eq!(saved.config.device_uid, "second-uid");
+            break;
+        }
+        assert!(Instant::now() < deadline, "duplicate selection timed out");
+        NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+    }
+    worker.join().expect("duplicate fixture shutdown");
 }
 
 /// Exercise real settings I/O and native control inventory, without granting

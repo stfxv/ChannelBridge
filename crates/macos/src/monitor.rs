@@ -13,10 +13,13 @@ use std::error::Error;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct Report {
+    pub longest_gap: Duration,
+    pub allowed_gap: Duration,
+    pub minimum_frames: u64,
     pub callbacks: u64,
     pub frames: u64,
     pub nonzero_frames: [u64; 2],
@@ -29,11 +32,17 @@ impl Report {
     pub fn valid(&self) -> bool {
         self.callbacks >= 10
             && self.frames >= 4096
+            && self.frames >= self.minimum_frames
+            && self.longest_gap <= self.allowed_gap
             && self.invalid_callbacks == 0
             && self.invalid_samples == 0
     }
 }
 struct Observer {
+    epoch: Instant,
+    first_ns: AtomicU64,
+    last_ns: AtomicU64,
+    longest_gap_ns: AtomicU64,
     layout: CaptureLayout,
     callbacks: AtomicU64,
     frames: AtomicU64,
@@ -46,6 +55,10 @@ impl Observer {
     #[must_use]
     fn new(layout: CaptureLayout) -> Self {
         Self {
+            epoch: Instant::now(),
+            first_ns: AtomicU64::new(u64::MAX),
+            last_ns: AtomicU64::new(0),
+            longest_gap_ns: AtomicU64::new(0),
             layout,
             callbacks: AtomicU64::new(0),
             frames: AtomicU64::new(0),
@@ -55,7 +68,18 @@ impl Observer {
             invalid_samples: AtomicU64::new(0),
         }
     }
+    fn record_progress(&self, now: u64) {
+        self.first_ns.fetch_min(now, Ordering::Relaxed);
+        let previous = self.last_ns.fetch_max(now, Ordering::Relaxed);
+        if previous != 0 {
+            self.longest_gap_ns
+                .fetch_max(now.saturating_sub(previous), Ordering::Relaxed);
+        }
+    }
     fn observe(&self, input: &InputBuffers<'_>) {
+        if input.frames() > 0 {
+            self.record_progress(self.epoch.elapsed().as_nanos() as u64);
+        }
         let mut nonzero = [0; 2];
         let mut peak = [0_f32; 2];
         let mut invalid = 0;
@@ -81,8 +105,19 @@ impl Observer {
         self.callbacks.fetch_add(1, Ordering::Relaxed);
     }
     #[must_use]
-    fn report(&self) -> Report {
+    fn report(&self, start: Duration, end: Duration) -> Report {
+        let first = Duration::from_nanos(self.first_ns.load(Ordering::Acquire));
+        let last = Duration::from_nanos(self.last_ns.load(Ordering::Acquire));
+        let gap = Duration::from_nanos(self.longest_gap_ns.load(Ordering::Acquire));
+        let rate = self.layout.sample_rate();
+        let expected = end.saturating_sub(start).as_secs_f64() * rate;
         Report {
+            longest_gap: gap
+                .max(first.saturating_sub(start))
+                .max(end.saturating_sub(last)),
+            allowed_gap: Duration::from_secs_f64((8192.0 / rate).max(0.25)),
+            minimum_frames: ((expected * 0.99) as u64).saturating_sub(4096),
+
             callbacks: self.callbacks.load(Ordering::Acquire),
             frames: self.frames.load(Ordering::Acquire),
             nonzero_frames: self
@@ -147,18 +182,53 @@ pub fn run(duration: Duration) -> Result<Report, Box<dyn Error>> {
     let mut registration = Registration::try_new(device.id, Observer::new(layout))?;
     registration.disable_streams(Direction::Output)?;
     let started = registration.start();
+    let start = registration.handler().epoch.elapsed();
     if started.is_ok() {
         std::thread::sleep(duration);
     }
+    let end = registration.handler().epoch.elapsed();
     let observer = registration.close()?;
     started?;
-    Ok(observer.report())
+    Ok(observer.report(start, end))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use channelbridge_hal_abi::{AudioBuffer, StreamFormat};
+    #[test]
+    fn long_observation_requires_progress_throughout() {
+        let format = StreamFormat {
+            sample_rate: 48000.0,
+            format_id: hal_abi::fourcc(b"lpcm"),
+            format_flags: 9,
+            bytes_per_packet: 8,
+            frames_per_packet: 1,
+            bytes_per_frame: 8,
+            channels_per_frame: 2,
+            bits_per_channel: 32,
+            reserved: 0,
+        };
+        let observer =
+            Observer::new(CaptureLayout::try_new(&[format]).expect("valid stereo fixture"));
+        let end = Duration::from_secs(1200);
+        observer.callbacks.store(10, Ordering::Relaxed);
+        observer.frames.store(5120, Ordering::Relaxed);
+        observer.record_progress(10_000_000);
+        assert!(!observer.report(Duration::ZERO, end).valid());
+        observer.frames.store(57_600_000, Ordering::Relaxed);
+        for tick in 1..=12_000 {
+            observer.record_progress(tick * 100_000_000);
+        }
+        assert!(observer.report(Duration::ZERO, end).valid());
+        observer.record_progress(1_201_000_000_000);
+        assert!(
+            !observer
+                .report(Duration::ZERO, Duration::from_secs(1201))
+                .valid()
+        );
+    }
+
     #[test]
     fn observer_distinguishes_channels_silence_invalid_samples_and_headers() {
         let format = StreamFormat {
@@ -195,7 +265,7 @@ mod tests {
                 std::ptr::null(),
             );
         }
-        let report = observer.report();
+        let report = observer.report(Duration::ZERO, Duration::from_secs(1));
         assert_eq!(report.frames, 3);
         assert_eq!(report.nonzero_frames, [1, 1]);
         assert_eq!(report.peak, [0.25, 0.5]);
@@ -212,7 +282,17 @@ mod tests {
                 std::ptr::null(),
             );
         }
-        assert_eq!(observer.report().invalid_callbacks, 1);
-        assert_eq!(observer.report().frames, 3);
+        assert_eq!(
+            observer
+                .report(Duration::ZERO, Duration::from_secs(1))
+                .invalid_callbacks,
+            1
+        );
+        assert_eq!(
+            observer
+                .report(Duration::ZERO, Duration::from_secs(1))
+                .frames,
+            3
+        );
     }
 }

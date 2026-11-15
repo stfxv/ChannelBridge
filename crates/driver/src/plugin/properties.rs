@@ -75,6 +75,9 @@ fn describe(object: ObjectId, address: PropertyAddress) -> Result<Value, i32> {
     }
     let selector = address.selector;
     let stream = object == INPUT || object == OUTPUT;
+    if (stream || object == PLUGIN) && address.scope != GLOBAL {
+        return Err(UNKNOWN_PROPERTY);
+    }
     if object == DEVICE && selector == hal_abi::fourcc(b"cust") && address.scope == GLOBAL {
         return Ok(Value::CustomProperties);
     }
@@ -278,13 +281,53 @@ pub(super) unsafe extern "C" fn is_settable(
         0
     })
 }
+unsafe fn owned_objects(
+    object: ObjectId,
+    address: PropertyAddress,
+    qualifier_size: u32,
+    qualifier: *const c_void,
+) -> Result<Vec<u32>, i32> {
+    let Value::Objects(objects) = describe(object, address)? else {
+        return Err(UNKNOWN_PROPERTY);
+    };
+    if qualifier_size == 0 {
+        return Ok(objects.to_vec());
+    }
+    if qualifier.is_null() || qualifier_size % 4 != 0 {
+        return Err(BAD_SIZE);
+    }
+    let mut result = Vec::new();
+    for &child in objects {
+        let class = if child == DEVICE {
+            hal_abi::fourcc(b"adev")
+        } else {
+            hal_abi::fourcc(b"astr")
+        };
+        for index in 0..(qualifier_size as usize / 4) {
+            // SAFETY: HAL provides qualifier_size readable bytes for this call.
+            let requested = unsafe {
+                qualifier
+                    .cast::<u8>()
+                    .add(index * 4)
+                    .cast::<u32>()
+                    .read_unaligned()
+            };
+            if requested == class || requested == hal_abi::fourcc(b"aobj") {
+                result.push(child);
+                break;
+            }
+        }
+    }
+    Ok(result)
+}
+
 pub(super) unsafe extern "C" fn data_size(
     driver: DriverRef,
     object: ObjectId,
     _pid: i32,
     pointer: *const PropertyAddress,
-    _qualifier_size: u32,
-    _qualifier: *const c_void,
+    qualifier_size: u32,
+    qualifier: *const c_void,
     output: *mut u32,
 ) -> i32 {
     host_boundary::guard(|| {
@@ -296,6 +339,17 @@ pub(super) unsafe extern "C" fn data_size(
             Ok(a) => a,
             Err(error) => return error,
         };
+        if a.selector == hal_abi::fourcc(b"ownd") {
+            // SAFETY: HAL provides the qualifier bytes for this property call.
+            return match unsafe { owned_objects(object, a, qualifier_size, qualifier) } {
+                Ok(objects) => {
+                    // SAFETY: output was checked and HAL grants a writable UInt32.
+                    unsafe { output.write(objects.len() as u32 * 4) };
+                    0
+                }
+                Err(error) => error,
+            };
+        }
         match describe(object, a) {
             Ok(value) => {
                 // SAFETY: HAL grants a writable UInt32 output slot for this callback.
@@ -413,6 +467,30 @@ pub(super) unsafe extern "C" fn get_data(
             Ok(a) => a,
             Err(error) => return error,
         };
+        if a.selector == hal_abi::fourcc(b"ownd") {
+            // SAFETY: HAL provides the qualifier bytes for this property call.
+            let objects = match unsafe { owned_objects(object, a, qualifier_size, qualifier) } {
+                Ok(objects) => objects,
+                Err(error) => return error,
+            };
+            let size = objects.len() as u32 * 4;
+            if capacity < size || (output.is_null() && size != 0) {
+                return BAD_SIZE;
+            }
+            if size != 0 {
+                // SAFETY: the caller provides size writable bytes.
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        objects.as_ptr().cast::<u8>(),
+                        output.cast(),
+                        size as usize,
+                    )
+                };
+            }
+            // SAFETY: output_size was checked and is writable.
+            unsafe { output_size.write(size) };
+            return 0;
+        }
         let value = match describe(object, a) {
             Ok(value) => value,
             Err(error) => return error,

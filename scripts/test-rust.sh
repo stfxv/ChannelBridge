@@ -21,6 +21,16 @@ clang -Wall -Wextra -Werror scripts/test_rust_abi.c -framework CoreAudio -o work
 work/test/rust/abi > work/test/rust/apple-layout.txt
 cargo run --locked --quiet -p channelbridge-hal-abi --example layout > work/test/rust/rust-layout.txt
 diff -u work/test/rust/apple-layout.txt work/test/rust/rust-layout.txt
-cargo build --locked -p channelbridge-driver
+driver_library="$(cargo build --locked -p channelbridge-driver --message-format=json | python3 -c '
+import json, sys
+libraries = [
+    name for message in map(json.loads, sys.stdin)
+    if message.get("reason") == "compiler-artifact" and message["target"]["name"] == "channelbridge_driver"
+    for name in message["filenames"] if name.endswith(".dylib")
+]
+if len(libraries) != 1:
+    sys.exit("expected one ChannelBridge driver library from Cargo")
+print(libraries[0])
+')"
 clang -g -fsanitize=address,undefined scripts/test_rust_driver.c -framework CoreAudio -framework CoreFoundation -o work/test/rust/driver
-work/test/rust/driver "$CHANNELBRIDGE_ROOT/target/debug/libchannelbridge_driver.dylib"
+work/test/rust/driver "$driver_library"

@@ -62,6 +62,10 @@ const HAL: Api = Api {
 };
 
 pub trait Handler: Send + Sync + 'static {
+    /// True when the DSP adapter caught a panic inside the registration's unwind guard.
+    fn failed(&self) -> bool {
+        false
+    }
     /// # Safety
     /// All pointers and payloads have HAL's callback validity/ownership for the
     /// invocation. Implementations must not retain their borrows after return.
@@ -75,6 +79,9 @@ pub trait Handler: Send + Sync + 'static {
     );
 }
 impl Handler for CaptureCallback {
+    fn failed(&self) -> bool {
+        self.stats().failed
+    }
     unsafe fn process(
         &self,
         now: *const AudioTimestamp,
@@ -90,6 +97,9 @@ impl Handler for CaptureCallback {
     }
 }
 impl Handler for OutputCallback {
+    fn failed(&self) -> bool {
+        self.stats().failed
+    }
     unsafe fn process(
         &self,
         _now: *const AudioTimestamp,
@@ -108,6 +118,11 @@ struct Context<T> {
     handler: T,
     admission: AtomicUsize,
     failed: AtomicBool,
+}
+impl<T: Handler> Context<T> {
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire) || self.handler.failed()
+    }
 }
 const CLOSED: usize = 1 << (usize::BITS - 1);
 const BAD_DEVICE: i32 = hal_abi::fourcc(b"!dev") as i32;
@@ -377,10 +392,7 @@ impl<T: Handler> Registration<T> {
                 operation: "destroy",
                 status,
                 context_retained: true,
-                disposition: if status == BAD_DEVICE
-                    && inactive
-                    && !context.failed.load(Ordering::Acquire)
-                {
+                disposition: if status == BAD_DEVICE && inactive && !context.failed() {
                     IoDisposition::RemovedDevice
                 } else {
                     IoDisposition::Fatal
@@ -411,13 +423,7 @@ impl<T: Handler> Registration<T> {
             self.retain();
             return Err(error);
         }
-        if self
-            .context
-            .as_ref()
-            .expect("owned context")
-            .failed
-            .load(Ordering::Acquire)
-        {
+        if self.context.as_ref().expect("owned context").failed() {
             return Err(IoError {
                 operation: "callback panic",
                 status: 0,
@@ -576,6 +582,62 @@ mod tests {
         assert!(bytes[12..].iter().all(|byte| *byte == 0));
         assert!(super::disabled_usage(super::dispatch::<TestHandler>, 0).is_none());
         assert!(super::disabled_usage(super::dispatch::<TestHandler>, 513).is_none());
+    }
+    #[test]
+    fn caught_output_dsp_panic_makes_clean_or_removed_device_close_fatal() {
+        unsafe extern "C" fn removed(_: ObjectId, _: IoProc) -> i32 {
+            BAD_DEVICE
+        }
+        for missing_device in [false, true] {
+            let api = Api {
+                create,
+                start,
+                stop: start,
+                destroy: if missing_device { removed } else { start },
+            };
+            let mut registration = Registration::with_api(
+                42,
+                crate::output::tests::undersized_scratch_callback(),
+                api,
+            )
+            .expect("fake registration returns a live callback ID");
+            registration.start().expect("fake start admits callbacks");
+            let context = registration
+                .context
+                .as_deref()
+                .expect("live registration owns the context");
+            let mut samples = [1.0_f32; 2];
+            let mut buffer = AudioBufferList {
+                count: 1,
+                buffers: [hal_abi::AudioBuffer {
+                    channels: 2,
+                    byte_size: 8,
+                    data: samples.as_mut_ptr().cast(),
+                }],
+            };
+            // SAFETY: Registration owns the context, and the output descriptor grants exclusive
+            // access to one writable stereo frame. The output handler ignores other arguments.
+            unsafe {
+                dispatch::<OutputCallback>(
+                    42,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut buffer,
+                    std::ptr::null(),
+                    std::ptr::from_ref(context).cast_mut().cast(),
+                );
+            }
+            assert_eq!(samples, [0.0; 2]);
+            assert!(context.handler.stats().failed);
+            assert!(!context.failed.load(Ordering::Acquire));
+            let error = registration
+                .close()
+                .err()
+                .expect("DSP panic blocks session replacement");
+            assert_eq!(error.disposition, IoDisposition::Fatal);
+            assert_eq!(error.context_retained, missing_device);
+        }
     }
     #[test]
     fn lifecycle_releases_only_after_deregistration_and_retains_on_errors() {
