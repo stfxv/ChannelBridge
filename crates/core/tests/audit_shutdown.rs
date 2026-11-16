@@ -439,6 +439,7 @@ fn whole_inventory_failure_retains_choices_and_presence_history() {
             format_error: None,
         }],
         completeness: InventoryCompleteness::Complete,
+        ambiguous_inputs: Default::default(),
     };
     let inventory = Arc::new(Mutex::new(Ok(complete.clone())));
     let readings = inventory.clone();

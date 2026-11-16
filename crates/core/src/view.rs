@@ -84,8 +84,30 @@ pub struct AudioDiagnostics {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeviceInventory {
     pub choices: Vec<DeviceChoice>,
+    pub ambiguous_inputs: std::collections::HashSet<String>,
     pub completeness: InventoryCompleteness,
 }
+impl DeviceInventory {
+    #[must_use]
+    pub fn warning(&self) -> Option<String> {
+        let read_error = match &self.completeness {
+            InventoryCompleteness::Complete => None,
+            InventoryCompleteness::Partial { warning } => Some(warning),
+        };
+        if self.ambiguous_inputs.is_empty() {
+            return read_error.cloned();
+        }
+        let duplicate = format!(
+            "duplicate input device UIDs: {}",
+            self.ambiguous_inputs.len()
+        );
+        Some(match read_error {
+            Some(error) => format!("{error}; {duplicate}"),
+            None => duplicate,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum InventoryCompleteness {
     #[default]

@@ -224,10 +224,11 @@ impl InputPresence {
         }
         let present = inventory.choices.iter().any(|device| device.uid == uid);
         if !present
-            && matches!(
-                inventory.completeness,
-                crate::view::InventoryCompleteness::Partial { .. }
-            )
+            && (inventory.ambiguous_inputs.contains(uid)
+                || matches!(
+                    inventory.completeness,
+                    crate::view::InventoryCompleteness::Partial { .. }
+                ))
         {
             return false;
         }
@@ -432,13 +433,8 @@ impl Worker {
                                     );
                                     next_tick = Instant::now();
                                 }
+                                device_error = current.warning();
                                 devices = current.choices.into();
-                                device_error = match current.completeness {
-                                    crate::view::InventoryCompleteness::Complete => None,
-                                    crate::view::InventoryCompleteness::Partial { warning } => {
-                                        Some(warning)
-                                    }
-                                };
                             }
                             Err(error) => device_error = Some(error),
                         }
@@ -660,6 +656,7 @@ mod tests {
     fn complete(choices: &[crate::view::DeviceChoice]) -> crate::view::DeviceInventory {
         crate::view::DeviceInventory {
             choices: choices.to_vec(),
+            ambiguous_inputs: Default::default(),
             completeness: crate::view::InventoryCompleteness::Complete,
         }
     }
@@ -1090,6 +1087,7 @@ mod tests {
         };
         let partial_missing = crate::view::DeviceInventory {
             choices: Vec::new(),
+            ambiguous_inputs: Default::default(),
             completeness: crate::view::InventoryCompleteness::Partial {
                 warning: "entry failed".into(),
             },
@@ -1112,6 +1110,26 @@ mod tests {
         assert!(!presence.observe("source", &partial_present));
         assert!(!presence.observe("", &partial_missing));
         assert_eq!(presence.observed, None);
+    }
+    #[test]
+    fn ambiguous_inventory_preserves_selected_presence_without_masking_other_disconnects() {
+        let source = crate::view::DeviceChoice {
+            uid: "source".into(),
+            name: "Input".into(),
+            channels: 2,
+            rate: 48000.0,
+            physical_inputs: Vec::new(),
+            format_error: None,
+        };
+        let mut ambiguous = complete(&[]);
+        ambiguous.ambiguous_inputs.insert("other".into());
+        let mut presence = InputPresence::default();
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&source))));
+        assert!(!presence.observe("source", &ambiguous));
+        assert!(presence.observe("source", &complete(std::slice::from_ref(&source))));
+        ambiguous.ambiguous_inputs.insert("source".into());
+        assert!(!presence.observe("source", &ambiguous));
+        assert!(!presence.observe("source", &complete(std::slice::from_ref(&source))));
     }
     #[test]
     fn manual_stop_arriving_during_return_inventory_wins_before_open() {
