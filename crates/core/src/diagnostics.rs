@@ -1,18 +1,12 @@
 //! Explicit diagnostic export on a non-audio thread. No automatic recording.
+use crate::file_publication::Publication;
 use crate::worker::Snapshot;
 use serde::Serialize;
-use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 pub const MAX_REPORT_BYTES: usize = 256 * 1024;
-static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// Caller supplies versions from its actual executable and main bundle.
 /// Missing identity is preserved rather than inferred from installed files.
 #[derive(Default, Serialize)]
@@ -65,13 +59,6 @@ impl Write for LimitedBuffer {
         Ok(())
     }
 }
-struct Temporary(PathBuf);
-impl Drop for Temporary {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 /// Publishes a complete report with private permissions. Existing destinations
 /// (including symlinks) are never replaced. The parent directory must exist.
 /// Missing session data is JSON null, never fabricated zero counters.
@@ -115,35 +102,7 @@ pub fn save_new_with_metadata(
     let mut buffer = LimitedBuffer(Vec::new());
     serde_json::to_writer(&mut buffer, &report).map_err(io::Error::other)?;
     buffer.write_all(b"\n")?;
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let temporary_path = parent.join(format!(
-        ".channelbridge-diagnostic-{}-{}.tmp",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary_path)?;
-    let temporary = Temporary(temporary_path);
-    file.write_all(&buffer.0)?;
-    file.sync_all()?;
-    drop(file);
-    // A same-directory hard link is the no-replacement commit point; unlike
-    // rename it cannot silently overwrite a file created by another process.
-    fs::hard_link(&temporary.0, path)?;
-    drop(temporary);
-    if let Ok(directory) = File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+    Publication::NewReport.write(path, &buffer.0)
 }
 
 #[cfg(test)]
@@ -152,6 +111,7 @@ mod tests {
     use crate::Config;
     use crate::controller::Backend;
     use crate::worker::Worker;
+    use std::fs;
     use std::sync::Arc;
     struct Empty;
     impl Backend for Empty {
@@ -182,9 +142,8 @@ mod tests {
     #[test]
     fn export_is_bounded_private_and_preserves_existing_files_and_unknown_data() {
         let directory = std::env::temp_dir().join(format!(
-            "channelbridge-diagnostic-test-{}-{}",
-            std::process::id(),
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            "channelbridge-diagnostic-test-{}",
+            std::process::id()
         ));
         fs::create_dir(&directory).expect("fixture owns a writable unique temporary directory");
         let worker = Worker::spawn(
@@ -283,6 +242,22 @@ mod tests {
                     & 0o777,
                 0o600
             );
+        }
+        #[cfg(unix)]
+        {
+            let link = directory.join("existing-link.json");
+            let missing_target = directory.join("missing.json");
+            std::os::unix::fs::symlink(&missing_target, &link)
+                .expect("fixture can create a dangling destination symlink");
+            let error = super::save_new(&link, &snapshot)
+                .expect_err("an existing symlink occupies the requested destination");
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+            assert_eq!(
+                fs::read_link(&link).expect("symlink remains"),
+                missing_target
+            );
+            assert!(!missing_target.exists());
+            fs::remove_file(link).expect("fixture owns the symlink");
         }
         snapshot.audio.as_mut().expect("audio fixture").levels = (1..=512)
             .map(|channel| crate::view::InputLevel {

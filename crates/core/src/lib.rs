@@ -5,6 +5,7 @@ mod config;
 mod control;
 pub mod controller;
 pub mod diagnostics;
+mod file_publication;
 pub mod storage;
 pub mod view;
 pub mod worker;

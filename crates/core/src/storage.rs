@@ -1,15 +1,9 @@
 //! Settings are committed before changing a live audio route.
 use crate::Config;
+use crate::file_publication::Publication;
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn load(path: &Path) -> io::Result<Config> {
     Ok(load_existing(path)?.unwrap_or_default())
@@ -21,66 +15,32 @@ pub fn load_existing(path: &Path) -> io::Result<Option<Config>> {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
+            Err(entry) if entry.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(entry) => Err(entry),
+            Ok(_) => Err(error),
+        },
         Err(error) => Err(error),
     }
 }
 
-struct TemporaryFile(PathBuf);
-impl Drop for TemporaryFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-fn open_temporary(path: PathBuf) -> io::Result<(File, TemporaryFile)> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(&path)?;
-    // Own cleanup only after create_new succeeds. A colliding file is not ours.
-    Ok((file, TemporaryFile(path)))
-}
-
 pub fn save(path: &Path, config: &Config) -> io::Result<()> {
-    use std::io::Write;
-
     config
         .validate_selection()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-    let data = serde_json::to_vec_pretty(config).map_err(io::Error::other)?;
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temporary_path = parent.join(format!(
-        ".channelbridge-settings-{}-{sequence}.tmp",
-        std::process::id()
-    ));
-    let (mut file, temporary) = open_temporary(temporary_path)?;
-    file.write_all(&data)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    drop(file);
-    // Rename is the commit point. No subsequent error may claim the previous
-    // config remains in place after it has already been replaced.
-    fs::rename(&temporary.0, path)?;
-    if let Ok(directory) = File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+    let mut data = serde_json::to_vec_pretty(config).map_err(io::Error::other)?;
+    data.push(b'\n');
+    Publication::Settings.write(path, &data)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Mode;
+
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     struct TestDirectory(PathBuf);
     impl TestDirectory {
@@ -158,19 +118,6 @@ mod tests {
                 .expect_err("the fixture deliberately wrote malformed JSON")
                 .kind(),
             io::ErrorKind::InvalidData
-        );
-    }
-
-    #[test]
-    fn a_colliding_temporary_file_is_never_removed() {
-        let dir = TestDirectory::new();
-        let path = dir.0.join("existing.tmp");
-        fs::write(&path, b"owned by another writer")
-            .expect("fixture owns this writable settings path");
-        assert!(super::open_temporary(path.clone()).is_err());
-        assert_eq!(
-            fs::read(&path).expect("fixture file was written and remains present for inspection"),
-            b"owned by another writer"
         );
     }
 }
