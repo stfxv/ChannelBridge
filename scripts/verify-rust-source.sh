@@ -25,9 +25,11 @@ with tarfile.open(sys.argv[1]) as archive:
         name = pathlib.PurePosixPath(member.name)
         if not name.parts:
             continue
-        assert not name.is_absolute() and '..' not in name.parts, member.name
+        if name.is_absolute() or '..' in name.parts:
+            sys.exit(f'Invalid archive path: {member.name}')
         top = name.parts[0]
-        assert top in allowed or (top.startswith('RUST_') and top.endswith('.md')), member.name
+        if top not in allowed and not (top.startswith('RUST_') and top.endswith('.md')):
+            sys.exit(f'Unexpected archive entry: {member.name}')
         names.add(str(name))
     for required in ['Cargo.lock', 'README.md', 'THIRD_PARTY_RUST.md',
                      '.cargo/config.toml', 'scripts/build-rust-app.sh',
@@ -35,7 +37,8 @@ with tarfile.open(sys.argv[1]) as archive:
                      'scripts/test-rust.sh', 'scripts/check-rust-style.sh',
                      'rustfmt.toml', 'clippy.toml', 'tools/rust-style/Cargo.toml',
                      'tools/rust-style/Cargo.lock', 'tools/rust-style/src/main.rs']:
-        assert required in names, required
+        if required not in names:
+            sys.exit(f'Missing required source: {required}')
     print('Rust archive roots and required sources verified')
 PY
 mkdir -p work/test/rust
