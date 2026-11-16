@@ -68,6 +68,7 @@ impl CaptureProcessor {
 
     /// now_tick is callback host time for meters; timestamp describes the first
     /// input sample for clock estimation. Preview and mute still update meters.
+    /// The sample accessor reads the current buffer by frame and channel.
     pub fn process(
         &mut self,
         frames: usize,
@@ -146,13 +147,13 @@ impl CaptureProcessor {
         }
         let output_frames = self.scratch.iter_mut().take(frames).enumerate();
         for (index, out) in output_frames {
-            let left = frame::finite(sample(index, selection.left()));
-            let right = frame::finite(sample(index, selection.right()));
+            let left = sample(index, selection.left());
             *out = match selection.mode() {
                 Mode::Mono => StereoFrame::new(left, left),
-                Mode::Stereo => StereoFrame::new(left, right),
+                Mode::Stereo => StereoFrame::new(left, sample(index, selection.right())),
                 Mode::Mix => {
-                    let mixed = left * 0.5 + right * 0.5;
+                    let right = frame::finite(sample(index, selection.right()));
+                    let mixed = frame::finite(left) * 0.5 + right * 0.5;
                     StereoFrame::new(mixed, mixed)
                 }
             };
@@ -260,6 +261,27 @@ mod tests {
         let _ = consumer.pop_generation(&mut audio, changed.generation);
         assert!(audio.iter().all(|f| *f == StereoFrame::new(-0.15, -0.15)));
         assert_eq!(reader.level(0, 192).current, 0.1);
+        let _ = capture.process(
+            2,
+            3,
+            194,
+            Some(CaptureTimestamp {
+                frame: 192,
+                host_tick: 192,
+            }),
+            |frame, channel| [[0.0, f32::NAN, -0.5], [0.0, 0.5, f32::INFINITY]][frame][channel],
+        );
+        let mut mixed = [StereoFrame::SILENCE; 2];
+        assert_eq!(
+            consumer
+                .pop_generation(&mut mixed, changed.generation)
+                .received,
+            2
+        );
+        assert_eq!(
+            mixed,
+            [StereoFrame::new(-0.25, -0.25), StereoFrame::new(0.25, 0.25)]
+        );
     }
     #[test]
     fn missing_channels_do_not_fall_back_and_clock_gaps_retire_audio() {
