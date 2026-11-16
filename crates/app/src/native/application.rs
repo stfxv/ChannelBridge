@@ -92,9 +92,7 @@ define_class!(
         fn request_microphone(&self, _sender: &NSButton) {
             if let Some(runtime) = self.ivars().runtime.borrow().as_ref() {
                 let main = MainThreadMarker::new().expect("permission action on main thread");
-                if let Err(error) = runtime.screen.permission.request(main) {
-                    *runtime.screen.action_error.borrow_mut() = Some(error.into());
-                }
+                *runtime.screen.action_error.borrow_mut() = runtime.screen.permission.request(main).err().map(Into::into);
             }
         }
         #[unsafe(method(startSend:))]
