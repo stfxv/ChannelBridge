@@ -101,6 +101,16 @@ impl TimelineRing {
         Some(Self { slots })
     }
 
+    #[must_use]
+    fn slot_index(&self, frame: u64) -> usize {
+        let capacity = self.slots.len();
+        if capacity.is_power_of_two() {
+            frame as usize & (capacity - 1)
+        } else {
+            (frame % capacity as u64) as usize
+        }
+    }
+
     pub fn write(&self, generation: u64, start: FramePosition, audio: &[StereoFrame]) -> Transfer {
         let mut result = Transfer::default();
         if generation == 0 || audio.len() > self.slots.len() {
@@ -117,7 +127,7 @@ impl TimelineRing {
                 result.missing += 1;
                 continue;
             };
-            let index = (frame % self.slots.len() as u64) as usize;
+            let index = self.slot_index(frame);
             if let Some(slot) = self.slots.get(index) {
                 if slot.write(generation, frame, *value) {
                     result.valid += 1;
@@ -144,7 +154,7 @@ impl TimelineRing {
                 .checked_add(offset as u64)
                 .filter(|f| *f <= FramePosition::MAX_EXACT);
             let value = frame.and_then(|f| {
-                let index = (f % self.slots.len() as u64) as usize;
+                let index = self.slot_index(f);
                 self.slots
                     .get(index)
                     .and_then(|slot| slot.read(generation, f))
@@ -218,15 +228,22 @@ mod tests {
 
     #[test]
     fn wrap_and_restart_do_not_read_stale_audio() {
-        let ring =
-            TimelineRing::new(4).expect("fixture timeline capacity is a nonzero power of two");
-        let _ = ring.write(1, at(3), &[tone(); 4]);
-        let mut out = [StereoFrame::SILENCE; 4];
-        assert_eq!(ring.read(1, at(3), &mut out).valid, 4);
-        assert_eq!(ring.read(2, at(3), &mut out).valid, 0);
-        let _ = ring.write(1, at(7), &[tone(); 4]);
-        assert_eq!(ring.read(1, at(3), &mut out).valid, 0);
-        assert_eq!(ring.read(1, at(7), &mut out).valid, 4);
+        let pattern = [tone(), StereoFrame::SILENCE, StereoFrame::SILENCE, tone()];
+        for capacity in [3, 4] {
+            let ring = TimelineRing::new(capacity)
+                .expect("both positive fixture capacities fit within the ring limit");
+            let start = FramePosition::MAX_EXACT - (2 * capacity) as u64;
+            let next = start + capacity as u64;
+            let input = &pattern[..capacity];
+            let mut output = vec![StereoFrame::SILENCE; capacity];
+            assert_eq!(ring.write(1, at(start), input).valid, capacity);
+            assert_eq!(ring.read(1, at(start), &mut output).valid, capacity);
+            assert_eq!(output, input);
+            assert_eq!(ring.read(2, at(start), &mut output).valid, 0);
+            assert_eq!(ring.write(1, at(next), input).valid, capacity);
+            assert_eq!(ring.read(1, at(start), &mut output).valid, 0);
+            assert_eq!(ring.read(1, at(next), &mut output).valid, capacity);
+        }
     }
 
     #[test]
