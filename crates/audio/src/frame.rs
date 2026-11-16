@@ -1,9 +1,13 @@
 /// A complete stereo frame can be published using one atomic u64 operation.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StereoFrame {
     pub left: f32,
     pub right: f32,
 }
+
+const _: () = assert!(size_of::<StereoFrame>() == size_of::<[f32; 2]>());
+const _: () = assert!(align_of::<StereoFrame>() == align_of::<f32>());
 
 impl StereoFrame {
     pub const SILENCE: Self = Self {
