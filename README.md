@@ -4,7 +4,7 @@
 
 ## 導入
 
-[GitHub Releasesの0.6.0](https://github.com/stfxv/ChannelBridge/releases/tag/v0.6.0)から`ChannelBridge-0.6.0-arm64.pkg`を取得する。ローカルでビルドした場合は`dist/ChannelBridge-Rust.pkg`を使用する。インストーラを開いてアプリとドライバを導入し、Macを再起動する。アプリは`/Applications/ChannelBridge.app`に配置される。更新前のバックアップと復帰手順は[RUST_MIGRATION.md](RUST_MIGRATION.md)を参照する。
+[GitHub Releasesの0.6.1](https://github.com/stfxv/ChannelBridge/releases/tag/v0.6.1)から`ChannelBridge-0.6.1-arm64.pkg`を取得する。ローカルでビルドした場合は`dist/ChannelBridge-Rust.pkg`を使用する。インストーラを開いてアプリとドライバを導入し、Macを再起動する。アプリは`/Applications/ChannelBridge.app`に配置される。更新前のバックアップと復帰手順は[RUST_MIGRATION.md](RUST_MIGRATION.md)を参照する。
 
 入力機器と入力チャンネルを選び、マイク使用を許可して送出を開始する。monoは選択した1入力を左右へ送り、stereoは選択した左右の入力をそれぞれ送る。mixは左右の入力の平均を両方の出力へ送る。通話アプリ側は **ChannelBridge Mic** を入力に選ぶ。
 
@@ -31,4 +31,4 @@ bash scripts/build.sh
 
 RME、8時間の実経路、物理レート変更・切断復帰・対応する各macOSでの動作の網羅試験は未検証である。
 
-公開版0.6.0のアプリとドライバはad-hoc署名で、インストーラは未署名である。Developer ID署名を使うビルドと公証の手順は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md#developer-id-release)を参照する。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。
+公開版0.6.1のアプリとドライバはad-hoc署名で、インストーラは未署名である。Developer ID署名を使うビルドと公証の手順は[RUST_DISTRIBUTION.md](RUST_DISTRIBUTION.md#developer-id-release)を参照する。GPL-3.0-only。依存ライセンスと対応ソースはアプリに同梱する。
