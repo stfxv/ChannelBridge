@@ -234,11 +234,12 @@ impl Screen {
                 .validate_available(snapshot.devices[index].channels)
                 .is_ok()
         });
-        self.send_button.setTitle(if snapshot.wanted_send {
-            ns_string!("停止")
-        } else {
-            ns_string!("送出開始")
-        });
+        let (title, action) = crate::status_menu::send_action(snapshot.wanted_send);
+        self.send_button.setTitle(title);
+        // SAFETY: both selectors are implemented by the retained application delegate.
+        unsafe {
+            self.send_button.setAction(Some(action));
+        }
         self.send_button.setEnabled(
             !snapshot.finished
                 && (snapshot.wanted_send
@@ -404,16 +405,7 @@ impl Screen {
             }
         }
     }
-    pub(super) fn toggle_send(&self, worker: &Worker) {
-        let snapshot = worker.snapshot();
-        let command = if snapshot.wanted_send {
-            Command::Stop
-        } else {
-            if !self.send_button.isEnabled() {
-                return;
-            }
-            Command::Start
-        };
+    pub(super) fn set_send(&self, worker: &Worker, command: Command) {
         if let Err(error) = worker.send(command) {
             *self.action_error.borrow_mut() = Some(error);
         }
