@@ -63,6 +63,14 @@ fn project_inventory(
     use channelbridge_core::view::{DeviceChoice, InputFormat};
 
     let entries = entries.map_err(|error| error.to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    let mut repeated = std::collections::HashSet::new();
+    for device in entries.iter().flatten() {
+        if !seen.insert(device.uid.as_str()) {
+            repeated.insert(device.uid.clone());
+        }
+    }
+    let mut ambiguous_inputs = std::collections::HashSet::new();
     let mut choices = Vec::new();
     let mut failed_entries = 0usize;
     let mut first_error = None;
@@ -82,6 +90,10 @@ fn project_inventory(
             ]
             .contains(&device.uid.as_str())
         {
+            continue;
+        }
+        if repeated.contains(&device.uid) {
+            ambiguous_inputs.insert(device.uid);
             continue;
         }
         let (physical_inputs, format_error) = match read_streams(device.id) {
@@ -113,6 +125,7 @@ fn project_inventory(
     }
     Ok(channelbridge_core::view::DeviceInventory {
         choices,
+        ambiguous_inputs,
         completeness: match first_error {
             Some(error) => channelbridge_core::view::InventoryCompleteness::Partial {
                 warning: format!("{failed_entries} device entries could not be read: {error}"),
@@ -352,15 +365,7 @@ impl Backend for NativeBackend {
             return Err("microphone permission was revoked".into());
         }
         let devices = devices::list().map_err(|error| error.to_string())?;
-        let source = devices
-            .iter()
-            .filter_map(|entry| entry.as_ref().ok())
-            .find(|device| device.uid == config.device_uid);
-        let target = devices
-            .iter()
-            .filter_map(|entry| entry.as_ref().ok())
-            .find(|device| device.uid == channelbridge_contract::DEPLOYMENT.device_uid);
-        let (Some(source), Some(target)) = (source, target) else {
+        let Some((source, target)) = devices::route_devices(&devices, &config.device_uid)? else {
             return Ok(false);
         };
         if source.id != session.source_id
@@ -468,6 +473,71 @@ mod tests {
             output_channels: 0,
         }
     }
+    #[test]
+    fn live_route_requires_unambiguous_source_and_target_uids() {
+        let target = channelbridge_contract::DEPLOYMENT.device_uid;
+        let mut entries = vec![Ok(input("source")), Err(devices::Error::Hal(-1))];
+        assert!(matches!(
+            devices::route_devices(&entries, "source"),
+            Ok(None)
+        ));
+        entries.push(Ok(devices::Device {
+            id: 56,
+            ..input(target)
+        }));
+        assert!(matches!(
+            devices::route_devices(&entries, "source"),
+            Ok(Some(_))
+        ));
+        for uid in ["source", target] {
+            let mut alias = input(uid);
+            alias.id = 71;
+            entries.push(Ok(alias));
+            assert!(devices::route_devices(&entries, "source").is_err());
+            entries.pop();
+        }
+    }
+
+    #[test]
+    fn inventory_excludes_ambiguous_uids_before_reading_formats() {
+        use channelbridge_core::view::InventoryCompleteness;
+        let mut output = input("collision");
+        output.id = 43;
+        output.input_channels = 0;
+        output.output_channels = 2;
+        let mut unique = input("unique");
+        unique.id = 44;
+        unique.name = "collision".into();
+        let mut queried = Vec::new();
+        let inventory = project_inventory(
+            Ok(vec![
+                Ok(input("collision")),
+                Ok(output),
+                Ok(unique),
+                Err(devices::Error::Hal(-1)),
+            ]),
+            |id| {
+                queried.push(id);
+                Ok(Vec::new())
+            },
+        )
+        .expect("the device list was read and only individual entries failed");
+        assert_eq!(queried, vec![44]);
+        assert_eq!(inventory.choices.len(), 1);
+        assert_eq!(inventory.choices[0].uid, "unique");
+        assert!(matches!(
+            inventory.completeness,
+            InventoryCompleteness::Partial { .. }
+        ));
+        assert!(inventory.ambiguous_inputs.contains("collision"));
+        let warning = inventory
+            .warning()
+            .expect("the unread entry and duplicate UID are reported");
+        assert!(warning.contains("duplicate input device UIDs: 1"));
+        assert!(warning.contains("CoreAudio status -1"));
+        assert!(warning.len() < 200);
+    }
+
     #[test]
     fn inventory_retains_inputs_before_and_after_entry_failures() {
         use channelbridge_core::view::InventoryCompleteness;

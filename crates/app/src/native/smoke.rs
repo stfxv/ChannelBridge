@@ -145,7 +145,38 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     });
     assert_eq!(lifecycle.opens.load(Ordering::Acquire), 1);
     assert!(lifecycle.sending.load(Ordering::Acquire));
-
+    for (displayed_send, actual_send) in [(false, true), (true, false)] {
+        send(if actual_send {
+            Command::Start
+        } else {
+            Command::Stop
+        });
+        let current = wait("intent fixture", &|snapshot| {
+            snapshot.wanted_send == actual_send
+        });
+        let mut displayed = current.clone();
+        displayed.wanted_send = displayed_send;
+        let runtime = delegate.ivars().runtime.borrow();
+        let screen = &runtime.as_ref().expect("fixture").screen;
+        screen.update(&displayed);
+        let action = screen.send_button.action().expect("send action");
+        drop(runtime);
+        // SAFETY: the delegate implements the control's selector.
+        assert!(unsafe {
+            objc2_app_kit::NSApplication::sharedApplication(main).sendAction_to_from(
+                action,
+                Some(&delegate),
+                Some(&delegate),
+            )
+        });
+        send(Command::Configure(current.config.clone()));
+        let completed = wait("send action barrier", &|snapshot| {
+            snapshot.configuration_attempt > current.configuration_attempt
+        });
+        assert_eq!(completed.wanted_send, !displayed_send);
+    }
+    send(Command::Start);
+    wait("restore sending", &|snapshot| snapshot.wanted_send);
     // SAFETY: This notification name is an immutable framework-owned string constant.
     post(unsafe { NSWorkspaceWillSleepNotification });
     let asleep = wait("sleep must release the audio session", &|_| {

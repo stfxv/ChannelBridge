@@ -38,6 +38,24 @@ pub struct Device {
     pub output_channels: u32,
 }
 
+pub(crate) fn route_devices<'list>(
+    inventory: &'list [Result<Device, Error>],
+    source_uid: &str,
+) -> Result<Option<(&'list Device, &'list Device)>, &'static str> {
+    let find = |uid: &str| {
+        let mut matching = inventory
+            .iter()
+            .flatten()
+            .filter(|device| device.uid == uid);
+        let first = matching.next();
+        if matching.next().is_some() {
+            return Err("duplicate device UID");
+        }
+        Ok(first)
+    };
+    Ok(find(source_uid)?.zip(find(channelbridge_contract::DEPLOYMENT.device_uid)?))
+}
+
 #[derive(Debug)]
 pub struct Stream {
     pub id: ObjectId,

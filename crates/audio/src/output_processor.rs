@@ -202,8 +202,6 @@ impl OutputProcessor {
             }
             self.active = true;
             self.fade_position = 0;
-        } else {
-            let _ = self.queued();
         }
         let step = self.controller.step();
         let mut produced = 0;

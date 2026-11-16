@@ -8,6 +8,14 @@ use objc2::sel;
 use objc2_app_kit::{NSApplication, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
 use objc2_foundation::{NSString, ns_string};
 
+pub(crate) fn send_action(wanted_send: bool) -> (&'static NSString, objc2::runtime::Sel) {
+    if wanted_send {
+        (ns_string!("停止"), sel!(stopSend:))
+    } else {
+        (ns_string!("送出開始"), sel!(startSend:))
+    }
+}
+
 pub struct StatusMenu {
     item: Retained<NSStatusItem>,
     state: Retained<NSMenuItem>,
@@ -42,7 +50,7 @@ impl StatusMenu {
             open.setTarget(Some(target));
             let send = menu.addItemWithTitle_action_keyEquivalent(
                 ns_string!("送出開始"),
-                Some(sel!(toggleSend:)),
+                Some(sel!(startSend:)),
                 ns_string!(""),
             );
             send.setTarget(Some(target));
@@ -100,11 +108,12 @@ impl StatusMenu {
                 CaptureState::Suspended => "スリープ中 · 復帰待ち",
                 CaptureState::Blocked => "入力確認を開始できません",
             }));
-        self.send.setTitle(if snapshot.wanted_send {
-            ns_string!("停止")
-        } else {
-            ns_string!("送出開始")
-        });
+        let (title, action) = send_action(snapshot.wanted_send);
+        self.send.setTitle(title);
+        // SAFETY: both selectors are implemented by the retained application delegate.
+        unsafe {
+            self.send.setAction(Some(action));
+        }
         self.send
             .setEnabled(!snapshot.finished && (snapshot.wanted_send || can_start));
         self.mute.setTitle(if snapshot.config.muted {

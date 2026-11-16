@@ -97,9 +97,13 @@ define_class!(
                 }
             }
         }
-        #[unsafe(method(toggleSend:))]
-        fn toggle_send(&self, _sender: &objc2::runtime::AnyObject) {
-            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.toggle_send(&runtime.worker); }
+        #[unsafe(method(startSend:))]
+        fn start_send(&self, _sender: &objc2::runtime::AnyObject) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.set_send(&runtime.worker, channelbridge_core::Command::Start); }
+        }
+        #[unsafe(method(stopSend:))]
+        fn stop_send(&self, _sender: &objc2::runtime::AnyObject) {
+            if let Some(runtime) = self.ivars().runtime.borrow().as_ref() { runtime.screen.set_send(&runtime.worker, channelbridge_core::Command::Stop); }
         }
         #[unsafe(method(toggleMute:))]
         fn toggle_mute(&self, _sender: &objc2::runtime::AnyObject) {
@@ -275,7 +279,7 @@ pub fn run() {
         }
         for (button, action) in [
             (&screen.permission_button, sel!(requestMicrophone:)),
-            (&screen.send_button, sel!(toggleSend:)),
+            (&screen.send_button, sel!(startSend:)),
             (&screen.mute_button, sel!(toggleMute:)),
             (&screen.auto_send_button, sel!(toggleAutoSend:)),
             (&screen.export.button, sel!(saveDiagnostics:)),

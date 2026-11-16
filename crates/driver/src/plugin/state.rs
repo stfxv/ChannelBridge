@@ -20,9 +20,14 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 
 struct Worker {
-    sender: SyncSender<Option<u32>>,
+    sender: SyncSender<Option<u64>>,
     thread: JoinHandle<()>,
 }
+struct Pending {
+    next: u64,
+    change: Option<(u64, u32)>,
+}
+
 pub(super) struct Runtime {
     pub audio: DriverAudio,
     rate: AtomicU32,
@@ -33,7 +38,7 @@ pub(super) struct Runtime {
     host: AtomicPtr<HostInterface>,
     clients: Mutex<BTreeMap<u32, bool>>,
     worker: Mutex<Option<Worker>>,
-    pending_rate: AtomicU32,
+    pending: Mutex<Pending>,
 }
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 #[must_use]
@@ -59,7 +64,10 @@ pub(super) fn initialize(host: HostRef) -> i32 {
         host: AtomicPtr::new(host.cast_mut()),
         clients: Mutex::new(BTreeMap::new()),
         worker: Mutex::new(None),
-        pending_rate: AtomicU32::new(0),
+        pending: Mutex::new(Pending {
+            next: 1,
+            change: None,
+        }),
     });
     let Some(runtime) = runtime() else {
         return UNSPECIFIED;
@@ -69,11 +77,11 @@ pub(super) fn initialize(host: HostRef) -> i32 {
         return UNSPECIFIED;
     };
     if worker.is_none() {
-        let (sender, receiver) = mpsc::sync_channel::<Option<u32>>(8);
+        let (sender, receiver) = mpsc::sync_channel::<Option<u64>>(8);
         let thread = match std::thread::Builder::new()
             .name("ChannelBridge HAL control".into())
             .spawn(move || {
-                while let Ok(Some(rate)) = receiver.recv() {
+                while let Ok(Some(action)) = receiver.recv() {
                     let host = runtime.host.load(Ordering::Acquire);
                     if host.is_null() {
                         continue;
@@ -84,15 +92,16 @@ pub(super) fn initialize(host: HostRef) -> i32 {
                         ((*host).request_configuration_change)(
                             host,
                             DEVICE,
-                            u64::from(rate),
+                            action,
                             core::ptr::null_mut(),
                         )
                     };
                     if status != 0 {
-                        runtime
-                            .pending_rate
-                            .compare_exchange(rate, 0, Ordering::AcqRel, Ordering::Acquire)
-                            .ok();
+                        if let Ok(mut pending) = runtime.pending.lock() {
+                            if pending.change.is_some_and(|(id, _)| id == action) {
+                                pending.change = None;
+                            }
+                        }
                     }
                 }
             }) {
@@ -110,9 +119,15 @@ pub(super) fn shutdown() {
     };
     // Do not hold the control mutex while joining: the host may reenter a
     // property setter while a configuration request is finishing.
-    let worker = match runtime.worker.lock() {
-        Ok(mut worker) => worker.take(),
-        Err(_) => return,
+    let worker = {
+        let Ok(mut worker) = runtime.worker.lock() else {
+            return;
+        };
+        let Ok(mut pending) = runtime.pending.lock() else {
+            return;
+        };
+        pending.change = None;
+        worker.take()
     };
     if let Some(worker) = worker {
         let _ = worker.sender.send(None);
@@ -228,25 +243,29 @@ pub(super) fn request_rate(rate: u32) -> i32 {
     if !SUPPORTED_RATES.contains(&rate) {
         return ILLEGAL;
     }
-    if rate == self::rate() && r.pending_rate.load(Ordering::Acquire) == 0 {
-        return 0;
-    }
-    if r.pending_rate
-        .compare_exchange(0, rate, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return NOT_READY;
-    }
     let Ok(worker) = r.worker.lock() else {
-        r.pending_rate.store(0, Ordering::Release);
         return UNSPECIFIED;
     };
     let Some(worker) = worker.as_ref() else {
-        r.pending_rate.store(0, Ordering::Release);
         return NOT_READY;
     };
-    if worker.sender.try_send(Some(rate)).is_err() {
-        r.pending_rate.store(0, Ordering::Release);
+    let Ok(mut pending) = r.pending.lock() else {
+        return UNSPECIFIED;
+    };
+    if pending.change.is_some() {
+        return NOT_READY;
+    }
+    if rate == self::rate() {
+        return 0;
+    }
+    let action = pending.next;
+    let Some(next) = action.checked_add(1) else {
+        return UNSPECIFIED;
+    };
+    pending.change = Some((action, rate));
+    pending.next = next;
+    if worker.sender.try_send(Some(action)).is_err() {
+        pending.change = None;
         return NOT_READY;
     }
     0
@@ -257,20 +276,16 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
     };
-    let Ok(rate) = u32::try_from(action) else {
+    let Ok(mut pending) = r.pending.lock() else {
+        return UNSPECIFIED;
+    };
+    let Some((id, rate)) = pending.change else {
         return ILLEGAL;
     };
-    if r.pending_rate.load(Ordering::Acquire) != rate || !SUPPORTED_RATES.contains(&rate) {
+    if id != action {
         return ILLEGAL;
     }
-    // A completed host callback consumes this request even when we reject it.
-    // Do not depend on the host issuing Abort after a failed Perform call.
-    // Clear only this request; a different request must never be retired here.
-    let _request = PendingChange {
-        pending: &r.pending_rate,
-        rate,
-    };
-    // The host must quiesce all active I/O before changing its timeline.
+    pending.change = None;
     let Ok(_clients) = r.clients.lock() else {
         return UNSPECIFIED;
     };
@@ -280,29 +295,16 @@ pub(super) fn perform_rate_change(action: u64) -> i32 {
     reset_clock(r, Some(rate))
 }
 
-struct PendingChange<'pending> {
-    pending: &'pending AtomicU32,
-    rate: u32,
-}
-impl Drop for PendingChange<'_> {
-    fn drop(&mut self) {
-        let _ = self
-            .pending
-            .compare_exchange(self.rate, 0, Ordering::AcqRel, Ordering::Acquire);
-    }
-}
 #[must_use]
 pub(super) fn abort_rate_change(action: u64) -> i32 {
     let Some(r) = runtime() else {
         return NOT_READY;
     };
-    let Ok(rate) = u32::try_from(action) else {
-        return ILLEGAL;
+    let Ok(mut pending) = r.pending.lock() else {
+        return UNSPECIFIED;
     };
-    if r.pending_rate
-        .compare_exchange(rate, 0, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
+    if pending.change.is_some_and(|(id, _)| id == action) {
+        pending.change = None;
         0
     } else {
         ILLEGAL
