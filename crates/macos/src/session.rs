@@ -173,19 +173,9 @@ impl TestSession {
         output_gate: channelbridge_core::worker::OutputGate,
     ) -> Result<Self, Box<dyn Error>> {
         let devices = devices::list()?;
-        let find = |uid: &str| -> Result<ObjectId, Box<dyn Error>> {
-            let mut matching = devices
-                .iter()
-                .filter_map(|entry| entry.as_ref().ok())
-                .filter(|device| device.uid == uid);
-            let device = matching.next().ok_or("selected device is unavailable")?;
-            if matching.next().is_some() {
-                return Err("duplicate device UID".into());
-            }
-            Ok(device.id)
-        };
-        let source = find(source_uid)?;
-        let target = find(channelbridge_contract::DEPLOYMENT.device_uid)?;
+        let (source, target) = devices::route_devices(&devices, source_uid)?
+            .ok_or("selected device is unavailable")?;
+        let (source, target) = (source.id, target.id);
         let mut prepared = PreparedSession::prepare(source, target, selection, ticks_per_second)?;
         prepared.output.output_gate = output_gate;
         if prepared.input_rate != prepared.output_rate {

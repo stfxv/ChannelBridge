@@ -352,15 +352,7 @@ impl Backend for NativeBackend {
             return Err("microphone permission was revoked".into());
         }
         let devices = devices::list().map_err(|error| error.to_string())?;
-        let source = devices
-            .iter()
-            .filter_map(|entry| entry.as_ref().ok())
-            .find(|device| device.uid == config.device_uid);
-        let target = devices
-            .iter()
-            .filter_map(|entry| entry.as_ref().ok())
-            .find(|device| device.uid == channelbridge_contract::DEPLOYMENT.device_uid);
-        let (Some(source), Some(target)) = (source, target) else {
+        let Some((source, target)) = devices::route_devices(&devices, &config.device_uid)? else {
             return Ok(false);
         };
         if source.id != session.source_id
@@ -468,6 +460,31 @@ mod tests {
             output_channels: 0,
         }
     }
+    #[test]
+    fn live_route_requires_unambiguous_source_and_target_uids() {
+        let target = channelbridge_contract::DEPLOYMENT.device_uid;
+        let mut entries = vec![Ok(input("source")), Err(devices::Error::Hal(-1))];
+        assert!(matches!(
+            devices::route_devices(&entries, "source"),
+            Ok(None)
+        ));
+        entries.push(Ok(devices::Device {
+            id: 56,
+            ..input(target)
+        }));
+        assert!(matches!(
+            devices::route_devices(&entries, "source"),
+            Ok(Some(_))
+        ));
+        for uid in ["source", target] {
+            let mut alias = input(uid);
+            alias.id = 71;
+            entries.push(Ok(alias));
+            assert!(devices::route_devices(&entries, "source").is_err());
+            entries.pop();
+        }
+    }
+
     #[test]
     fn inventory_retains_inputs_before_and_after_entry_failures() {
         use channelbridge_core::view::InventoryCompleteness;
