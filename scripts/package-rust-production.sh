@@ -49,22 +49,28 @@ root, expanded = map(pathlib.Path, sys.argv[1:])
 payload = expanded / 'Payload'
 expected = {str(p.relative_to(root)) for p in root.rglob('*')}
 actual = {str(p.relative_to(payload)) for p in payload.rglob('*')}
-assert actual == expected, (actual - expected, expected - actual)
+if actual != expected:
+    sys.exit(f'Unexpected payload paths: {sorted(actual - expected)}; missing: {sorted(expected - actual)}')
+def digest(path):
+    with path.open('rb') as stream:
+        result = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            result.update(chunk)
+        return result.digest()
 for relative in sorted(expected):
     source, installed = root / relative, payload / relative
-    assert stat.S_IFMT(source.lstat().st_mode) == stat.S_IFMT(installed.lstat().st_mode), relative
-    assert stat.S_IMODE(source.lstat().st_mode) == stat.S_IMODE(installed.lstat().st_mode), relative
-    if source.is_symlink():
-        assert source.readlink() == installed.readlink(), relative
-    elif source.is_file():
-        def digest(path):
-            with path.open('rb') as stream:
-                result = hashlib.sha256()
-                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                    result.update(chunk)
-                return result.digest()
-        assert digest(source) == digest(installed), relative
-assert not (expanded / 'Scripts').exists(), 'Installer must not run scripts'
+    source_mode, installed_mode = source.lstat().st_mode, installed.lstat().st_mode
+    if stat.S_IFMT(source_mode) != stat.S_IFMT(installed_mode):
+        sys.exit(f'Payload file type differs: {relative}')
+    if stat.S_IMODE(source_mode) != stat.S_IMODE(installed_mode):
+        sys.exit(f'Payload permissions differ: {relative}')
+    if stat.S_ISLNK(source_mode):
+        if source.readlink() != installed.readlink():
+            sys.exit(f'Payload symlink target differs: {relative}')
+    elif stat.S_ISREG(source_mode) and digest(source) != digest(installed):
+        sys.exit(f'Payload file contents differ: {relative}')
+if (expanded / 'Scripts').exists():
+    sys.exit('Installer must not run scripts')
 print('Production payload paths, types, modes and all file hashes match; no installer scripts')
 PYVERIFY
 for path in "$app_path" "$driver_path"; do
