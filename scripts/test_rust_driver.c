@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <mach/mach_time.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,12 +20,26 @@
 #endif
 enum { Plugin = 1, Device = 2, Input = 3, Output = 4 };
 static _Atomic UInt64 pending_action;
+static _Atomic int block_failed_request;
 static OSStatus changed(AudioServerPlugInHostRef h, AudioObjectID id, UInt32 n, const AudioObjectPropertyAddress *a) { return 0; }
 static OSStatus copy_storage(AudioServerPlugInHostRef h, CFStringRef key, CFPropertyListRef *out) { *out = NULL; return 0; }
 static OSStatus write_storage(AudioServerPlugInHostRef h, CFStringRef key, CFPropertyListRef value) { return 0; }
 static OSStatus delete_storage(AudioServerPlugInHostRef h, CFStringRef key) { return 0; }
 static OSStatus request_change(AudioServerPlugInHostRef h, AudioObjectID id, UInt64 action, void *info) {
-    assert(id == Device); atomic_store(&pending_action, action); return 0;
+    assert(id == Device);
+    if (atomic_load(&block_failed_request)) {
+        atomic_store(&pending_action, action);
+        while (atomic_load(&block_failed_request)) usleep(1000);
+        return -1;
+    }
+    atomic_store(&pending_action, action);
+    return 0;
+}
+static UInt64 wait_action(void) {
+    for (int i=0;i<2000 && atomic_load(&pending_action)==0;i++) usleep(1000);
+    UInt64 action=atomic_exchange(&pending_action,0);
+    assert(action!=0);
+    return action;
 }
 static AudioObjectPropertyAddress address(UInt32 selector) {
     return (AudioObjectPropertyAddress){selector, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
@@ -71,13 +86,20 @@ static void transfer(UInt32 operation, double time, UInt32 frames, float *audio)
     assert((*driver)->DoIOOperation(driver,Device,operation==kAudioServerPlugInIOOperationReadInput?Input:Output,
            operation==kAudioServerPlugInIOOperationReadInput?2:1,operation,frames,&cycle,audio,NULL)==0);
 }
+struct ConcurrentChange { UInt64 action; _Atomic int ready, go; OSStatus results[2]; };
+struct ChangeCall { struct ConcurrentChange *change; int index; };
+static void *perform_concurrently(void *opaque) {
+    struct ChangeCall *call=opaque;
+    atomic_fetch_add(&call->change->ready,1);
+    while (!atomic_load(&call->change->go)) { }
+    call->change->results[call->index]=(*driver)->PerformDeviceConfigurationChange(driver,Device,call->change->action,NULL);
+    return NULL;
+}
 static void rate_change(double rate) {
     AudioObjectPropertyAddress a=address(kAudioDevicePropertyNominalSampleRate);
     double before=get_rate();
     assert((*driver)->SetPropertyData(driver,Device,0,&a,0,NULL,sizeof(rate),&rate)==0);
-    for (int i=0;i<2000 && atomic_load(&pending_action)==0;i++) usleep(1000);
-    UInt64 action=atomic_exchange(&pending_action,0);
-    assert(action==(UInt64)rate);
+    UInt64 action=wait_action();
     assert(get_rate()==before); // Requested is not yet committed.
     assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)!=0); // Still running.
     assert((*driver)->StopIO(driver,Device,1)==0);
@@ -86,9 +108,7 @@ static void rate_change(double rate) {
     // a new asynchronous request must be accepted after stopping I/O.
     assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)!=0);
     assert((*driver)->SetPropertyData(driver,Device,0,&a,0,NULL,sizeof(rate),&rate)==0);
-    for (int i=0;i<2000 && atomic_load(&pending_action)==0;i++) usleep(1000);
-    action=atomic_exchange(&pending_action,0);
-    assert(action==(UInt64)rate);
+    action=wait_action();
     assert((*driver)->PerformDeviceConfigurationChange(driver,Device,action,NULL)==0);
     assert(get_rate()==rate);
     assert((*driver)->StartIO(driver,Device,1)==0);
@@ -126,6 +146,38 @@ int main(int argc, char **argv) {
     assert((*driver)->Release(driver)==1);
     AudioServerPlugInHostInterface host={changed,copy_storage,write_storage,delete_storage,request_change};
     assert((*driver)->Initialize(driver,&host)==0);
+    assert((*driver)->AbortDeviceConfigurationChange(driver,Device,0,NULL)!=0);
+    AudioObjectPropertyAddress rate_address=address(kAudioDevicePropertyNominalSampleRate);
+    double requested_rate=44100;
+    atomic_store(&block_failed_request,1);
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    UInt64 first=wait_action();
+    assert((*driver)->AbortDeviceConfigurationChange(driver,Device,first,NULL)==0);
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    atomic_store(&block_failed_request,0);
+    UInt64 second=wait_action();
+    assert(second!=0 && second!=first);
+    assert((*driver)->AbortDeviceConfigurationChange(driver,Device,first,NULL)!=0);
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,second,NULL)==0);
+    assert(get_rate()==requested_rate);
+    requested_rate=48000;
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    second=wait_action();
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,second,NULL)==0);
+    requested_rate=44100;
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    struct ConcurrentChange concurrent={.action=wait_action()};
+    struct ChangeCall calls[2]={{&concurrent,0},{&concurrent,1}};
+    pthread_t threads[2];
+    for (int i=0;i<2;i++) assert(pthread_create(&threads[i],NULL,perform_concurrently,&calls[i])==0);
+    while (atomic_load(&concurrent.ready)!=2) { }
+    atomic_store(&concurrent.go,1);
+    for (int i=0;i<2;i++) assert(pthread_join(threads[i],NULL)==0);
+    assert((concurrent.results[0]==0) != (concurrent.results[1]==0));
+    assert(get_rate()==requested_rate);
+    requested_rate=48000;
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,wait_action(),NULL)==0);
 
     assert(get_u32(Plugin,kAudioObjectPropertyClass)==kAudioPlugInClassID);
     AudioObjectPropertyAddress a=address(kAudioPlugInPropertyDeviceList); UInt32 bytes=0;
@@ -238,6 +290,15 @@ int main(int argc, char **argv) {
     assert((*driver)->StopIO(driver,Device,2)!=0);
     client.mClientID=1; assert((*driver)->RemoveDeviceClient(driver,Device,&client)==0);
     client.mClientID=2; assert((*driver)->RemoveDeviceClient(driver,Device,&client)==0);
+    requested_rate=44100;
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    UInt64 abandoned=wait_action();
+    assert((*driver)->Release(driver)==0);
+    assert((*driver)->AddRef(driver)==1);
+    assert((*driver)->Initialize(driver,&host)==0);
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,abandoned,NULL)!=0);
+    assert((*driver)->SetPropertyData(driver,Device,0,&rate_address,0,NULL,sizeof(requested_rate),&requested_rate)==0);
+    assert((*driver)->PerformDeviceConfigurationChange(driver,Device,wait_action(),NULL)==0);
     assert((*driver)->Release(driver)==0);
     if(library) assert(dlclose(library)==0);
     if(plugin) CFRelease(plugin);
