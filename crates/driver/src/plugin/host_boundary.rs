@@ -2,6 +2,7 @@
 #![allow(clippy::too_many_arguments)] // Apple's fixed C callback signatures.
 
 use super::{properties, state, system};
+use channelbridge_audio::StereoFrame;
 use channelbridge_hal_abi as hal_abi;
 use channelbridge_hal_abi::ClientInfo;
 use channelbridge_hal_abi::DriverRef;
@@ -385,19 +386,18 @@ unsafe extern "C" fn do_io(
         if frames == 0 {
             return 0;
         }
-        // SAFETY: HAL's PCM buffers contain exactly frames * 2 writable floats,
-        // and cycle is a valid IOCycleInfo for the duration of this callback.
-        let cycle = unsafe { cycle.read_unaligned() };
-        let buffer =
-            // SAFETY: HAL grants exclusive, aligned PCM storage for frames stereo
-            // samples during this callback.
-            unsafe { core::slice::from_raw_parts_mut(main.cast::<f32>(), frames as usize * 2) };
+        let frames = frames as usize;
+        let samples = main.cast::<StereoFrame>();
+        if read {
+            // SAFETY: ReadInput grants writable storage for this many interleaved
+            // stereo frames. Initialize the host's destination before borrowing it.
+            unsafe { samples.write_bytes(0, frames) };
+        }
         let Some(runtime) = state::runtime() else {
-            if read {
-                buffer.fill(0.0);
-            }
             return NOT_READY;
         };
+        // SAFETY: HAL supplies a readable IOCycleInfo for this callback.
+        let cycle = unsafe { cycle.read_unaligned() };
         let timestamp = if read {
             cycle.input_time
         } else {
@@ -406,31 +406,25 @@ unsafe extern "C" fn do_io(
         let start = channelbridge_audio::FramePosition::from_sample_time(timestamp.sample_time)
             .filter(|start| {
                 timestamp.flags & 1 != 0
-                    && start.get() + u64::from(frames) - 1
+                    && start.get() + frames as u64 - 1
                         <= channelbridge_audio::FramePosition::MAX_EXACT
             });
         let Some(start) = start else {
-            runtime.audio.reject_invalid_time(read, frames as usize);
-            if read {
-                buffer.fill(0.0);
-            }
+            runtime.audio.reject_invalid_time(read, frames);
             return ILLEGAL;
         };
-        let mut scratch = [channelbridge_audio::StereoFrame::SILENCE; 4096];
-        for (index, chunk) in buffer.chunks_mut(4096 * 2).enumerate() {
-            let scratch = &mut scratch[..chunk.len() / 2];
-            let time = (start.get() + (index * 4096) as u64) as f64;
+        for offset in (0..frames).step_by(4096) {
+            let count = (frames - offset).min(4096);
+            let time = (start.get() + offset as u64) as f64;
             if read {
-                let _ = runtime.audio.read(time, scratch);
-                for (pair, value) in chunk.chunks_exact_mut(2).zip(scratch.iter()) {
-                    pair[0] = value.left;
-                    pair[1] = value.right;
-                }
+                // SAFETY: ReadInput owns these initialized frames exclusively.
+                let out = unsafe { core::slice::from_raw_parts_mut(samples.add(offset), count) };
+                let _ = runtime.audio.read(time, out);
             } else {
-                for (pair, value) in chunk.chunks_exact(2).zip(scratch.iter_mut()) {
-                    *value = channelbridge_audio::StereoFrame::new(pair[0], pair[1]);
-                }
-                let _ = runtime.audio.write(time, scratch);
+                // SAFETY: WriteMix supplies initialized, aligned pairs of f32
+                // in StereoFrame's C layout for the duration of this call.
+                let input = unsafe { core::slice::from_raw_parts(samples.add(offset), count) };
+                let _ = runtime.audio.write(time, input);
             }
         }
         0

@@ -261,6 +261,12 @@ int main(int argc, char **argv) {
     transfer(kAudioServerPlugInIOOperationReadInput,4503599627370495.0,4096,large_received);
     transfer(kAudioServerPlugInIOOperationReadInput,4503599627374591.0,904,large_received+8192);
     for(int i=0;i<10000;i++) assert(large_received[i]==large_sent[i]);
+    float nonfinite[]={NAN,-0.5f,0.25f,INFINITY};
+    float clean[4];
+    transfer(kAudioServerPlugInIOOperationWriteMix,60000,2,nonfinite);
+    transfer(kAudioServerPlugInIOOperationReadInput,60000,2,clean);
+    assert(isnan(nonfinite[0]) && isinf(nonfinite[3]));
+    assert(clean[0]==0 && clean[1]==-0.5f && clean[2]==0.25f && clean[3]==0);
     a=address('cbst'); data=NULL;
     assert((*driver)->GetPropertyData(driver,Device,0,&a,0,NULL,sizeof(data),&bytes,&data)==0);
     memcpy(diagnostics,CFDataGetBytePtr(data),48); CFRelease(data);
