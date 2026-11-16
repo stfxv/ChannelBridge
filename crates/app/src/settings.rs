@@ -116,6 +116,20 @@ mod tests {
                 .expect("fixture file was written and remains present for inspection"),
             original
         );
+        #[cfg(unix)]
+        {
+            let absent = directory.join("missing.json");
+            std::os::unix::fs::symlink(&absent, &destination)
+                .expect("the fixture can create a dangling destination symlink");
+            let unreadable = Settings::read(destination.clone(), &legacy);
+            assert!(unreadable.error.is_some());
+            assert!(unreadable.config.device_uid.is_empty());
+            assert_eq!(
+                std::fs::read_link(&destination).expect("symlink remains"),
+                absent
+            );
+            std::fs::remove_file(&destination).expect("the fixture owns the symlink");
+        }
         std::fs::write(&destination, b"broken").expect("fixture owns this writable settings path");
         let failed = Settings::read(destination.clone(), &legacy);
         assert!(failed.error.is_some());
