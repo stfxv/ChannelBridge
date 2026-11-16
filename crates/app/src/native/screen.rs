@@ -330,7 +330,19 @@ impl Screen {
             })
             .unwrap_or_else(|| "—".into());
         self.format.setStringValue(&NSString::from_str(&format));
-        let status = if let Some(error) = self.settings_error.as_deref() {
+        let terminal_error = if snapshot.finished {
+            snapshot
+                .error
+                .as_deref()
+                .or(snapshot.command_error.as_deref())
+        } else {
+            None
+        };
+        let action_error = self.action_error.borrow();
+        let status = if let Some(error) = terminal_error
+            .or(action_error.as_deref())
+            .or(self.settings_error.as_deref())
+        {
             error
         } else if self.pending_attempt.get().is_some() {
             "設定を保存しています"
@@ -367,9 +379,6 @@ impl Screen {
             } else {
                 ns_string!("")
             });
-        if let Some(error) = self.action_error.borrow().as_deref() {
-            self.status.setStringValue(&NSString::from_str(error));
-        }
     }
     pub(super) fn show_overview(&self) {
         let main = MainThreadMarker::new().expect("overview on main thread");
@@ -383,11 +392,11 @@ impl Screen {
         let visible = overview
             .as_ref()
             .is_some_and(|overview| overview.window.isVisible());
-        if !snapshot.finished && visible != self.overview_sent.get() {
-            match worker.send(Command::Overview(visible)) {
-                Ok(()) => self.overview_sent.set(visible),
-                Err(error) => *self.action_error.borrow_mut() = Some(error),
-            }
+        if !snapshot.finished
+            && visible != self.overview_sent.get()
+            && worker.send(Command::Overview(visible)).is_ok()
+        {
+            self.overview_sent.set(visible);
         }
         if let Some(overview) = overview.as_ref().filter(|_| visible) {
             overview.update(
@@ -398,17 +407,16 @@ impl Screen {
     }
     pub(super) fn sync_permission(&self, worker: &Worker) {
         let current = channelbridge_macos::permission::status();
-        if self.observed_permission.get() != Some(current) {
-            match worker.send(Command::PermissionChanged(current.allowed())) {
-                Ok(()) => self.observed_permission.set(Some(current)),
-                Err(error) => *self.action_error.borrow_mut() = Some(error),
-            }
+        if self.observed_permission.get() != Some(current)
+            && worker
+                .send(Command::PermissionChanged(current.allowed()))
+                .is_ok()
+        {
+            self.observed_permission.set(Some(current));
         }
     }
     pub(super) fn set_send(&self, worker: &Worker, command: Command) {
-        if let Err(error) = worker.send(command) {
-            *self.action_error.borrow_mut() = Some(error);
-        }
+        *self.action_error.borrow_mut() = worker.send(command).err();
     }
     pub(super) fn toggle_mute(&self, worker: &Worker) {
         if self.settings_error.is_some() || self.pending_attempt.get().is_some() {

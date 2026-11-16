@@ -64,6 +64,7 @@ impl Backend for FakeAudio {
 /// A fake backend makes every release, reopen and send intent observable.
 pub(super) fn sleep_wake(main: MainThreadMarker) {
     duplicate_device_selection(main);
+    background_sync_recovers(main);
     let lifecycle = Arc::new(AudioLifecycle::default());
     let backend_lifecycle = Arc::clone(&lifecycle);
     let worker = Worker::spawn(
@@ -239,6 +240,62 @@ pub(super) fn sleep_wake(main: MainThreadMarker) {
     println!(
         "Rust AppKit sleep/wake notifications released and reopened fake audio, preserved send intent and respected stop while asleep; no native audio or system sleep"
     );
+}
+
+fn background_sync_recovers(main: MainThreadMarker) {
+    let (release, gate) = std::sync::mpsc::channel();
+    let worker = Worker::spawn(Config::default(), move || {
+        gate.recv().expect("release worker");
+        Ok(FakeAudio(Arc::default()))
+    })
+    .expect("sync fixture worker");
+    for _ in 0..32 {
+        worker.send(Command::Overview(false)).expect("fill queue");
+    }
+    let screen = Screen::new(main, None);
+    let explicit_action = Screen::new(main, None);
+    explicit_action.toggle_mute(&worker);
+    screen.sync_permission(&worker);
+    release.send(()).expect("release worker");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if worker.send(Command::Configure(Config::default())).is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "queue did not drain");
+        NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+    }
+    while worker.snapshot().configuration_attempt == 0 {
+        assert!(Instant::now() < deadline, "worker did not process barrier");
+        NSRunLoop::mainRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01));
+    }
+    screen.sync_permission(&worker);
+    screen.update(&worker.snapshot());
+    assert_ne!(
+        screen.status.stringValue().to_string(),
+        "control command queue is full"
+    );
+    explicit_action.sync_permission(&worker);
+    explicit_action.update(&worker.snapshot());
+    assert_eq!(
+        explicit_action.status.stringValue().to_string(),
+        "control command queue is full"
+    );
+    let mut terminal = worker.snapshot();
+    terminal.finished = true;
+    terminal.error = Some("worker failure".into());
+    explicit_action.update(&terminal);
+    assert_eq!(
+        explicit_action.status.stringValue().to_string(),
+        "worker failure"
+    );
+    explicit_action.set_send(&worker, Command::Stop);
+    explicit_action.update(&worker.snapshot());
+    assert_ne!(
+        explicit_action.status.stringValue().to_string(),
+        "control command queue is full"
+    );
+    worker.join().expect("sync fixture shutdown");
 }
 
 fn duplicate_device_selection(main: MainThreadMarker) {
